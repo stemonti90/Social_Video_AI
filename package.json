@@ -1,0 +1,10 @@
+{
+  "name": "tiktok-ai-autogen",
+  "version": "1.0.0",
+  "description": "Generatore TikTok AI full-local JS",
+  "main": "index.js",
+  "scripts": {
+    "start": "node index.js"
+  },
+  "dependencies": {}
+}

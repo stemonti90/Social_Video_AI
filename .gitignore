@@ -1,0 +1,17 @@
+# File e cartelle di dipendenze di Node.js
+node_modules/
+
+# File di log
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+
+# Cartelle generate dallo script
+/temp/
+/output/
+
+# File di ambiente (se deciderai di usarli per le chiavi API o i percorsi)
+.env
+
+# File di sistema operativo
+.DS_Store
