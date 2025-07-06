@@ -1,37 +1,37 @@
-const { exec } = require('child_process');
+const { spawn } = require('child_process');
 const fs = require('fs');
 const fsPromises = require('fs/promises');
 const path = require('path');
-const util = require('util');
 // Carica le variabili d'ambiente dal file .env
-require('dotenv').config(); 
+require('dotenv').config();
 const config = require('./config');
+const { runChecks } = require('./preflight');
 
 
-// Rende 'exec' utilizzabile con async/await
-const execAsync = util.promisify(exec);
+if (!runChecks()) {
+    console.error('Preflight checks failed. Controlla la configurazione.');
+    process.exit(1);
+}
 
-// Funzione helper per eseguire comandi esterni in modo sicuro e fornire messaggi di errore dettagliati
-async function safeExec(command, toolName, options = {}) {
-    try {
-        const { stdout, stderr } = await execAsync(command, options);
-        // Se stderr contiene output, potrebbe essere un avviso o informazioni aggiuntive.
-        // Per ora, se execAsync non ha lanciato un errore, consideriamo l'operazione riuscita.
-        // L'output di stderr sarà incluso nel messaggio di errore se execAsync *ha* lanciato un errore.
-        return stdout;
-    } catch (error) {
-        let errorMessage = `Errore durante l'esecuzione di ${toolName}.`;
-        if (error.message) { // Messaggio di errore da Node.js execAsync (es. "Command failed: ...")
-            errorMessage += ` Dettagli: ${error.message}`;
-        }
-        if (error.stderr) { // Output di errore effettivo dallo strumento esterno
-            errorMessage += `\nOutput errore (${toolName}): ${error.stderr.trim()}`;
-        }
-        if (error.stdout) { // Output standard (a volte utile per il debugging)
-            errorMessage += `\nOutput standard (${toolName}): ${error.stdout.trim()}`;
-        }
-        throw new Error(errorMessage);
-    }
+// Funzione helper per eseguire comandi esterni in modo sicuro usando spawn
+async function safeSpawn(command, args, toolName, options = {}) {
+    return new Promise((resolve, reject) => {
+        const child = spawn(command, args, { shell: false, ...options });
+        let stdout = '';
+        let stderr = '';
+        if (child.stdout) child.stdout.on('data', d => { stdout += d; });
+        if (child.stderr) child.stderr.on('data', d => { stderr += d; });
+        child.on('error', err => {
+            reject(new Error(`${toolName} spawn error: ${err.message}`));
+        });
+        child.on('close', code => {
+            if (code === 0) {
+                resolve(stdout.trim());
+            } else {
+                reject(new Error(`${toolName} exited with code ${code}\n${stderr.trim()}`));
+            }
+        });
+    });
 }
 
 /**
@@ -40,8 +40,7 @@ async function safeExec(command, toolName, options = {}) {
  * @returns {Promise<string>} L'output di Ollama.
  */
 async function runOllama(prompt) {
-    const command = `ollama run ${config.OLLAMA_MODEL} ${JSON.stringify(prompt)}`;
-    const stdout = await safeExec(command, 'Ollama', { maxBuffer: 1024 * 1024 * 10 });
+    const stdout = await safeSpawn('ollama', ['run', config.OLLAMA_MODEL, JSON.stringify(prompt)], 'Ollama');
     return stdout.toString().trim();
 }
 
@@ -80,8 +79,8 @@ function splitScript(text) {
  * @returns {Promise<number>} La durata del file audio in secondi.
  */
 async function getAudioDuration(audioFilePath) {
-    const command = `ffprobe -v error -show_entries format=duration -of default=noprint_wrappers=1:nokey=1 "${audioFilePath}"`;
-    const stdout = await safeExec(command, 'FFprobe');
+    const args = ['-v', 'error', '-show_entries', 'format=duration', '-of', 'default=noprint_wrappers=1:nokey=1', audioFilePath];
+    const stdout = await safeSpawn('ffprobe', args, 'FFprobe');
     return parseFloat(stdout.trim());
 }
 
@@ -106,8 +105,8 @@ async function generateImages(imagePrompts) {
     const imageGenerationPromises = imagePrompts.map((prompt, i) => {
         const outputPath = path.join(config.IMAGE_FOLDER, `image${i}.png`);
         console.log(`   -> Avvio generazione immagine ${i + 1}/${imagePrompts.length}`);
-        const command = `${config.STABLE_DIFFUSION_EXECUTABLE} -m "${config.STABLE_DIFFUSION_MODEL}" -p "${prompt}" -o "${outputPath}" --height 1920 --width 1080 -s 25`;
-        return safeExec(command, `Stable Diffusion (Image ${i+1})`).then(() => console.log(`   -> Immagine ${i+1} completata.`));
+        const args = ['-m', config.STABLE_DIFFUSION_MODEL, '-p', prompt, '-o', outputPath, '--height', '1920', '--width', '1080', '-s', '25'];
+        return safeSpawn(config.STABLE_DIFFUSION_EXECUTABLE, args, `Stable Diffusion (Image ${i+1})`).then(() => console.log(`   -> Immagine ${i+1} completata.`));
     });
 
     await Promise.all(imageGenerationPromises);
@@ -121,8 +120,8 @@ async function generateVoice(text, audioOutputPath) {
     await fsPromises.mkdir(audioDir, { recursive: true });
     await fsPromises.writeFile(tempScriptPath, text);
 
-    const command = `${config.PIPER_EXECUTABLE} --model ${config.PIPER_VOICE_MODEL} --output_file ${audioOutputPath} --text_file ${tempScriptPath}`;
-    await safeExec(command, 'Piper TTS');
+    const args = ['--model', config.PIPER_VOICE_MODEL, '--output_file', audioOutputPath, '--text_file', tempScriptPath];
+    await safeSpawn(config.PIPER_EXECUTABLE, args, 'Piper TTS');
     await fsPromises.unlink(tempScriptPath); // Pulisce il file di script temporaneo
 }
 
@@ -136,10 +135,11 @@ async function generateVoice(text, audioOutputPath) {
 async function generateStaticClip(imagePath, text, duration, outputPath) {
     console.log(`   -> Creazione clip statico: ${outputPath}`);
     const escapedText = text.replace(/'/g, `''`).replace(/:/g, `\\:`);
-    const ffmpegCmd = `ffmpeg -y -loop 1 -i "${imagePath}" -t ${duration} ` +
-        `-vf "scale=1080:1920,drawtext=text='${escapedText}':fontfile='${config.FFMPEG_FONT_PATH}':fontcolor=white:fontsize=${config.INTRO_OUTRO_FONT_SIZE}:x=(w-text_w)/2:y=(h-text_h)/2:box=1:boxcolor=black@0.5:boxborderw=10" ` + // Aggiunto fontfile per drawtext
-        `-c:v libx264 -pix_fmt yuv420p "${outputPath}"`;
-    await safeExec(ffmpegCmd, `FFmpeg (Static Clip: ${path.basename(outputPath)})`);
+    const filter = `[0:v]scale=1080:1920[bg];[1:v]scale=${config.LOGO_WIDTH}:${config.LOGO_HEIGHT}[logo];` +
+        `[bg][logo]overlay=x=${config.LOGO_X}:y=${config.LOGO_Y}[with_logo];` +
+        `[with_logo]drawtext=text='${escapedText}':fontfile='${config.FFMPEG_FONT_PATH}':fontcolor=white:fontsize=${config.INTRO_OUTRO_FONT_SIZE}:x=(w-text_w)/2:y=(h-text_h)/2:box=1:boxcolor=black@0.5:boxborderw=10`;
+    const args = ['-y', '-loop', '1', '-i', imagePath, '-i', config.LOGO_PATH, '-t', String(duration), '-filter_complex', filter, '-c:v', 'libx264', '-pix_fmt', 'yuv420p', outputPath];
+    await safeSpawn('ffmpeg', args, `FFmpeg (Static Clip: ${path.basename(outputPath)})`);
 }
 
 // NUOVO STEP 6 - Genera il contenuto video principale (senza intro/outro) con sottotitoli e sincronizzazione
@@ -176,11 +176,9 @@ async function generateMainVideoContent(scriptChunks) {
         const yPanExpr = `ih/2-(ih/zoom/2)`; // Centra verticalmente
         console.log(`   -> Creazione clip ${i + 1}/${scriptChunks.length} (durata: ${duration.toFixed(2)}s)`);
         // Aggiungi il logo come terzo input (-i "${config.LOGO_PATH}")
-        const ffmpegCmdPart = `ffmpeg -y -i "${imagePath}" -i "${audioPath}" -i "${config.LOGO_PATH}" ` +
-            // Applica zoompan all'immagine di sfondo ([0:v]), poi scala il logo ([2:v]) e sovrapponilo, infine aggiungi i sottotitoli.
-            `-filter_complex "[0:v]zoompan=z='${zoomExpr}':x='${xPanExpr}':y='${yPanExpr}':d=${durationFrames}:s=1080x1920[bg_zoomed];[2:v]scale=${config.LOGO_WIDTH}:${config.LOGO_HEIGHT}[logo_scaled];[bg_zoomed][logo_scaled]overlay=x=${config.LOGO_X}:y=${config.LOGO_Y}[video_with_logo];[video_with_logo]subtitles='${subtitlePath}':force_style='FontName=${config.FFMPEG_FONT_NAME},FontSize=28,Alignment=10,PrimaryColour=&HFFFFFF&,OutlineColour=&H000000&,BorderStyle=1,Outline=1.5,Shadow=0.5'" ` +
-            `-c:v libx264 -tune stillimage -c:a aac -b:a 192k -pix_fmt yuv420p "${videoPartPath}"`;
-        await safeExec(ffmpegCmdPart, `FFmpeg (Main Content Part ${i+1})`);
+        const filter = `[0:v]zoompan=z='${zoomExpr}':x='${xPanExpr}':y='${yPanExpr}':d=${durationFrames}:s=1080x1920[bg_zoomed];[2:v]scale=${config.LOGO_WIDTH}:${config.LOGO_HEIGHT}[logo_scaled];[bg_zoomed][logo_scaled]overlay=x=${config.LOGO_X}:y=${config.LOGO_Y}[video_with_logo];[video_with_logo]subtitles='${subtitlePath}':force_style='FontName=${config.FFMPEG_FONT_NAME},FontSize=${config.SUBTITLE_FONT_SIZE},Alignment=10,PrimaryColour=&HFFFFFF&,OutlineColour=&H000000&,BorderStyle=1,Outline=2,Shadow=1'`;
+        const args = ['-y', '-i', imagePath, '-i', audioPath, '-i', config.LOGO_PATH, '-filter_complex', filter, '-c:v', 'libx264', '-tune', 'stillimage', '-c:a', 'aac', '-b:a', '192k', '-pix_fmt', 'yuv420p', videoPartPath];
+        await safeSpawn('ffmpeg', args, `FFmpeg (Main Content Part ${i+1})`);
         videoParts.push(videoPartPath);
     }
     
@@ -191,14 +189,14 @@ async function generateMainVideoContent(scriptChunks) {
     await fsPromises.writeFile(fileListPath, fileListContent);
 
     const mainVideoPath = path.join(tempDir, 'main_content.mp4'); // New output name
-    const ffmpegConcatCmd = `ffmpeg -y -f concat -safe 0 -i "${fileListPath}" -c copy "${mainVideoPath}"`; // Aggiunto -safe 0 per percorsi assoluti
-    await safeExec(ffmpegConcatCmd, 'FFmpeg (Main Content Concatenation)');
+    const concatArgs = ['-y', '-f', 'concat', '-safe', '0', '-i', fileListPath, '-c', 'copy', mainVideoPath];
+    await safeSpawn('ffmpeg', concatArgs, 'FFmpeg (Main Content Concatenation)');
 
     return mainVideoPath; // Return the path to the main video content
 }
 
 // Nuova funzione per gestire la concatenazione finale e il mixaggio audio
-async function finalizeVideo(introVideoPath, mainVideoPath, outroVideoPath) {
+async function finalizeVideo(introVideoPath, mainVideoPath, outroVideoPath, outputPath, resolution) {
     console.log('🎬 Finalizzazione video (intro + contenuto + outro + musica)...');
     const tempDir = config.TEMP_FOLDER;
 
@@ -210,15 +208,43 @@ async function finalizeVideo(introVideoPath, mainVideoPath, outroVideoPath) {
     await fsPromises.writeFile(finalFileListPath, finalFileListContent);
 
     const concatenatedVideoNoMusicPath = path.join(tempDir, 'concatenated_no_music.mp4');
-    const ffmpegConcatCmd = `ffmpeg -y -f concat -safe 0 -i "${finalFileListPath}" -c copy "${concatenatedVideoNoMusicPath}"`;
-    await safeExec(ffmpegConcatCmd, 'FFmpeg (Final Concatenation)');
+    const concatArgs = ['-y', '-f', 'concat', '-safe', '0', '-i', finalFileListPath, '-c', 'copy', concatenatedVideoNoMusicPath];
+    await safeSpawn('ffmpeg', concatArgs, 'FFmpeg (Final Concatenation)');
 
     // 2. Aggiungi musica di sottofondo al video completo
     console.log('   -> Aggiunta musica di sottofondo...');
-    const ffmpegMusicCmd = `ffmpeg -y -i "${concatenatedVideoNoMusicPath}" -i "${config.BACKGROUND_MUSIC_PATH}" ` +
-        `-filter_complex "[0:a]volume=${config.VOICE_VOLUME}[a0];[1:a]volume=${config.MUSIC_VOLUME}[a1];[a0][a1]amix=inputs=2:duration=first" ` +
-        `-map 0:v -map "[a]" -c:v copy -shortest "${config.OUTPUT_PATH}"`;
-    await safeExec(ffmpegMusicCmd, 'FFmpeg (Audio Mixing)');
+    const withMusicPath = path.join(tempDir, 'with_music.mp4');
+    const musicFilter = `[0:a]volume=${config.VOICE_VOLUME}[a0];[1:a]volume=${config.MUSIC_VOLUME}[a1];[a0][a1]amix=inputs=2:duration=first[a]`;
+    const musicArgs = ['-y', '-i', concatenatedVideoNoMusicPath, '-i', config.BACKGROUND_MUSIC_PATH, '-filter_complex', musicFilter, '-map', '0:v', '-map', '[a]', '-c:v', 'copy', '-shortest', withMusicPath];
+    await safeSpawn('ffmpeg', musicArgs, 'FFmpeg (Audio Mixing)');
+
+    // 3. Scala o ritaglia in base alla piattaforma di destinazione
+    const scaleExpr = `scale=${resolution.width}:${resolution.height}:force_original_aspect_ratio=increase`;
+    const cropExpr = `crop=${resolution.width}:${resolution.height}`;
+    const scaleArgs = ['-y', '-i', withMusicPath, '-vf', `${scaleExpr},${cropExpr}`, '-c:v', 'libx264', '-c:a', 'copy', outputPath];
+    await safeSpawn('ffmpeg', scaleArgs, 'FFmpeg (Resize)');
+}
+
+// Genera metadati SEO con Ollama
+async function generateSocialMetadata(script, platformKey) {
+    console.log(`   -> Generazione metadata per ${platformKey}...`);
+    const prompt = config.OLLAMA_PROMPT_METADATA(script, platformKey);
+    const raw = await runOllama(prompt);
+    try {
+        return JSON.parse(raw);
+    } catch {
+        console.warn('   -> Formato metadati non valido, uso configurazione di default');
+        return {};
+    }
+}
+
+// Crea un file JSON con i metadati per la piattaforma di destinazione
+async function createMetadataFile(socialKey, outputPath, metadata = {}) {
+    const defaults = config.SOCIAL_METADATA[socialKey] || {};
+    const finalData = Object.assign({ video: path.basename(outputPath) }, defaults, metadata);
+    const jsonPath = outputPath.replace(/\.mp4$/, '.json');
+    await fsPromises.writeFile(jsonPath, JSON.stringify(finalData, null, 2));
+    console.log(`   -> Metadata ${socialKey} salvati in ${jsonPath}`);
 }
 
 // MAIN FLOW
@@ -227,12 +253,17 @@ async function finalizeVideo(introVideoPath, mainVideoPath, outroVideoPath) {
         console.log('🚀 Avvio generazione video TikTok con AI...');
         const tempDir = config.TEMP_FOLDER;
         await fsPromises.mkdir(tempDir, { recursive: true }); // Ensure temp dir exists early
+        await fsPromises.mkdir(path.dirname(config.OUTPUT_TIKTOK_PATH), { recursive: true });
 
         // Genera Introduzione
         const rawScript = await generateScript();
         const validatedScript = await validateScript(rawScript);
         const scriptChunks = splitScript(validatedScript);
-        
+
+        // Metadati SEO personalizzati per ciascuna piattaforma
+        const tiktokMeta = await generateSocialMetadata(validatedScript, 'TikTok');
+        const instagramMeta = await generateSocialMetadata(validatedScript, 'Instagram');
+
         const imagePrompts = await generateImagePrompts(scriptChunks);
         await generateImages(imagePrompts);
         
@@ -246,19 +277,27 @@ async function finalizeVideo(introVideoPath, mainVideoPath, outroVideoPath) {
         const outroVideoPath = path.join(tempDir, 'outro.mp4');
         await generateStaticClip(config.OUTRO_IMAGE_PATH, config.OUTRO_TEXT, config.OUTRO_DURATION_SECONDS, outroVideoPath);
 
-        // Finalizza (concatena e aggiungi musica)
-        await finalizeVideo(introVideoPath, mainVideoPath, outroVideoPath);
+        // Finalizza (concatena e aggiungi musica) per TikTok
+        await finalizeVideo(introVideoPath, mainVideoPath, outroVideoPath, config.OUTPUT_TIKTOK_PATH, config.TIKTOK_RESOLUTION);
+        await createMetadataFile('tiktok', config.OUTPUT_TIKTOK_PATH, tiktokMeta);
 
-        // Pulizia file temporanei (opzionale, decommenta se desiderato)
-        // console.log(`   -> Pulizia file temporanei in ${tempDir}...`);
-        // await fsPromises.rm(tempDir, { recursive: true, force: true });
+        // Finalizza (concatena e aggiungi musica) per Instagram
+        await finalizeVideo(introVideoPath, mainVideoPath, outroVideoPath, config.OUTPUT_INSTAGRAM_PATH, config.INSTAGRAM_RESOLUTION);
+        await createMetadataFile('instagram', config.OUTPUT_INSTAGRAM_PATH, instagramMeta);
 
-        console.log(`\n✅ Video creato con successo: ${config.OUTPUT_PATH}\n`);
+        if (config.CLEANUP_TEMP) {
+            console.log(`   -> Pulizia file temporanei in ${tempDir}...`);
+            await fsPromises.rm(tempDir, { recursive: true, force: true });
+        }
+
+        console.log(`\n✅ Video TikTok: ${config.OUTPUT_TIKTOK_PATH}`);
+        console.log(`✅ Video Instagram: ${config.OUTPUT_INSTAGRAM_PATH}\n`);
     } catch (error) {
         console.error('\n❌ Si è verificato un errore durante la generazione del video:');
         console.error(error.stderr || error.message);
     } finally {
-        // Opzionale: Assicurati che la directory temporanea venga pulita anche in caso di errore
-        // await fsPromises.rm(config.TEMP_FOLDER, { recursive: true, force: true }).catch(() => {});
+        if (config.CLEANUP_TEMP) {
+            await fsPromises.rm(config.TEMP_FOLDER, { recursive: true, force: true }).catch(() => {});
+        }
     }
 })();
