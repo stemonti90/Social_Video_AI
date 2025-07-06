@@ -40,6 +40,18 @@ const INTRO_TEXT = 'Il tuo video inizia qui!'; // Testo per l'introduzione
 const OUTRO_TEXT = 'Grazie per aver guardato!'; // Testo per la conclusione
 const INTRO_OUTRO_FONT_SIZE = 48; // Dimensione del font per intro/outro
 
+// Dimensione font dei sottotitoli (accessibilità)
+const SUBTITLE_FONT_SIZE = 36;
+
+// Argomenti e trend di marketing per il prossimo anno
+const NEXT_YEAR = new Date().getFullYear() + 1;
+const MARKETING_TRENDS = [
+    'AI-driven personalization',
+    'augmented reality',
+    'voice search',
+    'sustainability marketing'
+];
+
 // --- Configurazione Logo ---
 const LOGO_PATH = './assets/logo.png'; // Assicurati che questo file esista e sia trasparente (es. PNG con canale alpha)
 const LOGO_WIDTH = 200; // Larghezza del logo in pixel
@@ -66,9 +78,10 @@ const SOCIAL_METADATA = {
 module.exports = {
     // Prompts per Ollama
     OLLAMA_MODEL: 'llama3',
-    OLLAMA_PROMPT_INITIAL: `Genera uno script originale e accattivante per un video TikTok di 60 secondi. L'argomento deve riguardare criptovalute, storie reali o fatti incredibili. Usa un tono coinvolgente e chiudi con una frase ad effetto.`,
+    OLLAMA_PROMPT_INITIAL: `Genera uno script originale e accattivante per un video di 60 secondi da pubblicare su TikTok o Instagram. Cita almeno una delle tendenze di marketing digitale previste per il ${NEXT_YEAR}, come ${MARKETING_TRENDS.join(', ')}. L'argomento principale è legato alle criptovalute. Usa frasi brevi e termina con una call to action coinvolgente.`,
     OLLAMA_PROMPT_VALIDATE: (script) => `Rivedi questo testo per grammatica, chiarezza e veridicità. Riscrivi solo se serve mantenendo lo stile narrativo:\n\n${script}`,
     OLLAMA_PROMPT_IMAGE_GEN: (text) => `Trasforma la seguente frase narrativa in un prompt conciso e descrittivo per un generatore di immagini AI come Stable Diffusion. Il prompt deve essere in inglese, focalizzato sugli elementi visivi, e includere uno stile artistico (es. "digital art", "photorealistic", "cinematic"). Rispondi solo con il prompt. Frase: "${text}"`,
+    OLLAMA_PROMPT_METADATA: (script, platform) => `Sei un esperto di marketing digitale. Crea un JSON con titolo, cinque tag e cinque hashtag ottimizzati SEO per ${platform}. Usa come ispirazione il seguente script: \n\n${script}`,
 
     // Percorsi dei file e delle directory
     // SCRIPT_PATH e AUDIO_PATH non sono più usati globalmente, ma per chunk
@@ -108,6 +121,7 @@ module.exports = {
     INTRO_TEXT: INTRO_TEXT,
     OUTRO_TEXT: OUTRO_TEXT,
     INTRO_OUTRO_FONT_SIZE: INTRO_OUTRO_FONT_SIZE,
+    SUBTITLE_FONT_SIZE: SUBTITLE_FONT_SIZE,
 
     // Configurazione Logo
     LOGO_PATH: LOGO_PATH,
@@ -117,4 +131,5 @@ module.exports = {
     LOGO_X: LOGO_X,
     LOGO_Y: LOGO_Y,
     SOCIAL_METADATA: SOCIAL_METADATA,
+    MARKETING_TRENDS: MARKETING_TRENDS,
 };

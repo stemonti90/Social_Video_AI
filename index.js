@@ -180,7 +180,7 @@ async function generateMainVideoContent(scriptChunks) {
         // Aggiungi il logo come terzo input (-i "${config.LOGO_PATH}")
         const ffmpegCmdPart = `ffmpeg -y -i "${imagePath}" -i "${audioPath}" -i "${config.LOGO_PATH}" ` +
             // Applica zoompan all'immagine di sfondo ([0:v]), poi scala il logo ([2:v]) e sovrapponilo, infine aggiungi i sottotitoli.
-            `-filter_complex "[0:v]zoompan=z='${zoomExpr}':x='${xPanExpr}':y='${yPanExpr}':d=${durationFrames}:s=1080x1920[bg_zoomed];[2:v]scale=${config.LOGO_WIDTH}:${config.LOGO_HEIGHT}[logo_scaled];[bg_zoomed][logo_scaled]overlay=x=${config.LOGO_X}:y=${config.LOGO_Y}[video_with_logo];[video_with_logo]subtitles='${subtitlePath}':force_style='FontName=${config.FFMPEG_FONT_NAME},FontSize=28,Alignment=10,PrimaryColour=&HFFFFFF&,OutlineColour=&H000000&,BorderStyle=1,Outline=1.5,Shadow=0.5'" ` +
+            `-filter_complex "[0:v]zoompan=z='${zoomExpr}':x='${xPanExpr}':y='${yPanExpr}':d=${durationFrames}:s=1080x1920[bg_zoomed];[2:v]scale=${config.LOGO_WIDTH}:${config.LOGO_HEIGHT}[logo_scaled];[bg_zoomed][logo_scaled]overlay=x=${config.LOGO_X}:y=${config.LOGO_Y}[video_with_logo];[video_with_logo]subtitles='${subtitlePath}':force_style='FontName=${config.FFMPEG_FONT_NAME},FontSize=${config.SUBTITLE_FONT_SIZE},Alignment=10,PrimaryColour=&HFFFFFF&,OutlineColour=&H000000&,BorderStyle=1,Outline=2,Shadow=1'" ` +
             `-c:v libx264 -tune stillimage -c:a aac -b:a 192k -pix_fmt yuv420p "${videoPartPath}"`;
         await safeExec(ffmpegCmdPart, `FFmpeg (Main Content Part ${i+1})`);
         videoParts.push(videoPartPath);
@@ -230,12 +230,25 @@ async function finalizeVideo(introVideoPath, mainVideoPath, outroVideoPath, outp
     await safeExec(ffmpegScaleCmd, 'FFmpeg (Resize)');
 }
 
+// Genera metadati SEO con Ollama
+async function generateSocialMetadata(script, platformKey) {
+    console.log(`   -> Generazione metadata per ${platformKey}...`);
+    const prompt = config.OLLAMA_PROMPT_METADATA(script, platformKey);
+    const raw = await runOllama(prompt);
+    try {
+        return JSON.parse(raw);
+    } catch {
+        console.warn('   -> Formato metadati non valido, uso configurazione di default');
+        return {};
+    }
+}
+
 // Crea un file JSON con i metadati per la piattaforma di destinazione
-async function createMetadataFile(socialKey, outputPath) {
-    const metadata = config.SOCIAL_METADATA[socialKey] || {};
+async function createMetadataFile(socialKey, outputPath, metadata = {}) {
+    const defaults = config.SOCIAL_METADATA[socialKey] || {};
+    const finalData = Object.assign({ video: path.basename(outputPath) }, defaults, metadata);
     const jsonPath = outputPath.replace(/\.mp4$/, '.json');
-    const data = Object.assign({ video: path.basename(outputPath) }, metadata);
-    await fsPromises.writeFile(jsonPath, JSON.stringify(data, null, 2));
+    await fsPromises.writeFile(jsonPath, JSON.stringify(finalData, null, 2));
     console.log(`   -> Metadata ${socialKey} salvati in ${jsonPath}`);
 }
 
@@ -251,7 +264,11 @@ async function createMetadataFile(socialKey, outputPath) {
         const rawScript = await generateScript();
         const validatedScript = await validateScript(rawScript);
         const scriptChunks = splitScript(validatedScript);
-        
+
+        // Metadati SEO personalizzati per ciascuna piattaforma
+        const tiktokMeta = await generateSocialMetadata(validatedScript, 'TikTok');
+        const instagramMeta = await generateSocialMetadata(validatedScript, 'Instagram');
+
         const imagePrompts = await generateImagePrompts(scriptChunks);
         await generateImages(imagePrompts);
         
@@ -267,11 +284,11 @@ async function createMetadataFile(socialKey, outputPath) {
 
         // Finalizza (concatena e aggiungi musica) per TikTok
         await finalizeVideo(introVideoPath, mainVideoPath, outroVideoPath, config.OUTPUT_TIKTOK_PATH, config.TIKTOK_RESOLUTION);
-        await createMetadataFile('tiktok', config.OUTPUT_TIKTOK_PATH);
+        await createMetadataFile('tiktok', config.OUTPUT_TIKTOK_PATH, tiktokMeta);
 
         // Finalizza (concatena e aggiungi musica) per Instagram
         await finalizeVideo(introVideoPath, mainVideoPath, outroVideoPath, config.OUTPUT_INSTAGRAM_PATH, config.INSTAGRAM_RESOLUTION);
-        await createMetadataFile('instagram', config.OUTPUT_INSTAGRAM_PATH);
+        await createMetadataFile('instagram', config.OUTPUT_INSTAGRAM_PATH, instagramMeta);
 
         // Pulizia file temporanei (opzionale, decommenta se desiderato)
         // console.log(`   -> Pulizia file temporanei in ${tempDir}...`);
