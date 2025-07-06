@@ -49,6 +49,20 @@ const LOGO_HEIGHT = 200; // Altezza del logo in pixel
 const LOGO_MARGIN = 50;
 const LOGO_X = `main_w-overlay_w-${LOGO_MARGIN}`; // Posizione X (bordo destro)
 const LOGO_Y = `main_h-overlay_h-${LOGO_MARGIN}`; // Posizione Y (bordo inferiore)
+
+// Informazioni predefinite per la condivisione sui social
+const SOCIAL_METADATA = {
+    tiktok: {
+        title: 'Amazing crypto fact!',
+        tags: ['crypto', 'fyp', 'viral'],
+        hashtags: ['#crypto', '#foryou', '#viral']
+    },
+    instagram: {
+        title: 'Curiosit\u00e0 sulle crypto',
+        tags: ['crypto', 'reels', 'viral'],
+        hashtags: ['#crypto', '#reels', '#viral']
+    }
+};
 module.exports = {
     // Prompts per Ollama
     OLLAMA_MODEL: 'llama3',
@@ -59,6 +73,10 @@ module.exports = {
     // Percorsi dei file e delle directory
     // SCRIPT_PATH e AUDIO_PATH non sono più usati globalmente, ma per chunk
     OUTPUT_PATH: './output/video_finale.mp4',
+    OUTPUT_TIKTOK_PATH: './output/video_tiktok.mp4',
+    OUTPUT_INSTAGRAM_PATH: './output/video_instagram.mp4',
+    TIKTOK_RESOLUTION: { width: 1080, height: 1920 },
+    INSTAGRAM_RESOLUTION: { width: 1080, height: 1350 },
     IMAGE_FOLDER: './assets/images',
     TEMP_FOLDER: './temp', // Nuova cartella per file temporanei
 
@@ -98,4 +116,5 @@ module.exports = {
     LOGO_MARGIN: LOGO_MARGIN,
     LOGO_X: LOGO_X,
     LOGO_Y: LOGO_Y,
+    SOCIAL_METADATA: SOCIAL_METADATA,
 };

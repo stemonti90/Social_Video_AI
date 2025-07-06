@@ -200,7 +200,7 @@ async function generateMainVideoContent(scriptChunks) {
 }
 
 // Nuova funzione per gestire la concatenazione finale e il mixaggio audio
-async function finalizeVideo(introVideoPath, mainVideoPath, outroVideoPath) {
+async function finalizeVideo(introVideoPath, mainVideoPath, outroVideoPath, outputPath, resolution) {
     console.log('🎬 Finalizzazione video (intro + contenuto + outro + musica)...');
     const tempDir = config.TEMP_FOLDER;
 
@@ -217,10 +217,26 @@ async function finalizeVideo(introVideoPath, mainVideoPath, outroVideoPath) {
 
     // 2. Aggiungi musica di sottofondo al video completo
     console.log('   -> Aggiunta musica di sottofondo...');
+    const withMusicPath = path.join(tempDir, 'with_music.mp4');
     const ffmpegMusicCmd = `ffmpeg -y -i "${concatenatedVideoNoMusicPath}" -i "${config.BACKGROUND_MUSIC_PATH}" ` +
-        `-filter_complex "[0:a]volume=${config.VOICE_VOLUME}[a0];[1:a]volume=${config.MUSIC_VOLUME}[a1];[a0][a1]amix=inputs=2:duration=first" ` +
-        `-map 0:v -map "[a]" -c:v copy -shortest "${config.OUTPUT_PATH}"`;
+        `-filter_complex "[0:a]volume=${config.VOICE_VOLUME}[a0];[1:a]volume=${config.MUSIC_VOLUME}[a1];[a0][a1]amix=inputs=2:duration=first[a]" ` +
+        `-map 0:v -map "[a]" -c:v copy -shortest "${withMusicPath}"`;
     await safeExec(ffmpegMusicCmd, 'FFmpeg (Audio Mixing)');
+
+    // 3. Scala o ritaglia in base alla piattaforma di destinazione
+    const scaleExpr = `scale=${resolution.width}:${resolution.height}:force_original_aspect_ratio=increase`;
+    const cropExpr = `crop=${resolution.width}:${resolution.height}`;
+    const ffmpegScaleCmd = `ffmpeg -y -i "${withMusicPath}" -vf "${scaleExpr},${cropExpr}" -c:v libx264 -c:a copy "${outputPath}"`;
+    await safeExec(ffmpegScaleCmd, 'FFmpeg (Resize)');
+}
+
+// Crea un file JSON con i metadati per la piattaforma di destinazione
+async function createMetadataFile(socialKey, outputPath) {
+    const metadata = config.SOCIAL_METADATA[socialKey] || {};
+    const jsonPath = outputPath.replace(/\.mp4$/, '.json');
+    const data = Object.assign({ video: path.basename(outputPath) }, metadata);
+    await fsPromises.writeFile(jsonPath, JSON.stringify(data, null, 2));
+    console.log(`   -> Metadata ${socialKey} salvati in ${jsonPath}`);
 }
 
 // MAIN FLOW
@@ -229,6 +245,7 @@ async function finalizeVideo(introVideoPath, mainVideoPath, outroVideoPath) {
         console.log('🚀 Avvio generazione video TikTok con AI...');
         const tempDir = config.TEMP_FOLDER;
         await fsPromises.mkdir(tempDir, { recursive: true }); // Ensure temp dir exists early
+        await fsPromises.mkdir(path.dirname(config.OUTPUT_TIKTOK_PATH), { recursive: true });
 
         // Genera Introduzione
         const rawScript = await generateScript();
@@ -248,14 +265,20 @@ async function finalizeVideo(introVideoPath, mainVideoPath, outroVideoPath) {
         const outroVideoPath = path.join(tempDir, 'outro.mp4');
         await generateStaticClip(config.OUTRO_IMAGE_PATH, config.OUTRO_TEXT, config.OUTRO_DURATION_SECONDS, outroVideoPath);
 
-        // Finalizza (concatena e aggiungi musica)
-        await finalizeVideo(introVideoPath, mainVideoPath, outroVideoPath);
+        // Finalizza (concatena e aggiungi musica) per TikTok
+        await finalizeVideo(introVideoPath, mainVideoPath, outroVideoPath, config.OUTPUT_TIKTOK_PATH, config.TIKTOK_RESOLUTION);
+        await createMetadataFile('tiktok', config.OUTPUT_TIKTOK_PATH);
+
+        // Finalizza (concatena e aggiungi musica) per Instagram
+        await finalizeVideo(introVideoPath, mainVideoPath, outroVideoPath, config.OUTPUT_INSTAGRAM_PATH, config.INSTAGRAM_RESOLUTION);
+        await createMetadataFile('instagram', config.OUTPUT_INSTAGRAM_PATH);
 
         // Pulizia file temporanei (opzionale, decommenta se desiderato)
         // console.log(`   -> Pulizia file temporanei in ${tempDir}...`);
         // await fsPromises.rm(tempDir, { recursive: true, force: true });
 
-        console.log(`\n✅ Video creato con successo: ${config.OUTPUT_PATH}\n`);
+        console.log(`\n✅ Video TikTok: ${config.OUTPUT_TIKTOK_PATH}`);
+        console.log(`✅ Video Instagram: ${config.OUTPUT_INSTAGRAM_PATH}\n`);
     } catch (error) {
         console.error('\n❌ Si è verificato un errore durante la generazione del video:');
         console.error(error.stderr || error.message);
