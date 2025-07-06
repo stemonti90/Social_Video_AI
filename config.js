@@ -44,8 +44,11 @@ const INTRO_OUTRO_FONT_SIZE = 48; // Dimensione del font per intro/outro
 const LOGO_PATH = './assets/logo.png'; // Assicurati che questo file esista e sia trasparente (es. PNG con canale alpha)
 const LOGO_WIDTH = 200; // Larghezza del logo in pixel
 const LOGO_HEIGHT = 200; // Altezza del logo in pixel
-const LOGO_X = 50; // Posizione X del logo (distanza dal bordo sinistro)
-const LOGO_Y = 50; // Posizione Y del logo (distanza dal bordo superiore)
+// Distanza del watermark dai bordi destro e inferiore. Viene usata per
+// calcolare la posizione in basso a destra.
+const LOGO_MARGIN = 50;
+const LOGO_X = `main_w-overlay_w-${LOGO_MARGIN}`; // Posizione X (bordo destro)
+const LOGO_Y = `main_h-overlay_h-${LOGO_MARGIN}`; // Posizione Y (bordo inferiore)
 module.exports = {
     // Prompts per Ollama
     OLLAMA_MODEL: 'llama3',
@@ -92,6 +95,7 @@ module.exports = {
     LOGO_PATH: LOGO_PATH,
     LOGO_WIDTH: LOGO_WIDTH,
     LOGO_HEIGHT: LOGO_HEIGHT,
+    LOGO_MARGIN: LOGO_MARGIN,
     LOGO_X: LOGO_X,
     LOGO_Y: LOGO_Y,
 };

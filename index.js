@@ -136,8 +136,10 @@ async function generateVoice(text, audioOutputPath) {
 async function generateStaticClip(imagePath, text, duration, outputPath) {
     console.log(`   -> Creazione clip statico: ${outputPath}`);
     const escapedText = text.replace(/'/g, `''`).replace(/:/g, `\\:`);
-    const ffmpegCmd = `ffmpeg -y -loop 1 -i "${imagePath}" -t ${duration} ` +
-        `-vf "scale=1080:1920,drawtext=text='${escapedText}':fontfile='${config.FFMPEG_FONT_PATH}':fontcolor=white:fontsize=${config.INTRO_OUTRO_FONT_SIZE}:x=(w-text_w)/2:y=(h-text_h)/2:box=1:boxcolor=black@0.5:boxborderw=10" ` + // Aggiunto fontfile per drawtext
+    const ffmpegCmd = `ffmpeg -y -loop 1 -i "${imagePath}" -i "${config.LOGO_PATH}" -t ${duration} ` +
+        `-filter_complex "[0:v]scale=1080:1920[bg];[1:v]scale=${config.LOGO_WIDTH}:${config.LOGO_HEIGHT}[logo];` +
+        `[bg][logo]overlay=x=${config.LOGO_X}:y=${config.LOGO_Y}[with_logo];` +
+        `[with_logo]drawtext=text='${escapedText}':fontfile='${config.FFMPEG_FONT_PATH}':fontcolor=white:fontsize=${config.INTRO_OUTRO_FONT_SIZE}:x=(w-text_w)/2:y=(h-text_h)/2:box=1:boxcolor=black@0.5:boxborderw=10" ` +
         `-c:v libx264 -pix_fmt yuv420p "${outputPath}"`;
     await safeExec(ffmpegCmd, `FFmpeg (Static Clip: ${path.basename(outputPath)})`);
 }
