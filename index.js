@@ -1,264 +1,285 @@
-const { exec } = require('child_process');
-const fs = require('fs');
-const fsPromises = require('fs/promises');
-const path = require('path');
-const util = require('util');
-// Carica le variabili d'ambiente dal file .env
-require('dotenv').config(); 
-const config = require('./config');
+"use strict";
+/**
+ * AI‑powered TikTok Video Generator – single‑file version
+ *
+ * Integrazione dei miglioramenti suggeriti:
+ *  • execa per esecuzione processi (stream, niente limiti buffer)
+ *  • pino logging JSON / pretty in dev
+ *  • p‑limit per concorrenza controllata
+ *  • compromise NLP per suddividere il testo
+ *  • zod + dotenv per validare le variabili d’ambiente
+ *  • graceful shutdown & cleanup
+ *
+ * Dipendenze runtime (npm i --save): execa pino p-limit compromise zod dotenv
+ * Dev‑helper (opz.): pino-pretty per output leggibile → `pino-pretty | node ai_video_pipeline.js`
+ */
 
+// ────────────────────────────────────────────────────────────────────────────
+// 📦  Import
+// ────────────────────────────────────────────────────────────────────────────
+const execa = require("execa");
+const pino = require("pino");
+const pLimit = require("p-limit");
+const nlp = require("compromise");
+const { z } = require("zod");
+const dotenv = require("dotenv");
+const fs = require("fs");
+const fsPromises = require("fs/promises");
+const path = require("path");
 
-// Rende 'exec' utilizzabile con async/await
-const execAsync = util.promisify(exec);
+// Carica e valida .env -------------------------------------------------------
+dotenv.config();
+const EnvSchema = z
+  .object({
+    OLLAMA_MODEL: z.string().min(1),
+    STABLE_DIFFUSION_EXECUTABLE: z.string().min(1),
+    STABLE_DIFFUSION_MODEL: z.string().min(1),
+    PIPER_EXECUTABLE: z.string().min(1),
+    PIPER_VOICE_MODEL: z.string().min(1),
+    FFMPEG_FONT_PATH: z.string().min(1),
+    FFMPEG_FONT_NAME: z.string().min(1),
+    VIDEO_CHUNKS: z.string().min(1),
+    MAX_CONCURRENCY: z.string().optional(),
+    // ...aggiungi qui se usi altre env
+  })
+  .passthrough();
 
-// Funzione helper per eseguire comandi esterni in modo sicuro e fornire messaggi di errore dettagliati
-async function safeExec(command, toolName, options = {}) {
-    try {
-        const { stdout, stderr } = await execAsync(command, options);
-        // Se stderr contiene output, potrebbe essere un avviso o informazioni aggiuntive.
-        // Per ora, se execAsync non ha lanciato un errore, consideriamo l'operazione riuscita.
-        // L'output di stderr sarà incluso nel messaggio di errore se execAsync *ha* lanciato un errore.
-        return stdout;
-    } catch (error) {
-        let errorMessage = `Errore durante l'esecuzione di ${toolName}.`;
-        if (error.message) { // Messaggio di errore da Node.js execAsync (es. "Command failed: ...")
-            errorMessage += ` Dettagli: ${error.message}`;
-        }
-        if (error.stderr) { // Output di errore effettivo dallo strumento esterno
-            errorMessage += `\nOutput errore (${toolName}): ${error.stderr.trim()}`;
-        }
-        if (error.stdout) { // Output standard (a volte utile per il debugging)
-            errorMessage += `\nOutput standard (${toolName}): ${error.stdout.trim()}`;
-        }
-        throw new Error(errorMessage);
-    }
+try {
+  EnvSchema.parse(process.env);
+} catch (err) {
+  console.error("❌  Variabili d’ambiente mancanti o non valide:\n", err);
+  process.exit(1);
 }
 
+// Include la config di progetto (costanti pure) -----------------------------
+const config = require("./config");
+
+// Logger --------------------------------------------------------------------
+const log = pino({
+  level: process.env.LOG_LEVEL || "info",
+  transport: process.env.NODE_ENV === "development" && {
+    target: "pino-pretty",
+    options: { translateTime: "yyyy-mm-dd HH:MM:ss.l", colorize: true },
+  },
+});
+
+// Concorrenza globale --------------------------------------------------------
+const limit = pLimit(parseInt(process.env.MAX_CONCURRENCY || "3", 10));
+
+// ────────────────────────────────────────────────────────────────────────────
+// 🛠️  Utilities
+// ────────────────────────────────────────────────────────────────────────────
 /**
- * Esegue un prompt con Ollama in modo asincrono.
- * @param {string} prompt Il prompt da inviare a Ollama.
- * @returns {Promise<string>} L'output di Ollama.
+ * Esegue un comando shell in modo sicuro con execa, loggando in JSON.
+ * @param {string} cmd  comando da eseguire
+ * @param {string} tool identificativo dello strumento (per log)
+ * @param {execa.Options} opts  opz.
+ * @returns {Promise<string>} stdout
  */
+async function safeExec(cmd, tool, opts = {}) {
+  log.info({ tool, cmd }, "🚀 avvio");
+  const subprocess = execa.command(cmd, {
+    all: true,
+    stripFinalNewline: true,
+    ...opts,
+  });
+
+  subprocess.all?.on("data", (chunk) => {
+    log.debug({ tool }, chunk.toString());
+  });
+
+  const { stdout, exitCode, stderr } = await subprocess;
+
+  if (exitCode !== 0) {
+    const errorMsg = `Errore ${tool} (exit ${exitCode}): ${stderr}`;
+    log.error(errorMsg);
+    throw new Error(errorMsg);
+  }
+  return stdout;
+}
+
+// Wrapper Ollama ------------------------------------------------------------
 async function runOllama(prompt) {
-    const command = `ollama run ${config.OLLAMA_MODEL} ${JSON.stringify(prompt)}`;
-    const stdout = await safeExec(command, 'Ollama', { maxBuffer: 1024 * 1024 * 10 });
-    return stdout.toString().trim();
+  const command = `ollama run ${config.OLLAMA_MODEL} ${JSON.stringify(prompt)}`;
+  return safeExec(command, "Ollama", { maxBuffer: 1024 * 1024 * 10 });
 }
 
-// STEP 1 - Genera script con Ollama
+// ────────────────────────────────────────────────────────────────────────────
+// 📜  Pipeline Steps
+// ────────────────────────────────────────────────────────────────────────────
 async function generateScript() {
-    console.log('[16%] ✍️  Generazione script iniziale...');
-    return runOllama(config.OLLAMA_PROMPT_INITIAL);
+  log.info("[16%] ✍️  Generazione script iniziale...");
+  return runOllama(config.OLLAMA_PROMPT_INITIAL);
 }
 
-// STEP 2 - Correggi grammatica/sintassi/verifica con Ollama
 async function validateScript(script) {
-    console.log('[33%] 📚 Validazione grammatica e veridicità...');
-    return runOllama(config.OLLAMA_PROMPT_VALIDATE(script));
+  log.info("[33%] 📚 Validazione grammatica e veridicità...");
+  return runOllama(config.OLLAMA_PROMPT_VALIDATE(script));
 }
 
-// STEP 3 - Divide script in 3 blocchi
 function splitScript(text) {
-    console.log('[50%] ✂️  Suddivisione testo...');
-    // Miglioramento: regex più robusta per evitare di dividere su "es." o abbreviazioni.
-    // Questa regex cerca punteggiatura finale seguita da uno spazio e una lettera maiuscola.
-    // Per semplicità, manteniamo la logica originale ma la rendiamo più pulita.
-    const sentences = text
-        .split(/[.?!]/)
-        .map(s => s.trim())
-        .filter(s => s.length > 10); // Filtra frasi molto corte
-
-    const totalSentences = sentences.length;
-    const chunkSize = Math.ceil(totalSentences / config.VIDEO_CHUNKS);
-    
-    return Array.from({ length: config.VIDEO_CHUNKS }, (_, i) => sentences.slice(i * chunkSize, (i + 1) * chunkSize).join('. ').trim() + '.');
+  log.info("[50%] ✂️  Suddivisione testo...");
+  const sentences = nlp(text).sentences().out("array");
+  const total = sentences.length;
+  const chunkSize = Math.ceil(total / config.VIDEO_CHUNKS);
+  return Array.from({ length: config.VIDEO_CHUNKS }, (_, i) =>
+    sentences.slice(i * chunkSize, (i + 1) * chunkSize).join(" ").trim()
+  );
 }
 
-/**
- * Ottiene la durata di un file audio usando ffprobe.
- * @param {string} audioFilePath Il percorso del file audio.
- * @returns {Promise<number>} La durata del file audio in secondi.
- */
 async function getAudioDuration(audioFilePath) {
-    const command = `ffprobe -v error -show_entries format=duration -of default=noprint_wrappers=1:nokey=1 "${audioFilePath}"`;
-    const stdout = await safeExec(command, 'FFprobe');
-    return parseFloat(stdout.trim());
+  const cmd = `ffprobe -v error -show_entries format=duration -of default=noprint_wrappers=1:nokey=1 "${audioFilePath}"`;
+  const out = await safeExec(cmd, "FFprobe");
+  return parseFloat(out.trim());
 }
 
-// STEP 4.1 - Genera i prompt per le immagini usando Ollama
-async function generateImagePrompts(scriptChunks) {
-    console.log('[58%] 🎨  Generazione prompt per le immagini (in parallelo)...');
-    const promptPromises = scriptChunks.map(chunk => 
-        runOllama(config.OLLAMA_PROMPT_IMAGE_GEN(chunk))
-    );
-    const results = await Promise.all(promptPromises);
-    // Pulisce l'output di Ollama, rimuovendo eventuali virgolette esterne
-    const cleanedPrompts = results.map(p => p.replace(/^"|"$/g, ''));
-    console.log('Prompts generati:', cleanedPrompts);
-    return cleanedPrompts;
+async function generateImagePrompts(chunks) {
+  log.info("[58%] 🎨  Generazione prompt immagini...");
+  const results = await Promise.all(
+    chunks.map((ch) => limit(() => runOllama(config.OLLAMA_PROMPT_IMAGE_GEN(ch))))
+  );
+  return results.map((p) => p.replace(/^"|"$/g, ""));
 }
 
-// STEP 4.2 - Genera immagini con Stable Diffusion
-async function generateImages(imagePrompts) {
-    console.log('[66%] 🖼  Generazione immagini (in parallelo)...');
-    await fsPromises.mkdir(config.IMAGE_FOLDER, { recursive: true });
-
-    const imageGenerationPromises = imagePrompts.map((prompt, i) => {
-        const outputPath = path.join(config.IMAGE_FOLDER, `image${i}.png`);
-        console.log(`   -> Avvio generazione immagine ${i + 1}/${imagePrompts.length}`);
-        const command = `${config.STABLE_DIFFUSION_EXECUTABLE} -m "${config.STABLE_DIFFUSION_MODEL}" -p "${prompt}" -o "${outputPath}" --height 1920 --width 1080 -s 25`;
-        return safeExec(command, `Stable Diffusion (Image ${i+1})`).then(() => console.log(`   -> Immagine ${i+1} completata.`));
-    });
-
-    await Promise.all(imageGenerationPromises);
+async function generateImages(prompts) {
+  log.info("[66%] 🖼  Generazione immagini...");
+  await fsPromises.mkdir(config.IMAGE_FOLDER, { recursive: true });
+  await Promise.all(
+    prompts.map((prompt, i) =>
+      limit(async () => {
+        const outPath = path.join(config.IMAGE_FOLDER, `image${i}.png`);
+        log.info(`   -> Img ${i + 1}/${prompts.length}`);
+        const cmd = `${config.STABLE_DIFFUSION_EXECUTABLE} -m "${config.STABLE_DIFFUSION_MODEL}" -p "${prompt}" -o "${outPath}" --height 1920 --width 1080 -s 25`;
+        await safeExec(cmd, `StableDiffusion#${i + 1}`);
+      })
+    )
+  );
 }
 
-// STEP 5 - Sintetizza voce con Piper
-async function generateVoice(text, audioOutputPath) {
-    console.log('[83%] 🎙  Generazione voce...');
-    const audioDir = path.dirname(audioOutputPath);
-    const tempScriptPath = path.join(audioDir, 'temp_script.txt');
-    await fsPromises.mkdir(audioDir, { recursive: true });
-    await fsPromises.writeFile(tempScriptPath, text);
-
-    const command = `${config.PIPER_EXECUTABLE} --model ${config.PIPER_VOICE_MODEL} --output_file ${audioOutputPath} --text_file ${tempScriptPath}`;
-    await safeExec(command, 'Piper TTS');
-    await fsPromises.unlink(tempScriptPath); // Pulisce il file di script temporaneo
+async function generateVoice(text, outPath) {
+  log.info("[83%] 🎙  Generazione voce...");
+  const dir = path.dirname(outPath);
+  await fsPromises.mkdir(dir, { recursive: true });
+  const tmpText = path.join(dir, "tmp_script.txt");
+  await fsPromises.writeFile(tmpText, text);
+  const cmd = `${config.PIPER_EXECUTABLE} --model ${config.PIPER_VOICE_MODEL} --output_file ${outPath} --text_file ${tmpText}`;
+  await safeExec(cmd, "Piper TTS");
+  await fsPromises.unlink(tmpText);
 }
 
-/**
- * Genera un clip video statico (introduzione o conclusione) con testo sovrapposto.
- * @param {string} imagePath Percorso dell'immagine di sfondo.
- * @param {string} text Testo da sovrapporre.
- * @param {number} duration Durata del clip in secondi.
- * @param {string} outputPath Percorso del file video di output.
- */
-async function generateStaticClip(imagePath, text, duration, outputPath) {
-    console.log(`   -> Creazione clip statico: ${outputPath}`);
-    const escapedText = text.replace(/'/g, `''`).replace(/:/g, `\\:`);
-    const ffmpegCmd = `ffmpeg -y -loop 1 -i "${imagePath}" -t ${duration} ` +
-        `-vf "scale=1080:1920,drawtext=text='${escapedText}':fontfile='${config.FFMPEG_FONT_PATH}':fontcolor=white:fontsize=${config.INTRO_OUTRO_FONT_SIZE}:x=(w-text_w)/2:y=(h-text_h)/2:box=1:boxcolor=black@0.5:boxborderw=10" ` + // Aggiunto fontfile per drawtext
-        `-c:v libx264 -pix_fmt yuv420p "${outputPath}"`;
-    await safeExec(ffmpegCmd, `FFmpeg (Static Clip: ${path.basename(outputPath)})`);
+async function generateStaticClip(imgPath, txt, duration, outPath) {
+  log.info(`   -> Clip statico ${path.basename(outPath)}`);
+  const escTxt = txt.replace(/'/g, "''").replace(/:/g, "\\:");
+  const cmd = `ffmpeg -y -loop 1 -i "${imgPath}" -t ${duration} -vf "scale=1080:1920,drawtext=text='${escTxt}':fontfile='${config.FFMPEG_FONT_PATH}':fontcolor=white:fontsize=${config.INTRO_OUTRO_FONT_SIZE}:x=(w-text_w)/2:y=(h-text_h)/2:box=1:boxcolor=black@0.5:boxborderw=10" -c:v libx264 -pix_fmt yuv420p "${outPath}"`;
+  await safeExec(cmd, "FFmpeg StaticClip");
 }
 
-// NUOVO STEP 6 - Genera il contenuto video principale (senza intro/outro) con sottotitoli e sincronizzazione
-async function generateMainVideoContent(scriptChunks) {
-    console.log('[100%] 🎬 Composizione video finale...');
-    const tempDir = config.TEMP_FOLDER;
-    await fsPromises.mkdir(tempDir, { recursive: true });
+async function generateMainVideoContent(chunks) {
+  log.info("[100%] 🎬 Composizione contenuto principale...");
+  const tempDir = config.TEMP_FOLDER;
+  await fsPromises.mkdir(tempDir, { recursive: true });
+  const videoParts = [];
 
-    const videoParts = [];
-    // Genera un clip per ogni chunk
-    for (let i = 0; i < scriptChunks.length; i++) {
-        const chunkText = scriptChunks[i];
-        const imagePath = path.join(config.IMAGE_FOLDER, `image${i}.png`);
-        const audioPath = path.join(tempDir, `audio${i}.wav`);
-        const videoPartPath = path.join(tempDir, `part${i}.mp4`);
+  for (let i = 0; i < chunks.length; i++) {
+    const txt = chunks[i];
+    const img = path.join(config.IMAGE_FOLDER, `image${i}.png`);
+    const audio = path.join(tempDir, `audio${i}.wav`);
+    const part = path.join(tempDir, `part${i}.mp4`);
 
-        // 1. Genera audio per il chunk
-        await generateVoice(chunkText, audioPath);
+    await generateVoice(txt, audio);
+    const duration = await getAudioDuration(audio);
 
-        // 2. Ottieni la durata dell'audio
-        const duration = await getAudioDuration(audioPath);
+    // sottotitoli plain‑text (Ass) ------------------------------------------------
+    const subPath = path.join(tempDir, `sub${i}.txt`);
+    await fsPromises.writeFile(subPath, txt.replace(/'/g, "''").replace(/:/g, "\\:"));
 
-        // 3. Crea il file dei sottotitoli per questo chunk
-        const subtitleText = chunkText.replace(/'/g, `''`).replace(/:/g, `\\:`);
-        const subtitlePath = path.join(tempDir, `subtitle${i}.txt`);
-        await fsPromises.writeFile(subtitlePath, subtitleText);
+    const frames = Math.ceil(duration * 25);
+    const zoom = `min(1.5, 1+ (n/${frames})*0.5)`;
+    const xPan = `iw/2-(iw/zoom/2)+ (n/${frames})*50`;
+    const yPan = `ih/2-(ih/zoom/2)`;
 
-        // 4. Crea il clip video con immagine, audio e sottotitoli
-        // Calcola la durata in frame per il filtro zoompan (es. 25 frame al secondo)
-        const durationFrames = Math.ceil(duration * 25); 
-        // Espressioni per l'effetto Ken Burns (zoom in lento e leggero pan)
-        const zoomExpr = `min(1.5, 1.00 + (n/${durationFrames})*0.5)`; // Zoom da 1.0 a 1.5
-        const xPanExpr = `iw/2-(iw/zoom/2) + (n/${durationFrames})*50`; // Pan lento di 50px verso destra
-        const yPanExpr = `ih/2-(ih/zoom/2)`; // Centra verticalmente
-        console.log(`   -> Creazione clip ${i + 1}/${scriptChunks.length} (durata: ${duration.toFixed(2)}s)`);
-        // Aggiungi il logo come terzo input (-i "${config.LOGO_PATH}")
-        const ffmpegCmdPart = `ffmpeg -y -i "${imagePath}" -i "${audioPath}" -i "${config.LOGO_PATH}" ` +
-            // Applica zoompan all'immagine di sfondo ([0:v]), poi scala il logo ([2:v]) e sovrapponilo, infine aggiungi i sottotitoli.
-            `-filter_complex "[0:v]zoompan=z='${zoomExpr}':x='${xPanExpr}':y='${yPanExpr}':d=${durationFrames}:s=1080x1920[bg_zoomed];[2:v]scale=${config.LOGO_WIDTH}:${config.LOGO_HEIGHT}[logo_scaled];[bg_zoomed][logo_scaled]overlay=x=${config.LOGO_X}:y=${config.LOGO_Y}[video_with_logo];[video_with_logo]subtitles='${subtitlePath}':force_style='FontName=${config.FFMPEG_FONT_NAME},FontSize=28,Alignment=10,PrimaryColour=&HFFFFFF&,OutlineColour=&H000000&,BorderStyle=1,Outline=1.5,Shadow=0.5'" ` +
-            `-c:v libx264 -tune stillimage -c:a aac -b:a 192k -pix_fmt yuv420p "${videoPartPath}"`;
-        await safeExec(ffmpegCmdPart, `FFmpeg (Main Content Part ${i+1})`);
-        videoParts.push(videoPartPath);
-    }
-    
-    // Concatena tutti i clip video del contenuto principale
-    console.log('   -> Unione dei clip video del contenuto principale...');
-    const fileListPath = path.join(tempDir, 'filelist_main.txt'); // New filelist name
-    const fileListContent = videoParts.map(p => `file '${p.replace(/\\/g, '/')}'`).join('\n'); // Assicurati che i percorsi siano compatibili con ffmpeg su tutti i sistemi
-    await fsPromises.writeFile(fileListPath, fileListContent);
+    const cmd = `ffmpeg -y -i "${img}" -i "${audio}" -i "${config.LOGO_PATH}" -filter_complex "[0:v]zoompan=z='${zoom}':x='${xPan}':y='${yPan}':d=${frames}:s=1080x1920[bg];[2:v]scale=${config.LOGO_WIDTH}:${config.LOGO_HEIGHT}[logo];[bg][logo]overlay=x=${config.LOGO_X}:y=${config.LOGO_Y}[v];[v]subtitles='${subPath}':force_style='FontName=${config.FFMPEG_FONT_NAME},FontSize=28,Alignment=10,PrimaryColour=&HFFFFFF&,OutlineColour=&H000000&,BorderStyle=1,Outline=1.5,Shadow=0.5'" -c:v libx264 -tune stillimage -c:a aac -b:a 192k -pix_fmt yuv420p "${part}"`;
 
-    const mainVideoPath = path.join(tempDir, 'main_content.mp4'); // New output name
-    const ffmpegConcatCmd = `ffmpeg -y -f concat -safe 0 -i "${fileListPath}" -c copy "${mainVideoPath}"`; // Aggiunto -safe 0 per percorsi assoluti
-    await safeExec(ffmpegConcatCmd, 'FFmpeg (Main Content Concatenation)');
+    await safeExec(cmd, `FFmpeg Part#${i}`);
+    videoParts.push(part);
+  }
 
-    return mainVideoPath; // Return the path to the main video content
+  // concat --------------------------------------------------------------
+  const listPath = path.join(tempDir, "filelist_main.txt");
+  await fsPromises.writeFile(listPath, videoParts.map((p) => `file '${p.replace(/\\/g, '/')}'`).join("\n"));
+  const mainOut = path.join(tempDir, "main_content.mp4");
+  await safeExec(`ffmpeg -y -f concat -safe 0 -i "${listPath}" -c copy "${mainOut}"`, "FFmpeg MainConcat");
+  return mainOut;
 }
 
-// Nuova funzione per gestire la concatenazione finale e il mixaggio audio
-async function finalizeVideo(introVideoPath, mainVideoPath, outroVideoPath) {
-    console.log('🎬 Finalizzazione video (intro + contenuto + outro + musica)...');
-    const tempDir = config.TEMP_FOLDER;
+async function finalizeVideo(intro, main, outro) {
+  log.info("🎬 Finalizzazione video...");
+  const tempDir = config.TEMP_FOLDER;
+  const listPath = path.join(tempDir, "filelist_final.txt");
+  await fsPromises.writeFile(listPath, [intro, main, outro].filter(Boolean).map((p) => `file '${p.replace(/\\/g, '/')}'`).join("\n"));
+  const concatNoMusic = path.join(tempDir, "concat_no_music.mp4");
+  await safeExec(`ffmpeg -y -f concat -safe 0 -i "${listPath}" -c copy "${concatNoMusic}"`, "FFmpeg FinalConcat");
 
-    // 1. Concatena intro, main, outro
-    const finalFileListPath = path.join(tempDir, 'filelist_final.txt');
-    const finalFileListContent = [introVideoPath, mainVideoPath, outroVideoPath]
-        .filter(Boolean) // Filter out null/undefined if any part is optional
-        .map(p => `file '${p.replace(/\\/g, '/')}'`).join('\n'); // Assicurati che i percorsi siano compatibili con ffmpeg su tutti i sistemi
-    await fsPromises.writeFile(finalFileListPath, finalFileListContent);
-
-    const concatenatedVideoNoMusicPath = path.join(tempDir, 'concatenated_no_music.mp4');
-    const ffmpegConcatCmd = `ffmpeg -y -f concat -safe 0 -i "${finalFileListPath}" -c copy "${concatenatedVideoNoMusicPath}"`;
-    await safeExec(ffmpegConcatCmd, 'FFmpeg (Final Concatenation)');
-
-    // 2. Aggiungi musica di sottofondo al video completo
-    console.log('   -> Aggiunta musica di sottofondo...');
-    const ffmpegMusicCmd = `ffmpeg -y -i "${concatenatedVideoNoMusicPath}" -i "${config.BACKGROUND_MUSIC_PATH}" ` +
-        `-filter_complex "[0:a]volume=${config.VOICE_VOLUME}[a0];[1:a]volume=${config.MUSIC_VOLUME}[a1];[a0][a1]amix=inputs=2:duration=first" ` +
-        `-map 0:v -map "[a]" -c:v copy -shortest "${config.OUTPUT_PATH}"`;
-    await safeExec(ffmpegMusicCmd, 'FFmpeg (Audio Mixing)');
+  const cmdMusic = `ffmpeg -y -i "${concatNoMusic}" -i "${config.BACKGROUND_MUSIC_PATH}" -filter_complex "[0:a]volume=${config.VOICE_VOLUME}[a0];[1:a]volume=${config.MUSIC_VOLUME}[a1];[a0][a1]amix=inputs=2:duration=first" -map 0:v -map \"[a]\" -c:v copy -shortest "${config.OUTPUT_PATH}"`;
+  await safeExec(cmdMusic, "FFmpeg Mix");
 }
 
-// MAIN FLOW
+// ────────────────────────────────────────────────────────────────────────────
+// 🧹  Cleanup & graceful shutdown
+// ────────────────────────────────────────────────────────────────────────────
+async function cleanTemp() {
+  try {
+    await fsPromises.rm(config.TEMP_FOLDER, { recursive: true, force: true });
+    log.info("🧹 Temp directory rimossa.");
+  } catch (e) {
+    log.warn("Impossibile pulire temp:", e.message);
+  }
+}
+
+process.on("SIGINT", async () => {
+  log.warn("🛑 Interruzione (SIGINT) — cleanup...");
+  await cleanTemp();
+  process.exit(1);
+});
+
+process.on("unhandledRejection", (reason) => {
+  log.error({ reason }, "❗ Unhandled Rejection");
+});
+
+// ────────────────────────────────────────────────────────────────────────────
+// 🚀  Main Flow
+// ────────────────────────────────────────────────────────────────────────────
 (async () => {
-    try {
-        console.log('🚀 Avvio generazione video TikTok con AI...');
-        const tempDir = config.TEMP_FOLDER;
-        await fsPromises.mkdir(tempDir, { recursive: true }); // Ensure temp dir exists early
+  try {
+    log.info("🚀 Avvio generazione video TikTok con AI...");
+    await fsPromises.mkdir(config.TEMP_FOLDER, { recursive: true });
 
-        // Genera Introduzione
-        const rawScript = await generateScript();
-        const validatedScript = await validateScript(rawScript);
-        const scriptChunks = splitScript(validatedScript);
-        
-        const imagePrompts = await generateImagePrompts(scriptChunks);
-        await generateImages(imagePrompts);
-        
-        const introVideoPath = path.join(tempDir, 'intro.mp4');
-        await generateStaticClip(config.INTRO_IMAGE_PATH, config.INTRO_TEXT, config.INTRO_DURATION_SECONDS, introVideoPath);
+    // INTRO --------------------------------------------------------------
+    const raw = await generateScript();
+    const validated = await validateScript(raw);
+    const chunks = splitScript(validated);
 
-        // Genera Contenuto Principale
-        const mainVideoPath = await generateMainVideoContent(scriptChunks);
+    const imgPrompts = await generateImagePrompts(chunks);
+    await generateImages(imgPrompts);
 
-        // Genera Conclusione
-        const outroVideoPath = path.join(tempDir, 'outro.mp4');
-        await generateStaticClip(config.OUTRO_IMAGE_PATH, config.OUTRO_TEXT, config.OUTRO_DURATION_SECONDS, outroVideoPath);
+    const intro = path.join(config.TEMP_FOLDER, "intro.mp4");
+    await generateStaticClip(config.INTRO_IMAGE_PATH, config.INTRO_TEXT, config.INTRO_DURATION_SECONDS, intro);
 
-        // Finalizza (concatena e aggiungi musica)
-        await finalizeVideo(introVideoPath, mainVideoPath, outroVideoPath);
+    // MAIN ---------------------------------------------------------------
+    const main = await generateMainVideoContent(chunks);
 
-        // Pulizia file temporanei (opzionale, decommenta se desiderato)
-        // console.log(`   -> Pulizia file temporanei in ${tempDir}...`);
-        // await fsPromises.rm(tempDir, { recursive: true, force: true });
+    // OUTRO --------------------------------------------------------------
+    const outro = path.join(config.TEMP_FOLDER, "outro.mp4");
+    await generateStaticClip(config.OUTRO_IMAGE_PATH, config.OUTRO_TEXT, config.OUTRO_DURATION_SECONDS, outro);
 
-        console.log(`\n✅ Video creato con successo: ${config.OUTPUT_PATH}\n`);
-    } catch (error) {
-        console.error('\n❌ Si è verificato un errore durante la generazione del video:');
-        console.error(error.stderr || error.message);
-    } finally {
-        // Opzionale: Assicurati che la directory temporanea venga pulita anche in caso di errore
-        // await fsPromises.rm(config.TEMP_FOLDER, { recursive: true, force: true }).catch(() => {});
-    }
+    // FINAL --------------------------------------------------------------
+    await finalizeVideo(intro, main, outro);
+
+    log.info(`✅ Video creato: ${config.OUTPUT_PATH}`);
+  } catch (err) {
+    log.error(err, "❌ Errore generazione video");
+  } finally {
+    await cleanTemp();
+  }
 })();
+
