@@ -6,5 +6,16 @@
   "scripts": {
     "start": "node index.js"
   },
-  "dependencies": {}
+  "dependencies": {
+    "execa": "^9.6.0",
+    "pino": "^9.7.0",
+    "p-limit": "^6.2.0",
+    "compromise": "^14.14.4",
+    "zod": "^4.0.5",
+    "dotenv": "^17.2.0",
+    "nanoid": "^5.1.5",
+    "axios": "^1.10.0",
+    "form-data": "^4.0.3",
+    "node-fetch": "^3.3.2"
+  }
 }
