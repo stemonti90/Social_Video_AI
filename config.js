@@ -1,5 +1,3 @@
-const path = require('path');
-
 // Percorso del modello vocale di Piper TTS
 // Assicurati che questo percorso sia corretto per la tua macchina.
 // Esempio con variabile d'ambiente: process.env.PIPER_VOICE_MODEL_PATH
@@ -21,7 +19,7 @@ const STABLE_DIFFUSION_MODEL_PATH = process.env.STABLE_DIFFUSION_MODEL_PATH;
 // Su macOS, puoi usare "Arial Unicode MS". Su Linux, potresti dover usare il percorso.
 // Esegui `fc-list` su Linux per vedere i nomi dei font disponibili.
 const FFMPEG_FONT_PATH = process.env.FFMPEG_FONT_PATH;
-const FFMPEG_FONT_NAME = 'Arial'; // Nome del font come visto da FFmpeg/fontconfig
+const FFMPEG_FONT_NAME = process.env.FFMPEG_FONT_NAME || 'Arial'; // Nome del font come visto da FFmpeg/fontconfig
 
 // --- Configurazione Audio ---
 // Percorso del file musicale di sottofondo (es. .mp3, .wav)
