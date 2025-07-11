@@ -95,9 +95,9 @@ async function saveRegistry(set, file) { await fsP.mkdir(REG_DIR, { recursive: t
 // 🛠️ Helper functions
 // ────────────────────────────────────────────────────────────────────────────
 const sha256 = (data) => crypto.createHash("sha256").update(data).digest("hex");
-async function safeExec(cmd, tag = "") {
+async function safeExec(cmd, tag = "", options = {}) {
   log.debug({ tag, cmd });
-  const { stdout, stderr, exitCode } = await execa.command(cmd, { all: true });
+  const { stdout, stderr, exitCode } = await execa.command(cmd, { all: true, ...options });
   if (exitCode !== 0) throw new Error(`${tag} failed: ${stderr}`);
   return stdout;
 }
