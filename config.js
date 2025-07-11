@@ -2,26 +2,26 @@ const path = require('path');
 
 // Percorso del modello vocale di Piper TTS
 // Assicurati che questo percorso sia corretto per la tua macchina.
-// Esempio con variabile d'ambiente: process.env.PIPER_VOICE_MODEL_PATH
-const PIPER_VOICE_MODEL_PATH = process.env.PIPER_VOICE_MODEL_PATH; 
+// Esempio con variabile d'ambiente: process.env.PIPER_VOICE_MODEL
+const PIPER_VOICE_MODEL = process.env.PIPER_VOICE_MODEL;
 
 // Percorso dell'eseguibile di Piper TTS
 // Modifica questo percorso se hai installato Piper in una directory diversa.
-const PIPER_EXECUTABLE_PATH = process.env.PIPER_EXECUTABLE_PATH;
+const PIPER_EXECUTABLE = process.env.PIPER_EXECUTABLE;
 
 // --- Configurazione Stable Diffusion ---
 // Percorso dell'eseguibile di Stable Diffusion (es. stable-diffusion.cpp)
-const STABLE_DIFFUSION_EXECUTABLE_PATH = process.env.STABLE_DIFFUSION_EXECUTABLE_PATH;
+const STABLE_DIFFUSION_EXECUTABLE = process.env.STABLE_DIFFUSION_EXECUTABLE;
 
 // Percorso del modello di Stable Diffusion (es. .safetensors)
-const STABLE_DIFFUSION_MODEL_PATH = process.env.STABLE_DIFFUSION_MODEL_PATH;
+const STABLE_DIFFUSION_MODEL = process.env.STABLE_DIFFUSION_MODEL;
 
 // Percorso di un font per i sottotitoli (es. Arial, Helvetica, o un font scaricato)
 // NOTA: FFmpeg su alcuni sistemi vuole il nome del font, non il percorso.
 // Su macOS, puoi usare "Arial Unicode MS". Su Linux, potresti dover usare il percorso.
 // Esegui `fc-list` su Linux per vedere i nomi dei font disponibili.
 const FFMPEG_FONT_PATH = process.env.FFMPEG_FONT_PATH;
-const FFMPEG_FONT_NAME = 'Arial'; // Nome del font come visto da FFmpeg/fontconfig
+const FFMPEG_FONT_NAME = process.env.FFMPEG_FONT_NAME || 'Arial'; // Nome del font come visto da FFmpeg/fontconfig
 
 // --- Configurazione Audio ---
 // Percorso del file musicale di sottofondo (es. .mp3, .wav)
@@ -60,12 +60,12 @@ module.exports = {
     TEMP_FOLDER: './temp', // Nuova cartella per file temporanei
 
     // Eseguibili e modelli
-    PIPER_VOICE_MODEL: PIPER_VOICE_MODEL_PATH,
-    PIPER_EXECUTABLE: PIPER_EXECUTABLE_PATH,
+    PIPER_VOICE_MODEL: PIPER_VOICE_MODEL,
+    PIPER_EXECUTABLE: PIPER_EXECUTABLE,
 
     // Configurazione Stable Diffusion
-    STABLE_DIFFUSION_EXECUTABLE: STABLE_DIFFUSION_EXECUTABLE_PATH,
-    STABLE_DIFFUSION_MODEL: STABLE_DIFFUSION_MODEL_PATH,
+    STABLE_DIFFUSION_EXECUTABLE: STABLE_DIFFUSION_EXECUTABLE,
+    STABLE_DIFFUSION_MODEL: STABLE_DIFFUSION_MODEL,
 
     // Configurazione FFmpeg
     FFMPEG_FONT_PATH: FFMPEG_FONT_PATH, // Potrebbe non essere necessario se FFMPEG_FONT_NAME funziona
