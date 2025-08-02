@@ -8,10 +8,8 @@ yarn-error.log*
 
 # Cartelle generate dallo script
 /temp/
-/output/
 
 # File di ambiente (se deciderai di usarli per le chiavi API o i percorsi)
-.env
 
 # File di sistema operativo
 .DS_Store

@@ -1,21 +1,37 @@
 {
-  "name": "tiktok-ai-autogen",
+  "name": "tiktok-ai-suite",
   "version": "1.0.0",
-  "description": "Generatore TikTok AI full-local JS",
-  "main": "index.js",
+  "main": "main.js",
   "scripts": {
-    "start": "node index.js"
+    "start": "electron .",
+    "pack": "electron-builder --dir",
+    "dist": "electron-builder"
+  },
+  "build": {
+    "appId": "com.stefano.tiktokai",
+    "mac": {
+      "target": "dmg",
+      "category": "public.app-category.video"
+    },
+    "files": [
+      "main.js",
+      "preload.js",
+      "renderer/",
+      "app/",
+      "assets/",
+      "output/",
+      "offline_bundle/",
+      ".env"
+    ]
   },
   "dependencies": {
-    "execa": "^9.6.0",
-    "pino": "^9.7.0",
-    "p-limit": "^6.2.0",
-    "compromise": "^14.14.4",
-    "zod": "^4.0.5",
     "dotenv": "^17.2.0",
-    "nanoid": "^5.1.5",
-    "axios": "^1.10.0",
-    "form-data": "^4.0.3",
-    "node-fetch": "^3.3.2"
+    "fs-extra": "^11.1.1",
+    "archiver": "^5.3.1",
+    "cross-spawn": "^7.0.3"
+  },
+  "devDependencies": {
+    "electron": "^29.0.0",
+    "electron-builder": "^24.13.0"
   }
 }
