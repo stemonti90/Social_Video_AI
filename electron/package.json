@@ -1,0 +1,12 @@
+{
+  "name": "avp-ui",
+  "version": "0.1.0",
+  "description": "AUT Video Pipeline — accessible desktop control panel (Electron)",
+  "main": "main.js",
+  "scripts": {
+    "start": "electron ."
+  },
+  "devDependencies": {
+    "electron": "^33.0.0"
+  }
+}

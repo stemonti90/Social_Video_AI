@@ -1,0 +1,252 @@
+<!DOCTYPE html>
+<html lang="it" data-theme="observatory">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>AUT · Video Pipeline</title>
+  <link rel="stylesheet" href="styles.css" />
+</head>
+<body>
+  <a class="skip-link" href="#main">Salta al contenuto</a>
+
+  <div class="stars" aria-hidden="true"></div>
+  <div class="grain" aria-hidden="true"></div>
+
+  <div class="app">
+    <!-- ===================== HEADER ===================== -->
+    <header class="topbar" role="banner">
+      <div class="brand">
+        <span class="brand__mark" aria-hidden="true">AUT</span>
+        <span class="brand__name">Video&nbsp;Pipeline</span>
+      </div>
+      <p class="topbar__tag" id="tagline">Osservatorio di produzione · tutto in locale</p>
+      <div class="topbar__status" role="status" aria-live="polite" id="conn-status">
+        <span class="lamp lamp--idle" aria-hidden="true"></span>
+        <span id="conn-text">avvio…</span>
+      </div>
+    </header>
+
+    <!-- ===================== NAV ===================== -->
+    <nav class="rail" aria-label="Sezioni principali">
+      <ul class="rail__list">
+        <li>
+          <button type="button" class="rail__btn is-active" data-view="projects" aria-current="page">
+            <span class="rail__ico" aria-hidden="true">◴</span> Progetti
+          </button>
+        </li>
+        <li>
+          <button type="button" class="rail__btn" data-view="new">
+            <span class="rail__ico" aria-hidden="true">＋</span> Nuovo video
+          </button>
+        </li>
+        <li>
+          <button type="button" class="rail__btn" data-view="settings">
+            <span class="rail__ico" aria-hidden="true">⚙</span> Impostazioni
+          </button>
+        </li>
+      </ul>
+
+      <div class="rail__legend" aria-hidden="true">
+        <p class="rail__legend-title">Stato stadi</p>
+        <p><span class="lamp lamp--done"></span> fatto</p>
+        <p><span class="lamp lamp--active"></span> in corso</p>
+        <p><span class="lamp lamp--idle"></span> in attesa</p>
+        <p><span class="lamp lamp--fail"></span> errore</p>
+      </div>
+    </nav>
+
+    <!-- ===================== MAIN ===================== -->
+    <main class="main" id="main" tabindex="-1">
+
+      <!-- VIEW: PROJECTS -->
+      <section class="view is-active" id="view-projects" aria-labelledby="h-projects">
+        <div class="view__head">
+          <h1 class="view__title" id="h-projects">Progetti</h1>
+          <button type="button" class="btn btn--ghost" id="refresh-projects">Aggiorna</button>
+        </div>
+        <p class="view__lede">I tuoi video. Ogni riquadro mostra lo stato dei sei stadi della pipeline.</p>
+        <ul class="cards" id="projects-list" aria-label="Elenco progetti"></ul>
+        <p class="empty" id="projects-empty" hidden>Nessun progetto. Crea il primo da <em>Nuovo video</em>.</p>
+      </section>
+
+      <!-- VIEW: NEW -->
+      <section class="view" id="view-new" aria-labelledby="h-new" hidden>
+        <div class="view__head"><h1 class="view__title" id="h-new">Nuovo video</h1></div>
+        <p class="view__lede">Dai un argomento: il modello scrive una bozza di copione che potrai correggere.</p>
+        <form class="form" id="new-form">
+          <div class="field">
+            <label class="field__label" for="topic">Argomento del video</label>
+            <input class="field__input" id="topic" name="topic" type="text" autocomplete="off"
+                   placeholder="Es. Perché gli anelli di Saturno stanno sparendo"
+                   aria-describedby="topic-help" required />
+            <p class="field__help" id="topic-help">In inglese il contenuto del canale; qui scrivi pure in italiano o inglese.</p>
+          </div>
+          <button type="submit" class="btn btn--primary" id="generate-btn">Genera copione</button>
+        </form>
+      </section>
+
+      <!-- VIEW: SETTINGS -->
+      <section class="view" id="view-settings" aria-labelledby="h-settings" hidden>
+        <div class="view__head"><h1 class="view__title" id="h-settings">Impostazioni</h1></div>
+        <p class="view__lede">Tutte le scelte qui — nessun file da modificare a mano.</p>
+        <form class="form" id="settings-form">
+          <div class="settings__grid">
+            <div class="field">
+              <label class="field__label" for="set-language">Lingua del video</label>
+              <select class="field__input" id="set-language">
+                <option value="en">English</option><option value="it">Italiano</option>
+              </select>
+            </div>
+            <div class="field">
+              <label class="field__label" for="set-engine">Voce</label>
+              <select class="field__input" id="set-engine">
+                <option value="kokoro">Kokoro</option><option value="chatterbox">Chatterbox (solo EN)</option><option value="both">Entrambe</option>
+              </select>
+            </div>
+            <div class="field">
+              <label class="field__label" for="set-primary">Voce nel taglio finale</label>
+              <select class="field__input" id="set-primary">
+                <option value="kokoro">Kokoro</option><option value="chatterbox">Chatterbox</option>
+              </select>
+            </div>
+            <div class="field">
+              <label class="field__label" for="set-seconds">Durata target (secondi)</label>
+              <input class="field__input" id="set-seconds" type="number" min="20" max="180" step="5" />
+            </div>
+            <div class="field">
+              <label class="field__label" for="set-stt">Sottotitoli</label>
+              <select class="field__input" id="set-stt">
+                <option value="parakeet">Parakeet (veloce, MLX)</option><option value="whisperx">WhisperX</option><option value="even">Base</option>
+              </select>
+            </div>
+          </div>
+
+          <fieldset class="platforms">
+            <legend>Opzioni video</legend>
+            <label class="check"><input type="checkbox" id="set-video" /> <span>Usa video reali (NASA)</span></label>
+            <label class="check"><input type="checkbox" id="set-trans" /> <span>Transizioni (crossfade)</span></label>
+            <label class="check"><input type="checkbox" id="set-credits" /> <span>Crediti footage a schermo</span></label>
+          </fieldset>
+
+          <fieldset class="platforms">
+            <legend>Piattaforme di pubblicazione</legend>
+            <label class="check"><input type="checkbox" id="set-pf-youtube" /> <span>YouTube</span></label>
+            <label class="check"><input type="checkbox" id="set-pf-tiktok" /> <span>TikTok</span></label>
+            <label class="check"><input type="checkbox" id="set-pf-instagram" /> <span>Instagram</span></label>
+          </fieldset>
+
+          <h2 class="panel__subtitle">App (funnel verso l'app)</h2>
+          <div class="settings__grid">
+            <div class="field"><label class="field__label" for="set-app-name">Nome app</label><input class="field__input" id="set-app-name" type="text" /></div>
+            <div class="field"><label class="field__label" for="set-app-url">URL App Store</label><input class="field__input" id="set-app-url" type="text" placeholder="https://apps.apple.com/..." /></div>
+            <div class="field"><label class="field__label" for="set-app-tag">Tagline</label><input class="field__input" id="set-app-tag" type="text" /></div>
+          </div>
+
+          <div class="panel__actions">
+            <button type="submit" class="btn btn--primary" id="settings-save">Salva impostazioni</button>
+            <span class="inline-status" id="settings-status" role="status" aria-live="polite"></span>
+          </div>
+        </form>
+      </section>
+
+      <!-- VIEW: PROJECT WORKSPACE -->
+      <section class="view" id="view-project" aria-labelledby="h-project" hidden>
+        <div class="view__head">
+          <button type="button" class="btn btn--ghost" id="back-btn">← Progetti</button>
+          <h1 class="view__title" id="h-project">Progetto</h1>
+        </div>
+
+        <!-- stage rail -->
+        <ol class="stages" id="stage-rail" aria-label="Stato degli stadi"></ol>
+
+        <!-- tabs -->
+        <div class="tabs">
+          <div class="tablist" role="tablist" aria-label="Fasi del progetto">
+            <button class="tab is-active" role="tab" id="tab-review" aria-selected="true" aria-controls="panel-review">Revisione</button>
+            <button class="tab" role="tab" id="tab-build" aria-selected="false" aria-controls="panel-build" tabindex="-1">Build</button>
+            <button class="tab" role="tab" id="tab-preview" aria-selected="false" aria-controls="panel-preview" tabindex="-1">Anteprima</button>
+            <button class="tab" role="tab" id="tab-publish" aria-selected="false" aria-controls="panel-publish" tabindex="-1">Pubblica</button>
+          </div>
+
+          <!-- PANEL: REVIEW -->
+          <div class="panel is-active" role="tabpanel" id="panel-review" aria-labelledby="tab-review" tabindex="0">
+            <h2 class="panel__title">Revisione del copione</h2>
+            <p class="panel__hint">Controlla ogni dato (è il checkpoint umano). Mantieni le intestazioni <code>## n</code>.</p>
+            <label class="sr-only" for="script-text">Testo del copione (script.md)</label>
+            <textarea class="script" id="script-text" spellcheck="false" aria-describedby="script-status"></textarea>
+            <div class="panel__actions">
+              <button type="button" class="btn btn--ghost" id="reload-script">Ricarica copione</button>
+              <span class="inline-status" id="script-status" role="status" aria-live="polite"></span>
+            </div>
+          </div>
+
+          <!-- PANEL: BUILD -->
+          <div class="panel" role="tabpanel" id="panel-build" aria-labelledby="tab-build" tabindex="0" hidden>
+            <h2 class="panel__title">Build</h2>
+            <p class="panel__hint">Voce → footage → sottotitoli → montaggio → metadata. Tutto in locale. Avvia dal pulsante <em>Avvia build</em> in basso.</p>
+            <p class="inline-status" id="build-state" role="status" aria-live="polite">In attesa di avvio…</p>
+            <h3 class="log__title" id="log-title">Log di build</h3>
+            <pre class="log" id="build-log" role="log" aria-live="polite" aria-labelledby="log-title" tabindex="0"></pre>
+          </div>
+
+          <!-- PANEL: PREVIEW -->
+          <div class="panel" role="tabpanel" id="panel-preview" aria-labelledby="tab-preview" tabindex="0" hidden>
+            <h2 class="panel__title">Anteprima</h2>
+            <p class="not-ready" id="preview-guard" role="status" hidden>Completa prima il <strong>Build</strong> per vedere l'anteprima.</p>
+            <div class="previews" id="preview-media">
+              <figure class="preview">
+                <figcaption class="preview__cap">Voce: Kokoro</figcaption>
+                <video class="preview__vid" id="vid-kokoro" controls preload="metadata"
+                       aria-label="Anteprima video con voce Kokoro"></video>
+              </figure>
+              <figure class="preview">
+                <figcaption class="preview__cap">Voce: Chatterbox</figcaption>
+                <video class="preview__vid" id="vid-chatterbox" controls preload="metadata"
+                       aria-label="Anteprima video con voce Chatterbox"></video>
+              </figure>
+            </div>
+            <div id="preview-meta">
+              <h3 class="panel__subtitle">Metadati generati</h3>
+              <dl class="meta" id="meta-list"></dl>
+            </div>
+          </div>
+
+          <!-- PANEL: PUBLISH -->
+          <div class="panel" role="tabpanel" id="panel-publish" aria-labelledby="tab-publish" tabindex="0" hidden>
+            <h2 class="panel__title">Pubblica</h2>
+            <p class="panel__hint"><strong>Passo 1:</strong> premi <em>«Genera piano (dry run)»</em> in basso per vedere cosa verrà postato — non pubblica nulla. <strong>Passo 2:</strong> quando il piano ti convince, usa <em>«Pubblica ora (live)»</em> qui sotto (ti verrà chiesta conferma).</p>
+            <p class="not-ready" id="publish-guard" role="status" hidden>Completa prima il <strong>Build</strong> per pubblicare.</p>
+            <div id="publish-controls">
+            <fieldset class="platforms">
+              <legend>Piattaforme</legend>
+              <label class="check"><input type="checkbox" name="platform" value="youtube" checked /> <span>YouTube</span></label>
+              <label class="check"><input type="checkbox" name="platform" value="tiktok" checked /> <span>TikTok</span></label>
+              <label class="check"><input type="checkbox" name="platform" value="instagram" checked /> <span>Instagram</span></label>
+            </fieldset>
+            <div class="panel__actions">
+              <button type="button" class="btn btn--danger" id="publish-btn">Pubblica ora (live) →</button>
+              <span class="inline-status" id="publish-state" role="status" aria-live="polite"></span>
+            </div>
+            <pre class="log log--short" id="publish-plan" role="region" aria-label="Piano di pubblicazione" tabindex="0"></pre>
+            </div>
+          </div>
+        </div>
+
+        <!-- always-visible step navigation -->
+        <div class="wizard-foot">
+          <button type="button" class="btn btn--ghost" id="nav-back">← Indietro</button>
+          <span class="wizard-foot__step" id="wizard-step" aria-live="polite">Passo 1 di 4 · Revisione</span>
+          <span class="wizard-foot__spacer"></span>
+          <button type="button" class="btn btn--primary" id="nav-primary">Salva e monta</button>
+          <button type="button" class="btn" id="nav-next">Avanti →</button>
+        </div>
+      </section>
+    </main>
+  </div>
+
+  <!-- global announcements for screen readers -->
+  <div class="sr-only" role="status" aria-live="assertive" id="announce"></div>
+
+  <script src="renderer.js"></script>
+</body>
+</html>

@@ -1,0 +1,36 @@
+[project]
+name = "avp"
+version = "0.1.0"
+description = "AUT Video Pipeline — local, open-source engine for faceless short-form videos"
+requires-python = ">=3.10,<3.13"
+dependencies = [
+    "requests>=2.31",
+    "PyYAML>=6.0",
+]
+
+[project.optional-dependencies]
+# Heavy AI deps — installed by setup.sh into .venv. Imported lazily by the engine.
+ai = [
+    "kokoro>=0.9",
+    "torch",
+    "torchaudio",
+    "soundfile",
+    "numpy",
+]
+chatterbox = ["chatterbox-tts"]  # separate: pulls pkuseg, which needs the build fix below
+whisper = ["whisperx"]      # accurate caption alignment (CPU on Mac)
+parakeet = ["parakeet-mlx"] # fast caption alignment (Apple-Silicon GPU)
+
+[project.scripts]
+avp = "avp.cli:main"
+
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[tool.setuptools.packages.find]
+where = ["src"]
+
+# pkuseg (transitive via chatterbox-tts) needs numpy at build time but doesn't declare it.
+[tool.uv.extra-build-dependencies]
+pkuseg = ["numpy"]

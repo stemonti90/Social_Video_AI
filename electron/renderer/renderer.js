@@ -1,0 +1,409 @@
+/* AUT · Video Pipeline — renderer logic (vanilla, accessible).
+   Talks to window.avp (Electron preload) or falls back to mock data in a browser. */
+"use strict";
+
+const STAGES = [
+  ["script", "Copione"], ["voice", "Voce"], ["footage", "Footage"],
+  ["captions", "Sottotitoli"], ["assemble", "Montaggio"], ["metadata", "Metadati"],
+];
+const $ = (s, r = document) => r.querySelector(s);
+const $$ = (s, r = document) => [...r.querySelectorAll(s)];
+
+let current = null;          // open project slug
+let unsubscribeBuild = null;
+let currentStages = {};      // stage states of the open project (gates Anteprima/Pubblica)
+let busy = false;            // a long action is running — inhibit duplicate triggers
+
+/* ---------------- backend bridge (real or mock) ---------------- */
+const REAL = typeof window !== "undefined" && window.avp;
+const API = REAL || makeMock();   // NOTE: not named `avp` — the preload exposes a global `avp`
+
+function announce(msg) {
+  $("#announce").textContent = "";
+  // toggle to force SR re-announce
+  requestAnimationFrame(() => { $("#announce").textContent = msg; });
+}
+function setConn(text, lamp = "idle") {
+  $("#conn-text").textContent = text;
+  $("#conn-status .lamp").className = "lamp lamp--" + lamp;
+}
+function lampFor(state) {
+  if (state === "done") return "done";
+  if (state === "failed") return "fail";
+  if (state === "partial" || state === "active" || state === "running") return "active";
+  return "idle";
+}
+// status as SHAPE + colour + text (WCAG 1.4.1 — never colour alone)
+function stateGlyph(state) {
+  if (state === "done") return { cls: "done", g: "✓", label: "fatto" };
+  if (state === "failed") return { cls: "fail", g: "✕", label: "errore" };
+  if (state === "partial" || state === "active" || state === "running") return { cls: "active", g: "◐", label: "in corso" };
+  return { cls: "idle", g: "○", label: "in attesa" };
+}
+
+/* ---------------- view routing ---------------- */
+function showView(name) {
+  $$(".view").forEach((v) => { v.classList.remove("is-active"); v.hidden = true; });
+  const el = $("#view-" + name);
+  el.hidden = false; el.classList.add("is-active");
+  $$(".rail__btn").forEach((b) => {
+    const on = b.dataset.view === name;
+    b.classList.toggle("is-active", on);
+    if (on) b.setAttribute("aria-current", "page"); else b.removeAttribute("aria-current");
+  });
+  // move focus to the new section's heading so screen-reader users follow the change (WCAG 2.4.3)
+  const heading = el.querySelector(".view__title");
+  if (heading) { heading.setAttribute("tabindex", "-1"); heading.focus(); }
+}
+
+$$(".rail__btn").forEach((b) =>
+  b.addEventListener("click", () => {
+    showView(b.dataset.view);
+    if (b.dataset.view === "projects") loadProjects();
+    if (b.dataset.view === "settings") loadSettings();
+  })
+);
+
+/* ---------------- projects ---------------- */
+async function loadProjects() {
+  const list = $("#projects-list");
+  list.innerHTML = "";
+  let projects = [];
+  try { projects = await API.listProjects(); } catch (e) { console.error(e); }
+  $("#projects-empty").hidden = projects.length > 0;
+  for (const p of projects) {
+    const li = document.createElement("li");
+    li.className = "card";
+    const stages = STAGES.map(([k, label]) => {
+      const s = stateGlyph((p.stages && p.stages[k]) || "pending");
+      return `<span class="stage-dot"><span class="stat stat--${s.cls}" aria-hidden="true">${s.g}</span> ${label}<span class="sr-only">: ${s.label}</span></span>`;
+    }).join("");
+    li.innerHTML = `
+      <h2 class="card__title">${escapeHtml(p.title || p.slug)}</h2>
+      <p class="card__slug">${escapeHtml(p.slug)}</p>
+      <div class="card__stages" role="group" aria-label="Stato stadi di ${escapeHtml(p.slug)}">${stages}</div>
+      <button type="button" class="btn btn--ghost card__open">Apri progetto</button>`;
+    li.querySelector(".card__open").addEventListener("click", () => openProject(p.slug, p.title));
+    list.appendChild(li);
+  }
+}
+
+/* ---------------- new project ---------------- */
+$("#new-form").addEventListener("submit", async (e) => {
+  e.preventDefault();
+  const topic = $("#topic").value.trim();
+  if (!topic) return;
+  const btn = $("#generate-btn");
+  btn.disabled = true; btn.textContent = "Genero…"; announce("Generazione del copione in corso");
+  try {
+    const res = await API.newProject(topic);
+    await openProject(res.slug, res.title);
+    selectTab("tab-review");
+    announce("Copione pronto per la revisione");
+  } catch (err) {
+    announce("Errore nella generazione: " + err.message);
+  } finally {
+    btn.disabled = false; btn.textContent = "Genera copione";
+  }
+});
+
+/* ---------------- open / workspace ---------------- */
+async function openProject(slug, title) {
+  current = slug;
+  currentStages = {};
+  $("#h-project").textContent = title || slug;
+  showView("project");
+  renderStageRail({});
+  selectTab("tab-review");
+  $("#build-log").textContent = "";
+  $("#script-status").textContent = "";
+  await loadScript();
+  refreshStatus();
+}
+$("#back-btn").addEventListener("click", () => { showView("projects"); loadProjects(); });
+
+function renderStageRail(stages) {
+  const ol = $("#stage-rail");
+  ol.innerHTML = STAGES.map(([k, label]) => {
+    const s = stateGlyph(stages[k] || "pending");
+    return `<li><span class="stat stat--${s.cls}" aria-hidden="true">${s.g}</span> ${label}<span class="sr-only">: ${s.label}</span></li>`;
+  }).join("");
+}
+async function refreshStatus() {
+  try {
+    const projects = await API.listProjects();
+    const p = projects.find((x) => x.slug === current);
+    currentStages = (p && p.stages) || {};
+  } catch (e) { currentStages = {}; }
+  renderStageRail(currentStages);
+  updateWizardFoot(currentStepId());
+}
+
+/* ---------------- tabs (accessible) ---------------- */
+const tabs = $$(".tab");
+function selectTab(id) {
+  tabs.forEach((t) => {
+    const on = t.id === id;
+    t.classList.toggle("is-active", on);
+    t.setAttribute("aria-selected", String(on));
+    t.tabIndex = on ? 0 : -1;
+    const panel = $("#" + t.getAttribute("aria-controls"));
+    panel.hidden = !on; panel.classList.toggle("is-active", on);
+  });
+  updateWizardFoot(id);
+}
+$(".tablist").addEventListener("click", (e) => { const t = e.target.closest(".tab"); if (t) selectTab(t.id); });
+$(".tablist").addEventListener("keydown", (e) => {
+  const i = tabs.findIndex((t) => t.id === document.activeElement.id);
+  if (i < 0) return;
+  let j = null;
+  if (e.key === "ArrowRight") j = (i + 1) % tabs.length;
+  else if (e.key === "ArrowLeft") j = (i - 1 + tabs.length) % tabs.length;
+  else if (e.key === "Home") j = 0;
+  else if (e.key === "End") j = tabs.length - 1;
+  if (j === null) return;
+  e.preventDefault(); tabs[j].focus(); selectTab(tabs[j].id);
+});
+
+/* ---------------- step wizard footer (back / next / primary action) ---------------- */
+const STEPS = ["tab-review", "tab-build", "tab-preview", "tab-publish"];
+const STEP_LABELS = ["Revisione", "Build", "Anteprima", "Pubblica"];
+const STEP_PRIMARY = {
+  "tab-review":  { label: "Salva e monta",      run: () => saveAndBuild() },
+  "tab-build":   { label: "Avvia build",        run: () => startBuild() },
+  "tab-preview": { label: "Aggiorna anteprima", run: () => loadPreview() },
+  "tab-publish": { label: "Genera piano (dry run)", run: () => doPublish(false) },
+};
+function currentStepId() {
+  const t = tabs.find((x) => x.classList.contains("is-active"));
+  return t ? t.id : "tab-review";
+}
+function stepReady(id) {
+  // Anteprima & Pubblica require a finished build (output exists)
+  if (id === "tab-preview" || id === "tab-publish") return currentStages.assemble === "done";
+  return true;
+}
+function applyReadiness(id) {
+  const ready = stepReady(id);
+  const onPrev = id === "tab-preview";
+  const onPub = id === "tab-publish";
+  // Show the guard only on its own not-ready step…
+  const pg = $("#preview-guard"); if (pg) pg.hidden = !(onPrev && !ready);
+  const ug = $("#publish-guard"); if (ug) ug.hidden = !(onPub && !ready);
+  // …and hide the actual content, so we never show empty players or dead controls.
+  const pm = $("#preview-media"); if (pm) pm.hidden = onPrev && !ready;
+  const pmeta = $("#preview-meta"); if (pmeta) pmeta.hidden = onPrev && !ready;
+  const pc = $("#publish-controls"); if (pc) pc.hidden = onPub && !ready;
+  const pb = $("#publish-btn"); if (pb) pb.disabled = busy || (onPub && !ready);
+  return ready;
+}
+function setBusy(on) { busy = on; updateWizardFoot(currentStepId()); }
+function updateWizardFoot(id) {
+  const i = Math.max(0, STEPS.indexOf(id));
+  $("#wizard-step").textContent = `Passo ${i + 1} di ${STEPS.length} · ${STEP_LABELS[i]}`;
+  $("#nav-back").textContent = i === 0 ? "← Progetti" : "← Indietro";
+  $("#nav-back").disabled = busy;
+  $("#nav-next").disabled = busy || i === STEPS.length - 1;
+  const prim = $("#nav-primary");
+  prim.textContent = STEP_PRIMARY[id].label;
+  prim.onclick = STEP_PRIMARY[id].run;
+  const ready = applyReadiness(id);
+  prim.disabled = busy || !ready;          // action inhibited if prerequisites unmet (or busy)
+  prim.title = ready ? "" : "Completa prima il Build per questo passo";
+}
+$("#nav-back").addEventListener("click", () => {
+  const i = STEPS.indexOf(currentStepId());
+  if (i <= 0) { showView("projects"); loadProjects(); }
+  else selectTab(STEPS[i - 1]);
+});
+$("#nav-next").addEventListener("click", () => {
+  const i = STEPS.indexOf(currentStepId());
+  if (i < STEPS.length - 1) selectTab(STEPS[i + 1]);
+});
+
+/* ---------------- review ---------------- */
+async function loadScript() {
+  try { $("#script-text").value = await API.readScript(current); }
+  catch (e) { $("#script-text").value = ""; }
+}
+$("#reload-script").addEventListener("click", () => { loadScript(); $("#script-status").textContent = "Ricaricato."; });
+async function saveAndBuild() {
+  if (busy) return;
+  $("#script-status").textContent = "Salvataggio…";
+  try { await API.saveScript(current, $("#script-text").value); } catch (e) {}
+  $("#script-status").textContent = "Salvato. Avvio build.";
+  selectTab("tab-build");
+  startBuild();
+}
+
+/* ---------------- build ---------------- */
+function appendLog(line, cls) {
+  const pre = $("#build-log");
+  const span = document.createElement("span");
+  if (cls) span.className = cls;
+  span.textContent = line + "\n";
+  pre.appendChild(span);
+  pre.scrollTop = pre.scrollHeight;
+}
+async function startBuild() {
+  if (busy) return;                  // inhibit duplicate build triggers
+  setBusy(true);
+  $("#build-state").textContent = "in corso…";
+  setConn("build in corso", "active");
+  announce("Build avviata");
+  if (unsubscribeBuild) unsubscribeBuild();
+  unsubscribeBuild = API.onBuildEvent((ev) => {
+    if (ev.type === "log") appendLog(ev.line, classify(ev.line));
+    else if (ev.type === "stage") { announce("Stadio: " + ev.stage); refreshStatus(); }
+    else if (ev.type === "done") { $("#build-state").textContent = "completato ✓"; setConn("pronto", "done"); announce("Build completata"); }
+    else if (ev.type === "error") { $("#build-state").textContent = "errore"; appendLog(ev.line || "errore", "err"); setConn("errore build", "fail"); announce("Build fallita"); }
+  });
+  try { await API.build(current); }
+  catch (e) { appendLog(String(e), "err"); $("#build-state").textContent = "errore"; setConn("errore build", "fail"); }
+  finally { setBusy(false); refreshStatus(); loadPreview(); }
+}
+function classify(line) {
+  if (/error|fail|traceback/i.test(line)) return "err";
+  if (/warning|warn/i.test(line)) return "warn";
+  if (/done|ready|✓|completat/i.test(line)) return "ok";
+  return null;
+}
+
+/* ---------------- preview ---------------- */
+async function loadPreview() {
+  if (currentStages.assemble !== "done") return;   // nothing to preview before a build
+  for (const eng of ["kokoro", "chatterbox"]) {
+    try {
+      const url = await API.videoUrl(current, eng);
+      const v = $("#vid-" + eng);
+      if (url) { v.src = url; v.load(); }
+    } catch (e) {}
+  }
+  try {
+    const m = await API.readMetadata(current);
+    const dl = $("#meta-list");
+    const yt = m.youtube || {}, tk = m.tiktok || {}, ig = m.instagram || {};
+    dl.innerHTML = `
+      <dt>YouTube</dt><dd>${escapeHtml(yt.title || "")}<br><span style="color:var(--muted)">${escapeHtml(yt.description || "")}</span></dd>
+      <dt>TikTok</dt><dd>${escapeHtml(tk.caption || "")}</dd>
+      <dt>Instagram</dt><dd>${escapeHtml(ig.caption || "")}</dd>
+      <dt>Disclosure AI</dt><dd>${m.disclosure_ai ? "richiesta" : "non richiesta"}</dd>`;
+  } catch (e) {}
+}
+$("#tab-preview").addEventListener("click", loadPreview);
+
+/* ---------------- publish ---------------- */
+async function doPublish(go) {
+  if (busy) return;
+  if (currentStages.assemble !== "done") { $("#publish-state").textContent = "completa prima il Build"; return; }
+  const platforms = $$('input[name="platform"]:checked').map((c) => c.value);
+  if (!platforms.length) { $("#publish-state").textContent = "seleziona almeno una piattaforma"; return; }
+  if (go && !window.confirm("Pubblicare ORA su " + platforms.join(", ") + " via Postiz?\nVerrà postato pubblicamente.")) return;
+  setBusy(true);
+  $("#publish-state").textContent = go ? "pubblico…" : "dry run…";
+  try {
+    const res = await API.publish(current, platforms, go);
+    $("#publish-plan").textContent = JSON.stringify(res.plan || res, null, 2);
+    $("#publish-state").textContent = go ? "inviato ✓" : "piano pronto (dry run)";
+    announce(go ? "Pubblicazione inviata" : "Piano di pubblicazione pronto");
+  } catch (e) {
+    $("#publish-plan").textContent = String(e);
+    $("#publish-state").textContent = "errore";
+  } finally { setBusy(false); }
+}
+$("#publish-btn").addEventListener("click", () => doPublish(true));
+
+/* ---------------- settings ---------------- */
+async function loadSettings() {
+  let c = {};
+  try { c = await API.getConfig(); } catch (e) {}
+  const set = (id, v) => { const el = $("#" + id); if (el && v != null) el.value = v; };
+  set("set-language", (c.script || {}).language);
+  set("set-engine", (c.tts || {}).engine);
+  set("set-primary", (c.tts || {}).primary);
+  set("set-seconds", (c.script || {}).target_seconds);
+  set("set-stt", (c.stt || {}).engine);
+  const v = c.video || {}, pub = c.publish || {}, fn = c.funnel || {};
+  $("#set-video").checked = !!v.prefer_video;
+  $("#set-trans").checked = (v.transition || 0) > 0;
+  $("#set-credits").checked = !!v.show_credits;
+  const plats = pub.platforms || [];
+  ["youtube", "tiktok", "instagram"].forEach((p) => { $("#set-pf-" + p).checked = plats.includes(p); });
+  set("set-app-name", fn.app_name);
+  set("set-app-url", fn.url);
+  set("set-app-tag", fn.tagline);
+}
+$("#settings-form").addEventListener("submit", async (e) => {
+  e.preventDefault();
+  const plats = ["youtube", "tiktok", "instagram"].filter((p) => $("#set-pf-" + p).checked);
+  const patch = {
+    script: { language: $("#set-language").value, target_seconds: Number($("#set-seconds").value) || 75 },
+    tts: { engine: $("#set-engine").value, primary: $("#set-primary").value },
+    stt: { engine: $("#set-stt").value },
+    video: { prefer_video: $("#set-video").checked, transition: $("#set-trans").checked ? 0.4 : 0, show_credits: $("#set-credits").checked },
+    publish: { platforms: plats },
+    funnel: { app_name: $("#set-app-name").value, url: $("#set-app-url").value, tagline: $("#set-app-tag").value },
+  };
+  $("#settings-status").textContent = "Salvataggio…";
+  try {
+    await API.setConfig(patch);
+    $("#settings-status").textContent = "Salvato ✓";
+    announce("Impostazioni salvate");
+  } catch (err) {
+    $("#settings-status").textContent = "Errore: " + ((err && err.message) || err);
+  }
+});
+
+/* ---------------- misc ---------------- */
+$("#refresh-projects").addEventListener("click", loadProjects);
+function escapeHtml(s) { return String(s).replace(/[&<>"]/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;" }[c])); }
+
+/* ---------------- init ---------------- */
+setConn(REAL ? "locale · pronto" : "anteprima demo (mock)", REAL ? "done" : "active");
+loadProjects();
+
+/* ============================================================
+   MOCK backend — lets the UI be previewed in a plain browser.
+   ============================================================ */
+function makeMock() {
+  const projects = [
+    { slug: "saturn-rings-pro", title: "Saturn's Rings Are Vanishing", stages: { script: "done", voice: "done", footage: "done", captions: "done", assemble: "done", metadata: "done" } },
+    { slug: "andromeda-collision", title: "When Andromeda Hits Us", stages: { script: "done", voice: "done", footage: "partial", captions: "pending", assemble: "pending", metadata: "pending" } },
+  ];
+  let buildCb = null;
+  return {
+    listProjects: async () => projects,
+    newProject: async (topic) => { const slug = topic.toLowerCase().replace(/[^a-z0-9]+/g, "-").slice(0, 28).replace(/^-|-$/g, ""); projects.unshift({ slug, title: topic, stages: { script: "done" } }); return { slug, title: topic }; },
+    readScript: async () => "# Saturn's Rings Are Vanishing — Here's Why\n\n## 1\nNARRATION: Saturn's iconic rings aren't eternal — they're slowly disappearing.\nVISUAL: Cassini wide view of Saturn\nKEYWORDS: Saturn rings, Cassini\n\n## 2\nNARRATION: NASA calls it \"ring rain\".\nVISUAL: ice falling into Saturn\nKEYWORDS: ring rain\n\n## 9\nNARRATION: Want to capture the cosmos yourself? Get AstroStackerPro — link in the bio.\nVISUAL: App endcard\nKEYWORDS:\n",
+    saveScript: async () => {},
+    onBuildEvent: (cb) => { buildCb = cb; return () => { buildCb = null; }; },
+    build: async () => {
+      const lines = [
+        ["▶ voice", "stage"], ["[kokoro] segment 1/9", "log"], ["[kokoro] segment 9/9", "log"],
+        ["▶ footage", "stage"], ["Segment 1 ← NASA video 'Cassini's Infrared Saturn'", "log"],
+        ["▶ captions", "stage"], ["captions[kokoro]: 164 words", "log"],
+        ["▶ assemble", "stage"], ["[kokoro] → saturn-rings-pro.kokoro.mp4", "log"], ["Outputs ready", "log"],
+        ["▶ metadata", "stage"], ["Metadata ready", "log"],
+      ];
+      for (const [text, type] of lines) {
+        await new Promise((r) => setTimeout(r, 420));
+        if (!buildCb) return;
+        if (type === "stage") buildCb({ type: "stage", stage: text.replace("▶ ", "") });
+        buildCb({ type: "log", line: text });
+      }
+      buildCb && buildCb({ type: "done" });
+    },
+    readMetadata: async () => ({ youtube: { title: "Saturn's Rings Vanishing: Why? 🌌", description: "Ring rain is draining Saturn's rings. Get AstroStackerPro: https://…" }, tiktok: { caption: "Saturn's rings are vanishing 🌌 #astronomy #space #saturn" }, instagram: { caption: "Saturn's rings are vanishing 🌌 #astronomy #astrostackerpro" }, disclosure_ai: false }),
+    videoUrl: async () => "",
+    publish: async (slug, platforms, go) => ({ plan: platforms.map((p) => ({ platform: p, caption: "…", dry_run: !go })) }),
+    getConfig: async () => ({
+      script: { language: "en", target_seconds: 75 },
+      tts: { engine: "both", primary: "kokoro" },
+      stt: { engine: "parakeet" },
+      video: { prefer_video: true, transition: 0.4, show_credits: true },
+      publish: { platforms: ["youtube", "tiktok", "instagram"] },
+      funnel: { app_name: "AstroStackerPro", url: "https://apps.apple.com/app/astrostackerpro", tagline: "Turn your phone into an astrophotography studio." },
+    }),
+    setConfig: async () => true,
+  };
+}

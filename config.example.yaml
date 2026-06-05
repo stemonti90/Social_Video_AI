@@ -1,0 +1,68 @@
+# AUT Video Pipeline — configuration.
+# Copy to config.yaml and edit. Every key is optional; defaults are shown.
+
+llm:
+  host: http://localhost:11434
+  model: qwen3:14b        # any installed Ollama model. Zero-download start: use "llama3".
+  temperature: 0.7
+
+script:
+  target_seconds: 75      # aim above the 60s TikTok Creator-Rewards minimum
+  language: en            # en | it — language of the spoken narration + captions
+
+funnel:                   # appended as a spoken + on-screen endcard (objective #2: app installs)
+  enabled: true
+  app_name: AstroStackerPro
+  tagline: Turn your phone into an astrophotography studio.
+  url: https://apps.apple.com/app/astrostackerpro   # TODO: confirm the real App Store URL
+  handle: "@astrostackerpro"
+  cta_line: "Want to capture the cosmos yourself? Get {app} — link in the bio."
+
+tts:
+  engine: both            # kokoro | chatterbox | both  (both = render one video per voice)
+  primary: kokoro         # <slug>.mp4 mirrors this; with `both` you also get <slug>.kokoro.mp4 + <slug>.chatterbox.mp4
+  kokoro_voice: af_heart  # see Kokoro voices (af_*, am_*, bf_*, bm_*)
+  kokoro_lang: a          # a = American English, b = British
+  chatterbox_ref:         # path to a 5-10s reference wav to CLONE a voice (optional)
+  device: mps             # Apple Silicon GPU
+
+stt:                      # for caption word-timing
+  engine: parakeet        # parakeet (MLX, fast & clean) | whisperx (accurate) | even (no install)
+  model: large-v3
+  parakeet_model: mlx-community/parakeet-tdt-0.6b-v3
+
+video:
+  width: 1080
+  height: 1920
+  fps: 30
+  music:                  # path to a royalty-free background track (optional)
+  music_gain_db: -22.0    # how far the music sits under the voice
+  ken_burns: true         # slow zoom on still images
+  crf: 20                 # lower = higher quality / bigger file
+  transition: 0.4         # crossfade seconds between clips (0 = hard cut)
+  segment_gap: 0.22       # silence after each segment (pacing/breath)
+  loudness_lufs: -14.0    # EBU R128 normalization target (0 = disable)
+  prefer_video: true      # use NASA video clips when available, else stills + Ken Burns
+  video_seek: 3.0         # skip N seconds into video clips (avoids NASA title cards)
+  show_credits: true      # small source credit burned per clip
+
+captions:
+  font: Arial
+  fontsize: 84
+  primary_color: "&H00FFFFFF"    # ASS color = &HAABBGGRR  (white)
+  highlight_color: "&H0000E5FF"  # amber
+  outline: 4
+  margin_v: 320           # distance from bottom
+  group: 3                # words shown per caption line
+
+publish:                  # share to socials via Postiz (open-source; TikTok/IG/YouTube + more)
+  postiz_url: http://localhost:5000
+  postiz_token: ""        # or set env AVP_POSTIZ_TOKEN
+  platforms: [youtube, tiktok, instagram]
+  voice: kokoro
+  integrations: {}        # platform -> Postiz channel id
+
+paths:
+  projects_dir: projects
+  footage_dir: assets/footage
+  music_dir: assets/music

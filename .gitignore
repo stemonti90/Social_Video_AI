@@ -1,0 +1,34 @@
+# Python
+.venv/
+__pycache__/
+*.pyc
+*.egg-info/
+build/
+dist/
+
+# Local config / secrets
+config.yaml
+.env
+
+# Generated media & per-video work
+projects/
+work/
+*.mp4
+*.wav
+*.m4a
+
+# Footage/music libraries (keep folders, ignore contents)
+assets/footage/*
+assets/music/*
+!assets/**/.gitkeep
+
+# Node / Electron deps (bundled Electron is ~250 MB)
+node_modules/
+
+# OS cruft, logs, local tooling
+.DS_Store
+*.log
+.claude/
+
+# Built launcher bundle (generated; hardcodes the local project path)
+AUT Video Pipeline.app/
