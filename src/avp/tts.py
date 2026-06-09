@@ -53,9 +53,11 @@ class KokoroProvider(TTSProvider):
     name = "kokoro"
     sample_rate = 24000
 
-    def __init__(self, lang_code: str = "a", voice: str = "af_heart", device: str = "mps"):
+    def __init__(self, lang_code: str = "a", voice: str = "af_heart", device: str = "mps",
+                 speed: float = 1.0):
         self.lang = lang_code
         self.voice = voice
+        self.speed = speed
         self._pipe = None
 
     def _pipeline(self):
@@ -70,7 +72,7 @@ class KokoroProvider(TTSProvider):
 
         pipe = self._pipeline()
         chunks = []
-        for _gs, _ps, audio in pipe(text, voice=self.voice):
+        for _gs, _ps, audio in pipe(text, voice=self.voice, speed=self.speed):
             arr = audio.detach().cpu().numpy() if hasattr(audio, "detach") else np.asarray(audio)
             chunks.append(arr.astype("float32"))
         data = np.concatenate(chunks) if chunks else np.zeros(1, dtype="float32")
@@ -121,7 +123,9 @@ def get_providers(cfg) -> list[TTSProvider]:
     """cfg is the full Config. Engines depend on tts.engine AND the script language."""
     language = getattr(cfg.script, "language", "en")
     lang_code, voice = LANG_KOKORO.get(language, LANG_KOKORO["en"])
-    kok = lambda: KokoroProvider(lang_code, voice, cfg.tts.device)        # noqa: E731
+    # Italian reads more naturally a touch slower; an explicit cfg.tts.speed always wins.
+    speed = cfg.tts.speed if cfg.tts.speed != 1.0 else (0.94 if language == "it" else 1.0)
+    kok = lambda: KokoroProvider(lang_code, voice, cfg.tts.device, speed)  # noqa: E731
     cbx = lambda: ChatterboxProvider(cfg.tts)                             # noqa: E731
     engine = cfg.tts.engine.lower()
     if engine == "both":

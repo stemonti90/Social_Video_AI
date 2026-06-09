@@ -210,5 +210,43 @@ class FootageDedup(unittest.TestCase):
                                 footage._title_key(first["title"]))
 
 
+class EncodeFlags(unittest.TestCase):
+    """Lock the platform-friendly H.264/AAC output spec (TikTok/Reels/Shorts)."""
+    def test_h264_out_platform_spec(self):
+        flags = ffmpeg._h264_out(crf=20, fps=30)
+        s = " ".join(flags)
+        for must in ["-profile:v high", "-level 4.0", "-pix_fmt yuv420p", "-color_range tv",
+                     "-colorspace bt709", "-b:a 192k", "-ar 48000", "-ac 2",
+                     "-movflags +faststart"]:
+            self.assertIn(must, s)
+        self.assertEqual(flags[flags.index("-g") + 1], "60")     # GOP = 2 x fps
+        self.assertEqual(flags[flags.index("-crf") + 1], "20")   # crf threaded through
+
+
+class CaptionFont(unittest.TestCase):
+    """Regression: captions must use a bundled commercial-safe font, never macOS system fonts."""
+    def test_never_resolves_system_font(self):
+        for name in ("Montserrat", "Arial", "Helvetica", ""):
+            p = captions._font_path(name)
+            self.assertIsNotNone(p, f"no font resolved for {name!r}")
+            self.assertNotIn("/System/", p)          # never proprietary macOS fonts
+            self.assertTrue(p.endswith(".ttf"))
+
+    def test_resolves_into_bundled_dir(self):
+        p = captions._font_path("Montserrat")
+        self.assertIn("assets/fonts", p.replace("\\", "/"))
+
+
+class WikimediaLicense(unittest.TestCase):
+    """Regression: never pull Non-Commercial / No-Derivatives media into a monetized video."""
+    def test_rejects_nc_and_nd(self):
+        for bad in ("CC BY-NC 4.0", "CC BY-NC-SA 3.0", "CC BY-ND 4.0", "Fair use"):
+            self.assertFalse(footage._wm_license_ok(bad), bad)
+
+    def test_accepts_free_commercial(self):
+        for ok in ("CC BY-SA 4.0", "CC BY 3.0", "CC0", "Public domain", "PD-USGov-NASA", ""):
+            self.assertTrue(footage._wm_license_ok(ok), ok)
+
+
 if __name__ == "__main__":
     unittest.main()

@@ -44,6 +44,7 @@ class TTSConfig:
     kokoro_lang: str = "a"       # 'a' = American English, 'b' = British
     chatterbox_ref: str | None = None   # path to a 5-10s reference wav to clone a voice
     device: str = "mps"          # Apple Silicon GPU
+    speed: float = 1.0           # Kokoro speech rate; <1 = slower/less rushed (IT auto-eases to 0.94)
 
 
 @dataclass
@@ -59,7 +60,7 @@ class VideoConfig:
     height: int = 1920
     fps: int = 30
     music: str | None = None     # path to a royalty-free track; if None, auto-pick from music_dir
-    music_gain_db: float = -22.0
+    music_gain_db: float = -18.0   # base music level before sidechain ducking under the voice
     ken_burns: bool = True
     crf: int = 20
     transition: float = 0.4      # crossfade seconds between clips (0 = hard cut)
@@ -72,7 +73,7 @@ class VideoConfig:
 
 @dataclass
 class CaptionStyle:
-    font: str = "Arial"
+    font: str = "Montserrat"     # bundled SIL OFL font (commercial-safe); see assets/fonts/
     fontsize: int = 84
     primary_color: str = "&H00FFFFFF"     # ASS colors are &HAABBGGRR  (white)
     highlight_color: str = "&H0000E5FF"   # amber

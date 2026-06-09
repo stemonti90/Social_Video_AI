@@ -245,7 +245,7 @@ def _assemble_engine(project: VideoProject, cfg: Config, script: Script, eng: st
     ass = project.root / f"captions.{eng}.ass"
     cap_json = project.root / f"captions.{eng}.json"
     if ass.exists() and ffmpeg.has_filter("subtitles"):   # native libass burn if available
-        ffmpeg.mux(video_silent, audio_mix, ass, out, cfg.video.crf)
+        ffmpeg.mux(video_silent, audio_mix, ass, out, cfg.video.crf, cfg.video.fps)
         log.info("[%s] → %s", eng, out)
         return out
 
@@ -270,9 +270,9 @@ def _assemble_engine(project: VideoProject, cfg: Config, script: Script, eng: st
             t0 += dur
 
     if items:
-        ffmpeg.overlay_items(video_silent, audio_mix, items, out, cfg.video.crf)
+        ffmpeg.overlay_items(video_silent, audio_mix, items, out, cfg.video.crf, cfg.video.fps)
     else:
-        ffmpeg.mux(video_silent, audio_mix, None, out, cfg.video.crf)
+        ffmpeg.mux(video_silent, audio_mix, None, out, cfg.video.crf, cfg.video.fps)
     log.info("[%s] → %s", eng, out)
     return out
 

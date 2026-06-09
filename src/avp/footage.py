@@ -152,6 +152,14 @@ def _strip_html(s: str) -> str:
     return re.sub(r"<[^>]+>", "", s or "").strip()
 
 
+def _wm_license_ok(lic: str) -> bool:
+    """Commons hosts only free licenses, but be defensive for a MONETIZED channel: reject
+    Non-Commercial or No-Derivatives (overlaying captions + Ken Burns makes a derivative)."""
+    s = (lic or "").lower()
+    return not any(b in s for b in
+                   ("non-commercial", "noncommercial", "by-nc", "-nc-", "by-nd", "-nd", "noderiv", "fair use"))
+
+
 def wikimedia_pick(queries: list[str], used_ids: set) -> dict | None:
     """Search Wikimedia Commons (free media — incl. ESA/Hubble/ESO under free licenses)."""
     for q in queries:
@@ -176,6 +184,9 @@ def wikimedia_pick(queries: list[str], used_ids: set) -> dict | None:
             if uid in used_ids:
                 continue
             ext = ii.get("extmetadata", {}) or {}
+            lic = ext.get("LicenseShortName", {}).get("value", "")
+            if not _wm_license_ok(lic):                 # never pull NC / ND media into a monetized video
+                continue
             if _is_diagram(title, _strip_html(ext.get("ImageDescription", {}).get("value", ""))):
                 continue
             url = ii.get("thumburl") or ii.get("url")
@@ -183,7 +194,7 @@ def wikimedia_pick(queries: list[str], used_ids: set) -> dict | None:
                 continue
             return {"url": url, "id": uid, "title": title,
                     "credit": _strip_html(ext.get("Artist", {}).get("value", "")) or "Wikimedia Commons",
-                    "license": ext.get("LicenseShortName", {}).get("value", "")}
+                    "license": lic}
     return None
 
 

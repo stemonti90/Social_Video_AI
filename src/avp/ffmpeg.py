@@ -143,16 +143,37 @@ def make_clip(src: Path, duration: float, w: int, h: int, fps: int,
 
 def mix_audio(voice: Path, music: Path | None, music_gain_db: float, out: Path,
               loudness_lufs: float = -14.0) -> None:
-    """Mux narration with optional ducked music, then EBU R128 loudness-normalize."""
+    """Mux narration with optional music **ducked under the voice** (sidechain compression),
+    then EBU R128 loudness-normalize. Falls back to a fixed-level mix if the build lacks
+    sidechaincompress."""
     norm = f"loudnorm=I={loudness_lufs}:TP=-1.5:LRA=11" if loudness_lufs else "anull"
     if music and music.exists():
-        fc = (f"[1:a]volume={music_gain_db}dB[m];"
-              f"[0:a][m]amix=inputs=2:duration=first:dropout_transition=2[mx];"
-              f"[mx]{norm}[a]")
+        if has_filter("sidechaincompress"):
+            fade = ""
+            mlabel = "[mduck]"
+            try:
+                vdur = ffprobe_duration(voice)
+                if vdur > 2.0:                       # gentle music fade-out over the last 1.5 s
+                    fade = f"[mduck]afade=t=out:st={vdur - 1.5:.3f}:d=1.5[mf];"
+                    mlabel = "[mf]"
+            except Exception:  # noqa: BLE001
+                pass
+            fc = (
+                f"[0:a]asplit=2[v0][v1];"                       # voice → mix + sidechain key
+                f"[1:a]volume={music_gain_db}dB[mraw];"
+                f"[mraw][v0]sidechaincompress=threshold=0.02:ratio=12:attack=15:release=350[mduck];"
+                f"{fade}"
+                f"[v1]{mlabel}amix=inputs=2:duration=first:dropout_transition=2:normalize=0[mx];"
+                f"[mx]{norm}[a]"
+            )
+        else:
+            fc = (f"[1:a]volume={music_gain_db}dB[m];"
+                  f"[0:a][m]amix=inputs=2:duration=first:dropout_transition=2[mx];"
+                  f"[mx]{norm}[a]")
         run(["-i", str(voice), "-stream_loop", "-1", "-i", str(music),
-             "-filter_complex", fc, "-map", "[a]", "-c:a", "aac", "-b:a", "192k", str(out)])
+             "-filter_complex", fc, "-map", "[a]", "-c:a", "aac", "-b:a", "192k", "-ar", "48000", str(out)])
     else:
-        run(["-i", str(voice), "-af", norm, "-c:a", "aac", "-b:a", "192k", str(out)])
+        run(["-i", str(voice), "-af", norm, "-c:a", "aac", "-b:a", "192k", "-ar", "48000", str(out)])
 
 
 @functools.lru_cache(maxsize=None)
@@ -166,7 +187,20 @@ def has_filter(name: str) -> bool:
     return re.search(rf"(?m)^\s*\S+\s+{re.escape(name)}\s", out) is not None
 
 
-def mux(video: Path, audio: Path, ass: Path | None, out: Path, crf: int) -> None:
+def _h264_out(crf: int, fps: int = 30) -> list[str]:
+    """Platform-friendly H.264/AAC output flags (TikTok/Reels/Shorts): High@4.0, yuv420p,
+    bt709 SDR color tags, ~2 s GOP, 48 kHz stereo AAC, +faststart (moov atom up front)."""
+    return [
+        "-c:v", "libx264", "-crf", str(crf), "-preset", "medium",
+        "-profile:v", "high", "-level", "4.0", "-pix_fmt", "yuv420p",
+        "-r", str(fps), "-g", str(max(1, fps * 2)),
+        "-color_range", "tv", "-color_primaries", "bt709", "-color_trc", "bt709", "-colorspace", "bt709",
+        "-c:a", "aac", "-b:a", "192k", "-ar", "48000", "-ac", "2",
+        "-shortest", "-movflags", "+faststart",
+    ]
+
+
+def mux(video: Path, audio: Path, ass: Path | None, out: Path, crf: int, fps: int = 30) -> None:
     """Combine the silent video + mixed audio, burning captions if the build supports it."""
     vf = []
     if ass and ass.exists():
@@ -177,12 +211,10 @@ def mux(video: Path, audio: Path, ass: Path | None, out: Path, crf: int) -> None
             log.warning("ffmpeg has no 'subtitles' filter (built without libass); "
                         "skipping burned captions. Overlay handled separately if available.")
     run(["-i", str(video), "-i", str(audio), *vf,
-         "-map", "0:v:0", "-map", "1:a:0",
-         "-c:v", "libx264", "-crf", str(crf), "-preset", "medium", "-pix_fmt", "yuv420p",
-         "-c:a", "aac", "-shortest", "-movflags", "+faststart", str(out)])
+         "-map", "0:v:0", "-map", "1:a:0", *_h264_out(crf, fps), str(out)])
 
 
-def overlay_timed(video: Path, audio: Path, items, out: Path, margin_v: int, crf: int) -> None:
+def overlay_timed(video: Path, audio: Path, items, out: Path, margin_v: int, crf: int, fps: int = 30) -> None:
     """Overlay timed transparent PNGs onto the video and mux audio, in one pass.
 
     items = [(png_path, start, end), ...]. Used for captions when ffmpeg lacks libass.
@@ -199,8 +231,7 @@ def overlay_timed(video: Path, audio: Path, items, out: Path, margin_v: int, crf
         )
         prev = label
     run([*inputs, "-filter_complex", ";".join(chains), "-map", f"[{prev}]", "-map", "1:a:0",
-         "-c:v", "libx264", "-crf", str(crf), "-preset", "medium", "-pix_fmt", "yuv420p",
-         "-c:a", "aac", "-shortest", "-movflags", "+faststart", str(out)])
+         *_h264_out(crf, fps), str(out)])
 
 
 def concat_videos_xfade(clips: list[Path], content_durs: list[float], transition: float,
@@ -224,13 +255,13 @@ def concat_videos_xfade(clips: list[Path], content_durs: list[float], transition
          "-c:v", "libx264", "-crf", "18", "-pix_fmt", "yuv420p", str(out)])
 
 
-def overlay_items(video: Path, audio: Path, items: list[dict], out: Path, crf: int) -> None:
+def overlay_items(video: Path, audio: Path, items: list[dict], out: Path, crf: int, fps: int = 30) -> None:
     """Overlay timed PNGs (captions + credits) and mux audio in one pass.
 
     items: [{path, start, end, x, y}] where x/y are ffmpeg overlay position expressions.
     """
     if not items:
-        mux(video, audio, None, out, crf)
+        mux(video, audio, None, out, crf, fps)
         return
     inputs = ["-i", str(video), "-i", str(audio)]
     for it in items:
@@ -244,5 +275,4 @@ def overlay_items(video: Path, audio: Path, items: list[dict], out: Path, crf: i
         )
         prev = lbl
     run([*inputs, "-filter_complex", ";".join(chains), "-map", f"[{prev}]", "-map", "1:a:0",
-         "-c:v", "libx264", "-crf", str(crf), "-preset", "medium", "-pix_fmt", "yuv420p",
-         "-c:a", "aac", "-shortest", "-movflags", "+faststart", str(out)])
+         *_h264_out(crf, fps), str(out)])

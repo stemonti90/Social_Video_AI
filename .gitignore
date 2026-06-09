@@ -21,14 +21,19 @@ work/
 assets/footage/*
 assets/music/*
 !assets/**/.gitkeep
+# keep the curated sources guide + bundled fonts in the repo
+!assets/music/SOURCES.md
+# downloaded TTS voice models (re-fetched by setup)
+assets/voices/
 
 # Node / Electron deps (bundled Electron is ~250 MB)
 node_modules/
 
-# OS cruft, logs, local tooling
+# OS cruft, logs, local tooling/scratch
 .DS_Store
 *.log
 .claude/
+auditions/
 
 # Built launcher bundle (generated; hardcodes the local project path)
 AUT Video Pipeline.app/

@@ -80,20 +80,31 @@ def _ass_to_rgb(ass_color: str, default: tuple[int, int, int]) -> tuple[int, int
         return default
 
 
-def _font_path(font_name: str = "Arial") -> str | None:
+# Bundled, commercially-licensed fonts live here. We NEVER use the macOS system fonts
+# (Arial/Helvetica) — those are proprietary and not licensed for embedding in a distributed
+# commercial video. Shipped: Montserrat (SIL OFL) + DejaVu Sans (Bitstream Vera/Arev).
+_FONT_DIR = Path(__file__).resolve().parents[2] / "assets" / "fonts"
+
+
+def _font_path(font_name: str = "Montserrat") -> str | None:
+    base = (font_name or "").replace(" ", "")
     for p in (
-        f"/System/Library/Fonts/Supplemental/{font_name}.ttf",
-        f"/System/Library/Fonts/Supplemental/{font_name} Bold.ttf",
-        "/System/Library/Fonts/Supplemental/Arial Bold.ttf",
-        "/System/Library/Fonts/HelveticaNeue.ttc",
-        "/System/Library/Fonts/Helvetica.ttc",
+        _FONT_DIR / f"{base}-Bold.ttf",
+        _FONT_DIR / f"{base}-Regular.ttf",
+        _FONT_DIR / f"{base}.ttf",
+        _FONT_DIR / "Montserrat-Bold.ttf",     # clean default
+        _FONT_DIR / "DejaVuSans-Bold.ttf",     # always-present fallback
     ):
-        if Path(p).exists():
-            return p
+        if p.exists():
+            return str(p)
+    if _FONT_DIR.exists():                      # any bundled ttf, last resort
+        anyttf = sorted(_FONT_DIR.glob("*.ttf"))
+        if anyttf:
+            return str(anyttf[0])
     return None
 
 
-def _truetype(size: int, font_name: str = "Arial"):
+def _truetype(size: int, font_name: str = "Montserrat"):
     from PIL import ImageFont
     path = _font_path(font_name)
     if path:

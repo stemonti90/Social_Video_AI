@@ -126,16 +126,20 @@ separate, confirmation-gated action.
 
 ## Licenses (all defaults are commercial-safe)
 
-| Stage | Engine | License |
+| Stage | Engine / asset | License |
 |------|--------|---------|
-| Script | Qwen3 (Ollama) | Apache-2.0 |
-| Voice | Kokoro / Chatterbox | Apache-2.0 / MIT |
+| Script | Qwen3-14B (Ollama) | Apache-2.0 |
+| Voice | Kokoro / Chatterbox | Apache-2.0 / MIT³ |
 | Captions | Parakeet (default) / WhisperX | CC-BY-4.0¹ / BSD |
-| Footage | NASA / Wikimedia Commons | Public Domain² / free licenses |
-| Assembly | FFmpeg | LGPL |
+| Footage | NASA / Wikimedia Commons | Public Domain² / free (NC+ND filtered) |
+| Fonts | Montserrat / DejaVu Sans (bundled) | SIL OFL 1.1 / Bitstream-Vera+Arev |
+| Music | your library / Stable Audio Open | see `assets/music/SOURCES.md` |
+| Assembly | FFmpeg (+ libx264) | GPL/LGPL build⁴ |
 
-¹ Parakeet weights are CC-BY-4.0 → **attribute NVIDIA** when you enable it.
-² NASA media is public domain; the build records an attribution per asset anyway.
+¹ Parakeet weights are CC-BY-4.0 → courtesy-credit NVIDIA (redistribution-only; not required on the video).
+² NASA media is public domain; an attribution is recorded per asset anyway.
+³ Chatterbox embeds an imperceptible, legal "Perth" watermark (used only on the English path).
+⁴ A tool's license (GPL FFmpeg/espeak-ng, BSD torch, MIT Electron) does **not** cover its *output* — those duties trigger only if you redistribute the binary/library, not when you ship a video. **License audit 2026-06: every tool is monetization-clean for the video output; the proprietary macOS caption font (Arial/Helvetica) was the one real issue and was replaced with the bundled OFL/Vera fonts.** CC-BY/CC-BY-SA Wikimedia images require attribution → rendered on-screen via `video.show_credits`.
 **Avoid** (non-commercial, not wired in): XTTS-v2, F5-TTS, Fish Speech for TTS; FLUX
 \[dev]/\[Kontext-dev] for images; generic ESA website footage. Hubble/Webb/ESO are CC-BY
 (commercial OK *with on-screen credit*).
