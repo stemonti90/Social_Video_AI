@@ -200,6 +200,33 @@ def _resolve_music(cfg: Config) -> Path | None:
     return None
 
 
+def _resolve_or_generate_music(project: VideoProject, cfg: Config) -> Path | None:
+    """Pick the music bed by `video.music_source`: a library track, an ORIGINAL generated
+    track (Stable Audio Open, cached once per project), or none. Generation never blocks the
+    build — on any failure it falls back to the library."""
+    src = getattr(cfg.video, "music_source", "library")
+    if src == "none":
+        return None
+    if src == "generate":
+        out = project.root / "music.wav"
+        if out.exists():
+            log.info("Music: reusing generated %s", out.name)
+            return out
+        try:
+            import hashlib
+            from . import music
+            slug = getattr(project, "slug", None) or project.root.name
+            seed = int(hashlib.md5(slug.encode()).hexdigest()[:8], 16)   # stable per project
+            log.info("Music: generating original track (Stable Audio Open, mood=%s) — "
+                     "first time can take a few minutes…", cfg.video.music_mood)
+            return music.generate_track(out, mood=cfg.video.music_mood,
+                                        seconds=cfg.video.music_seconds, steps=cfg.video.music_steps,
+                                        seed=seed, device=cfg.tts.device)
+        except Exception as e:  # noqa: BLE001 — never let music generation block the build
+            log.warning("Music generation failed (%s) — falling back to the library.", e)
+    return _resolve_music(cfg)
+
+
 def _assemble_engine(project: VideoProject, cfg: Config, script: Script, eng: str) -> Path | None:
     """Render one final mp4 for a single voice engine, with crossfades, credits and loudness."""
     adir = project.audio_dir / eng
@@ -238,8 +265,8 @@ def _assemble_engine(project: VideoProject, cfg: Config, script: Script, eng: st
         ffmpeg.concat_videos(clips, video_silent)
 
     audio_mix = work / "audio.m4a"
-    ffmpeg.mix_audio(adir / "narration.wav", _resolve_music(cfg), cfg.video.music_gain_db,
-                     audio_mix, cfg.video.loudness_lufs)
+    ffmpeg.mix_audio(adir / "narration.wav", _resolve_or_generate_music(project, cfg),
+                     cfg.video.music_gain_db, audio_mix, cfg.video.loudness_lufs)
 
     out = project.output_for(eng)
     ass = project.root / f"captions.{eng}.ass"

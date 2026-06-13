@@ -61,6 +61,10 @@ class VideoConfig:
     fps: int = 30
     music: str | None = None     # path to a royalty-free track; if None, auto-pick from music_dir
     music_gain_db: float = -18.0   # base music level before sidechain ducking under the voice
+    music_source: str = "library"  # library (assets/music) | generate (Stable Audio Open) | none
+    music_mood: str = "ethereal"   # ethereal | cinematic | dark  (when music_source='generate')
+    music_steps: int = 100         # Stable Audio diffusion steps (higher = better, slower)
+    music_seconds: float = 40.0    # generated track length (looped + ducked under the voice)
     ken_burns: bool = True
     crf: int = 20
     transition: float = 0.4      # crossfade seconds between clips (0 = hard cut)

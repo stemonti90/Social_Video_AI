@@ -20,6 +20,7 @@ ai = [
 chatterbox = ["chatterbox-tts"]  # separate: pulls pkuseg, which needs the build fix below
 whisper = ["whisperx"]      # accurate caption alignment (CPU on Mac)
 parakeet = ["parakeet-mlx"] # fast caption alignment (Apple-Silicon GPU)
+music = ["diffusers>=0.38", "torchsde", "accelerate"]  # Stable Audio Open local music generation
 
 [project.scripts]
 avp = "avp.cli:main"
