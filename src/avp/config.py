@@ -22,7 +22,9 @@ class LLMConfig:
 @dataclass
 class ScriptConfig:
     target_seconds: int = 75     # aim above the 60s TikTok Creator-Rewards minimum
-    language: str = "en"         # en | it — language of the spoken narration + captions
+    language: str = "en"         # en | it — language of the spoken narration
+    subtitle_language: str | None = None   # if set & != language → translated phrase subtitles (e.g. EN audio, IT subs)
+    refine_passes: int = 1       # extra LLM critique→refine passes on the script (0 = single draft)
 
 
 @dataclass
@@ -64,11 +66,12 @@ class VideoConfig:
     music_source: str = "library"  # library (assets/music) | generate (Stable Audio Open) | none
     music_mood: str = "ethereal"   # ethereal | cinematic | dark  (when music_source='generate')
     music_steps: int = 100         # Stable Audio diffusion steps (higher = better, slower)
-    music_seconds: float = 40.0    # generated track length (looped + ducked under the voice)
+    music_seconds: float = 45.0    # generated bed length (Stable Audio Open max ≈47s; looped to fit)
     ken_burns: bool = True
     crf: int = 20
     transition: float = 0.4      # crossfade seconds between clips (0 = hard cut)
-    segment_gap: float = 0.22    # silence inserted after each segment (pacing/breath)
+    segment_gap: float = 0.12    # short breath between segments (not after the last → no dead air)
+    trim_silence: bool = True    # edge-trim each segment's TTS silence (continuous narration)
     loudness_lufs: float = -14.0  # EBU R128 normalization target (0 = disable)
     prefer_video: bool = True    # use NASA *video* clips when available, else stills + Ken Burns
     video_seek: float = 3.0      # skip N seconds into video clips (avoids NASA title cards)

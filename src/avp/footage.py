@@ -108,10 +108,18 @@ def nasa_candidates(query: str, media_type: str = "image", limit: int = 30) -> l
 
 
 def _score(c: dict, terms: list[str]) -> int:
-    title = c["title"].lower()
-    score = 2 if any(t in title for t in terms) else 0   # relevance: subject in title
-    if not _is_diagram(c["title"], c["description"]):     # prefer photos over figures
-        score += 1
+    title = (c.get("title") or "").lower()
+    desc = (c.get("description") or "").lower()
+    score = 0
+    for t in terms:                          # weighted relevance: title >> description
+        if t in title:
+            score += 3
+        elif t in desc:
+            score += 1
+    if _is_diagram(c["title"], c["description"]):
+        score -= 5                           # real penalty: push diagrams/figures below photos
+    else:
+        score += 2                           # cinematic-photo bonus
     return score
 
 

@@ -93,7 +93,8 @@ def stage_script(project: VideoProject, cfg: Config, topic: str | None) -> Scrip
     if not topic:
         raise ValueError("No topic given and no existing one. Pass --topic.")
 
-    script = llm.generate_script(cfg.llm, topic, cfg.script.target_seconds, language=cfg.script.language)
+    script = llm.generate_script(cfg.llm, topic, cfg.script.target_seconds,
+                                 language=cfg.script.language, refine_passes=cfg.script.refine_passes)
     if cfg.funnel.enabled:
         script.segments.append(Segment(
             index=len(script.segments) + 1,
@@ -121,13 +122,24 @@ def stage_voice(project: VideoProject, cfg: Config) -> Script:
         adir.mkdir(parents=True, exist_ok=True)
         try:
             seg_paths = []
+            do_trim = getattr(cfg.video, "trim_silence", True)
             for seg in script.segments:
-                out = adir / f"{seg.index:02d}.wav"
+                out = adir / f"{seg.index:02d}.wav"   # canonical, edge-trimmed segment audio
                 if out.exists():   # idempotent: reuse cached audio (delete audio/ to re-synth)
                     log.info("[%s] segment %d/%d (cached)", prov.name, seg.index, len(script.segments))
                 else:
                     log.info("[%s] segment %d/%d", prov.name, seg.index, len(script.segments))
-                    prov.synthesize(seg.narration, out)
+                    raw = adir / f"{seg.index:02d}.raw.wav"
+                    prov.synthesize(seg.narration, raw)
+                    if do_trim:
+                        try:
+                            ffmpeg.trim_silence(raw, out)   # kill per-segment dead air at the source
+                            raw.unlink(missing_ok=True)
+                        except Exception as e:  # noqa: BLE001
+                            log.warning("[%s] trim seg %d failed (%s) — using raw", prov.name, seg.index, e)
+                            raw.replace(out)
+                    else:
+                        raw.replace(out)
                 seg_paths.append(out)
             ffmpeg.concat_audio(seg_paths, adir / "narration.wav", gap=cfg.video.segment_gap)
             engines.append(prov.name)
@@ -183,6 +195,14 @@ def stage_captions(project: VideoProject, cfg: Config) -> None:
         (project.root / f"captions.{eng}.json").write_text(
             _json([{"text": w.text, "start": w.start, "end": w.end} for w in words]))
         log.info("captions[%s]: %d words", eng, len(words))
+    sub_lang = cfg.script.subtitle_language
+    if sub_lang and sub_lang != cfg.script.language:   # EN audio + translated phrase subtitles
+        sub_path = project.root / f"subtitles.{sub_lang}.json"
+        if not sub_path.exists():
+            trans = llm.translate_segments(cfg.llm, [s.narration for s in script.segments], sub_lang)
+            sub_path.write_text(_json([{"index": s.index, "text": t}
+                                       for s, t in zip(script.segments, trans)]))
+            log.info("Translated %d segments → %s subtitles", len(trans), sub_lang)
     project.manifest.mark("captions", "done", method=cfg.stt.engine, engines=engines)
 
 
@@ -271,19 +291,32 @@ def _assemble_engine(project: VideoProject, cfg: Config, script: Script, eng: st
     out = project.output_for(eng)
     ass = project.root / f"captions.{eng}.ass"
     cap_json = project.root / f"captions.{eng}.json"
-    if ass.exists() and ffmpeg.has_filter("subtitles"):   # native libass burn if available
+    sub_lang = cfg.script.subtitle_language
+    want_translated = bool(sub_lang and sub_lang != cfg.script.language)
+    if ass.exists() and ffmpeg.has_filter("subtitles") and not want_translated:   # native libass burn
         ffmpeg.mux(video_silent, audio_mix, ass, out, cfg.video.crf, cfg.video.fps)
         log.info("[%s] → %s", eng, out)
         return out
 
     items: list[dict] = []
-    if cap_json.exists():
+    cap_y = f"main_h-overlay_h-{cfg.captions.margin_v}"
+    sub_json = (project.root / f"subtitles.{sub_lang}.json") if sub_lang else None
+    if want_translated and sub_json and sub_json.exists():   # EN audio + translated phrase subtitles
+        trans = {d["index"]: d["text"] for d in json.loads(sub_json.read_text())}
+        phrases, t0 = [], 0.0
+        for seg, dur in zip(segs_used, content_durs):
+            phrases.append((trans.get(seg.index, seg.narration), t0, t0 + dur))
+            t0 += dur
+        for png, s, e in captions_mod.render_phrase_pngs(
+                phrases, project.root / f"subs_png_{eng}_{sub_lang}", cfg.captions, cfg.video):
+            items.append({"path": png, "start": s, "end": e, "x": "(main_w-overlay_w)/2", "y": cap_y})
+    elif cap_json.exists():
         from .stt import Word
         words = [Word(**w) for w in json.loads(cap_json.read_text())]
         for png, s, e in captions_mod.render_caption_pngs(
-                words, project.root / f"captions_png_{eng}", cfg.captions, cfg.video):
-            items.append({"path": png, "start": s, "end": e,
-                          "x": "(main_w-overlay_w)/2", "y": f"main_h-overlay_h-{cfg.captions.margin_v}"})
+                words, project.root / f"captions_png_{eng}", cfg.captions, cfg.video,
+                total_dur=sum(content_durs)):
+            items.append({"path": png, "start": s, "end": e, "x": "(main_w-overlay_w)/2", "y": cap_y})
     if cfg.video.show_credits:
         cdir = project.root / f"credits_png_{eng}"
         cdir.mkdir(exist_ok=True)

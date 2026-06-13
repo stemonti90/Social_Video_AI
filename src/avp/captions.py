@@ -119,19 +119,35 @@ def _load_font(style: CaptionStyle):
     return _truetype(style.fontsize, style.font)
 
 
-def render_caption_pngs(words: list[Word], out_dir: Path, style: CaptionStyle, video: VideoConfig):
-    """Render one transparent PNG per word-event. Returns [(png_path, start, end)]."""
+def render_caption_pngs(words: list[Word], out_dir: Path, style: CaptionStyle, video: VideoConfig,
+                        total_dur: float | None = None):
+    """Render one transparent PNG per word-event. Returns [(png_path, start, end)] with a
+    GAP-FREE timeline (each caption stays on screen until the next begins; the first starts at
+    0.0 and the last runs to total_dur) so text is NEVER absent. Each caption sits on a
+    semi-opaque rounded plate for legibility over any footage."""
     from PIL import Image, ImageDraw
 
     out_dir.mkdir(parents=True, exist_ok=True)
     font = _load_font(style)
     primary = _ass_to_rgb(style.primary_color, (255, 255, 255))
     highlight = _ass_to_rgb(style.highlight_color, (255, 229, 0))
-    band_h = int(style.fontsize * 2.6)
+    band_h = int(style.fontsize * 2.8)
     width = video.width
 
+    events = _caption_events(words, max(1, style.group))
+    if not events:
+        return []
+    # Gap-free display timeline: show each caption until the next one starts.
+    starts = [max(0.0, e[2]) for e in events]
+    ends = []
+    for i in range(len(events)):
+        nxt = starts[i + 1] if i + 1 < len(events) else (
+            total_dur if total_dur else events[i][3] + 0.8)
+        ends.append(max(starts[i] + 0.05, nxt))
+    starts[0] = 0.0  # cover the lead-in so text is on screen from the first frame
+
     items = []
-    for idx, (phrase, active, start, end) in enumerate(_caption_events(words, max(1, style.group))):
+    for idx, (phrase, active, _s, _e) in enumerate(events):
         img = Image.new("RGBA", (width, band_h), (0, 0, 0, 0))
         draw = ImageDraw.Draw(img)
         tokens = [w.text for w in phrase]
@@ -140,12 +156,51 @@ def render_caption_pngs(words: list[Word], out_dir: Path, style: CaptionStyle, v
         total = sum(widths) + space_w * (len(tokens) - 1)
         x = (width - total) / 2.0
         y = band_h / 2.0
+        # legibility plate behind the text
+        pad_x, pad_y = int(style.fontsize * 0.55), int(style.fontsize * 0.40)
+        half = style.fontsize * 0.72
+        draw.rounded_rectangle([x - pad_x, y - half - pad_y, x + total + pad_x, y + half + pad_y],
+                               radius=int(style.fontsize * 0.32), fill=(0, 0, 0, 140))
         for k, token in enumerate(tokens):
             draw.text((x, y), token, font=font, anchor="lm",
                       fill=(highlight if k == active else primary),
                       stroke_width=style.outline, stroke_fill=(0, 0, 0, 255))
             x += widths[k] + space_w
         png = out_dir / f"cap_{idx:04d}.png"
+        img.save(png)
+        items.append((png, starts[idx], ends[idx]))
+    return items
+
+
+def render_phrase_pngs(phrases, out_dir: Path, style: CaptionStyle, video: VideoConfig):
+    """phrases = [(text, start, end)] → one wrapped subtitle PNG per phrase on a legibility plate.
+    Used for translated subtitles (e.g. English audio + Italian subs); timing is the per-segment
+    window passed in (already gap-free, so text is always on screen)."""
+    from PIL import Image, ImageDraw
+
+    out_dir.mkdir(parents=True, exist_ok=True)
+    font = _load_font(style)
+    primary = _ass_to_rgb(style.primary_color, (255, 255, 255))
+    max_w = int(video.width * 0.86)
+    line_h = int(style.fontsize * 1.25)
+    measure = ImageDraw.Draw(Image.new("RGBA", (8, 8)))
+    items = []
+    for idx, (text, start, end) in enumerate(phrases):
+        lines = _wrap(measure, text, font, max_w)
+        pad_x, pad_y = int(style.fontsize * 0.55), int(style.fontsize * 0.45)
+        band_h = line_h * len(lines) + pad_y * 2
+        img = Image.new("RGBA", (video.width, band_h), (0, 0, 0, 0))
+        draw = ImageDraw.Draw(img)
+        tw = max((draw.textlength(ln, font=font) for ln in lines), default=0)
+        cx = video.width / 2.0
+        draw.rounded_rectangle([cx - tw / 2 - pad_x, 0, cx + tw / 2 + pad_x, band_h],
+                               radius=int(style.fontsize * 0.32), fill=(0, 0, 0, 150))
+        y = pad_y
+        for ln in lines:
+            draw.text((cx, y), ln, font=font, anchor="ma", fill=primary,
+                      stroke_width=style.outline, stroke_fill=(0, 0, 0, 255))
+            y += line_h
+        png = out_dir / f"sub_{idx:04d}.png"
         img.save(png)
         items.append((png, start, end))
     return items

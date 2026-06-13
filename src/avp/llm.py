@@ -17,15 +17,33 @@ from .models import Script, Segment
 
 log = get_logger("avp.llm")
 
-SYSTEM = """You are a scriptwriter for a faceless short-form video channel \
-about astronomy and space. Audience: curious viewers on TikTok / Reels / YouTube Shorts.
-Style: vivid, accurate, awe-driven; a strong hook in the first sentence; conversational.
-Hard rules:
-- Every fact must be real and checkable. If unsure, stay qualitative — never invent numbers.
-- No clickbait falsehoods, no filler.
-- "narration" is text to be SPOKEN aloud: no stage directions, no emojis, no markdown.
+SYSTEM = """You are an elite scriptwriter for a faceless short-form video channel about \
+astronomy and space (TikTok / Reels / YouTube Shorts). These craft rules separate gripping from mediocre:
+- HOOK: the first 6-8 words must be a concrete, counterintuitive or NUMBER-led statement that stops the scroll. NEVER open with a question, "Imagine", "Have you ever", "Picture this", or "In the vast expanse".
+- Exactly ONE new, specific, verifiable fact per content segment (a named object, a number, a comparison, a scale). No filler beats, no empty awe.
+- Open a curiosity loop in the first 1-2 segments and PAY IT OFF before the end.
+- Escalate to a single peak "wow" moment in the penultimate segment.
+- Concrete nouns over adjectives; tight spoken cadence. BANNED words/phrases: mind-blowing, incredible, literally, breathtaking, journey, unlock, delve, "did you know". No markdown, no emojis, no stage directions.
+- Every fact must be real and checkable; if unsure, stay qualitative — never invent numbers.
 - Vary structure between videos; never sound template-stamped.
+- "keywords": 2-4 ENGLISH, archive-catalogable PROPER NOUNS (e.g. "Cassini Saturn", "Carina Nebula JWST", "Curiosity rover Mars") — concrete subjects a NASA/Hubble search will find, matching that segment's visual.
 Return STRICT JSON only, no commentary."""
+
+CRITIQUE_SYSTEM = (
+    "You are a ruthless short-form video editor. Grade this astronomy/space Shorts script 1-5 on: "
+    "hook (stops the scroll in under 2s), fact density (one concrete verifiable fact per segment), "
+    "a curiosity loop opened early and paid off, escalation to a single peak, concrete nouns over "
+    "adjectives, and ZERO cliche. Then list the 3 weakest lines with an exact rewrite for each. "
+    "Be specific and brutal. Plain text, no JSON."
+)
+CRITIQUE_USER = "Script JSON:\n{script}"
+REFINE_SUFFIX = (
+    "\n- You are now REVISING an existing draft to satisfy an editor's critique: land the hook in "
+    "the first 6-8 words, raise fact density, kill every cliche, keep the curiosity loop paid off. "
+    "Keep the SAME JSON shape and a similar segment count."
+)
+REFINE_USER = ("Current draft JSON:\n{script}\n\nEditor critique to apply:\n{critique}\n\n"
+               "Return the improved STRICT JSON only.")
 
 USER_TMPL = """Topic: {topic}
 Target: ~{seconds}s of spoken narration (about {words} words total), split into {nseg}-{nseg2} segments.
@@ -46,7 +64,8 @@ class OllamaClient:
     def __init__(self, cfg: LLMConfig):
         self.cfg = cfg
 
-    def chat(self, system: str, user: str, fmt: str | None = "json") -> str:
+    def chat(self, system: str, user: str, fmt: str | None = "json",
+             temperature: float | None = None) -> str:
         payload = {
             "model": self.cfg.model,
             "messages": [
@@ -54,7 +73,7 @@ class OllamaClient:
                 {"role": "user", "content": user},
             ],
             "stream": False,
-            "options": {"temperature": self.cfg.temperature},
+            "options": {"temperature": self.cfg.temperature if temperature is None else temperature},
         }
         if fmt:
             payload["format"] = fmt
@@ -85,15 +104,31 @@ def _extract_json(text: str) -> dict:
 LANG_NAME = {"en": "English", "it": "Italian"}
 
 
-def generate_script(cfg: LLMConfig, topic: str, seconds: int = 60, language: str = "en") -> Script:
+def generate_script(cfg: LLMConfig, topic: str, seconds: int = 60, language: str = "en",
+                    refine_passes: int = 1) -> Script:
     words = _words_for(seconds)
     nseg = max(4, seconds // 9)
     user = USER_TMPL.format(topic=topic, seconds=seconds, words=words, nseg=nseg, nseg2=nseg + 2)
     name = LANG_NAME.get(language, "English")
     system = SYSTEM + f"\n- Write ALL narration in {name}."
+    client = OllamaClient(cfg)
     log.info("Generating %s script for %r with %s ...", name, topic, cfg.model)
-    raw = OllamaClient(cfg).chat(system, user)
-    data = _extract_json(raw)
+    data = _extract_json(client.chat(system, user, temperature=0.85))   # creative first draft
+
+    for n in range(max(0, refine_passes)):     # critique → refine; never regress a usable draft
+        try:
+            draft = json.dumps(data, ensure_ascii=False)
+            critique = client.chat(CRITIQUE_SYSTEM, CRITIQUE_USER.format(script=draft),
+                                   fmt=None, temperature=0.6)
+            refined = _extract_json(client.chat(
+                system + REFINE_SUFFIX, REFINE_USER.format(script=draft, critique=critique),
+                temperature=0.4))
+            if [s for s in refined.get("segments", []) if str(s.get("narration", "")).strip()]:
+                data = refined
+                log.info("Script refine pass %d/%d applied.", n + 1, refine_passes)
+        except Exception as e:  # noqa: BLE001 — refinement must never break a usable draft
+            log.warning("Script refine pass %d failed (%s) — keeping current draft.", n + 1, e)
+            break
 
     segments = [
         Segment(
@@ -109,6 +144,24 @@ def generate_script(cfg: LLMConfig, topic: str, seconds: int = 60, language: str
         raise RuntimeError("Model returned no usable segments. Try re-running or a different model.")
     return Script(title=str(data.get("title", topic)).strip(), segments=segments,
                   target_seconds=seconds, topic=topic)
+
+
+def translate_segments(cfg: LLMConfig, texts: list[str], target_lang: str) -> list[str]:
+    """Translate each narration line into target_lang for on-screen subtitles (local Ollama).
+    Returns a same-length list; on any failure falls back to the source text."""
+    name = LANG_NAME.get(target_lang, target_lang)
+    items = [{"id": i, "text": t} for i, t in enumerate(texts)]
+    system = f"You are a professional {name} subtitle translator. Return STRICT JSON only."
+    user = (f"Translate each item's text into natural, fluent {name} for on-screen video subtitles "
+            f"(concise spoken register; keep proper nouns and numbers). Return STRICT JSON exactly: "
+            f'{{"items":[{{"id":0,"text":"..."}}]}}\n\nItems:\n{json.dumps(items, ensure_ascii=False)}')
+    try:
+        data = _extract_json(OllamaClient(cfg).chat(system, user, temperature=0.3))
+        out = {int(it["id"]): str(it.get("text", "")).strip() for it in data.get("items", [])}
+        return [out.get(i) or texts[i] for i in range(len(texts))]
+    except Exception as e:  # noqa: BLE001
+        log.warning("Subtitle translation failed (%s) — using source text.", e)
+        return list(texts)
 
 
 META_SYSTEM = (

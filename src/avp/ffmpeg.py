@@ -23,9 +23,10 @@ def ensure_ffmpeg() -> None:
         raise RuntimeError("ffmpeg/ffprobe not found — run ./setup.sh or `brew install ffmpeg`.")
 
 
-def run(args: list[str], retries: int = 3) -> None:
+def run(args: list[str], retries: int = 6) -> None:
     """Run an ffmpeg pass. brew's minimal ffmpeg transiently SIGSEGVs under load, so we
-    retry on signal death (negative returncode) but fail fast on a genuine ffmpeg error."""
+    retry on signal death (negative returncode) with growing backoff (lets memory pressure
+    clear) but fail fast on a genuine ffmpeg error."""
     cmd = ["ffmpeg", "-y", "-hide_banner", "-loglevel", "error", *args]
     log.debug("ffmpeg %s", " ".join(args))
     last_rc = 1
@@ -38,7 +39,7 @@ def run(args: list[str], retries: int = 3) -> None:
             break
         log.warning("ffmpeg killed by signal %d (attempt %d/%d) — retrying",
                     -rc, attempt + 1, retries)
-        time.sleep(0.6)
+        time.sleep(0.8 * (attempt + 1))
     raise subprocess.CalledProcessError(last_rc, cmd)
 
 
@@ -81,15 +82,26 @@ def _concat_list(parts: list[Path], list_path: Path) -> None:
     list_path.write_text("".join(f"file '{p.resolve()}'\n" for p in parts))
 
 
+def trim_silence(src: Path, out: Path, thresh_db: float = -40.0, keep: float = 0.06) -> None:
+    """Trim leading + trailing near-silence from a wav, keeping a small natural margin, so the
+    narration has no dead air at segment edges (and the hook lands in the first frames)."""
+    g = (f"silenceremove=start_periods=1:start_threshold={thresh_db}dB:start_silence={keep}:detection=peak,"
+         f"areverse,"
+         f"silenceremove=start_periods=1:start_threshold={thresh_db}dB:start_silence={keep}:detection=peak,"
+         f"areverse")
+    run(["-i", str(src), "-af", g, str(out)])
+
+
 def concat_audio(parts: list[Path], out: Path, gap: float = 0.0) -> None:
-    """Concatenate wavs; with gap>0 append that many seconds of silence after each part."""
-    if gap and gap > 0:
+    """Concatenate wavs into one continuous narration. With gap>0 insert a short breath AFTER
+    every segment EXCEPT the last — so there is never a trailing silence (no dead air)."""
+    if gap and gap > 0 and len(parts) > 1:
         inputs = []
         for p in parts:
             inputs += ["-i", str(p)]
         n = len(parts)
-        fc = "".join(f"[{i}:a]apad=pad_dur={gap}[a{i}];" for i in range(n))
-        fc += "".join(f"[a{i}]" for i in range(n)) + f"concat=n={n}:v=0:a=1[a]"
+        fc = "".join(f"[{i}:a]apad=pad_dur={gap}[a{i}];" for i in range(n - 1))   # no pad on last
+        fc += "".join(f"[a{i}]" for i in range(n - 1)) + f"[{n - 1}:a]" + f"concat=n={n}:v=0:a=1[a]"
         run([*inputs, "-filter_complex", fc, "-map", "[a]", str(out)])
     else:
         lst = out.with_suffix(".concat.txt")
@@ -132,8 +144,10 @@ def make_clip(src: Path, duration: float, w: int, h: int, fps: int,
 
     if ken_burns:
         frames = max(1, int(duration * fps))
-        # Scale up first so the slow zoom stays sharp, then zoompan, then fit to frame.
-        vf = (f"scale={w * 2}:{h * 2}:force_original_aspect_ratio=increase,crop={w * 2}:{h * 2},"
+        # Scale to a 1.5x intermediate (sharp enough for a 1.15 zoom) instead of 2x/4K, which made
+        # brew's minimal ffmpeg SIGSEGV on large source images. Then zoompan down to the frame.
+        uw, uh = int(w * 1.5), int(h * 1.5)
+        vf = (f"scale={uw}:{uh}:force_original_aspect_ratio=increase,crop={uw}:{uh},"
               f"zoompan=z='min(zoom+0.0008,1.15)':d={frames}:s={w}x{h}:fps={fps},setsar=1")
     else:
         vf = f"{cover},setsar=1"
@@ -149,20 +163,19 @@ def mix_audio(voice: Path, music: Path | None, music_gain_db: float, out: Path,
     norm = f"loudnorm=I={loudness_lufs}:TP=-1.5:LRA=11" if loudness_lufs else "anull"
     if music and music.exists():
         if has_filter("sidechaincompress"):
-            fade = ""
-            mlabel = "[mduck]"
             try:
                 vdur = ffprobe_duration(voice)
-                if vdur > 2.0:                       # gentle music fade-out over the last 1.5 s
-                    fade = f"[mduck]afade=t=out:st={vdur - 1.5:.3f}:d=1.5[mf];"
-                    mlabel = "[mf]"
             except Exception:  # noqa: BLE001
-                pass
+                vdur = 0.0
+            # 2 s fade-in (no abrupt start), broadcast-style gentle duck (~6-8 dB dip, no pump),
+            # 2 s fade-out landing on the last word so the short never ends abruptly.
+            fadeout = f"[mduck]afade=t=out:st={max(0.0, vdur - 2.0):.3f}:d=2[mf];" if vdur > 3.0 else ""
+            mlabel = "[mf]" if fadeout else "[mduck]"
             fc = (
                 f"[0:a]asplit=2[v0][v1];"                       # voice → mix + sidechain key
-                f"[1:a]volume={music_gain_db}dB[mraw];"
-                f"[mraw][v0]sidechaincompress=threshold=0.02:ratio=12:attack=15:release=350[mduck];"
-                f"{fade}"
+                f"[1:a]volume={music_gain_db}dB,afade=t=in:st=0:d=2[mraw];"
+                f"[mraw][v0]sidechaincompress=threshold=0.05:ratio=4:attack=5:release=250:detection=rms:makeup=1[mduck];"
+                f"{fadeout}"
                 f"[v1]{mlabel}amix=inputs=2:duration=first:dropout_transition=2:normalize=0[mx];"
                 f"[mx]{norm}[a]"
             )

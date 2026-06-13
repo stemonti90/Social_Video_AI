@@ -74,6 +74,7 @@ def generate_track(out_path: Path, prompt: str | None = None, mood: str = "ether
     import soundfile as sf
     import torch
 
+    seconds = min(float(seconds), 47.0)   # Stable Audio Open hard limit ≈47.55s
     pipe = _pipe(device)
     text = prompt or PROMPTS.get(mood, PROMPTS["ethereal"])
     gen = torch.Generator(device="cpu").manual_seed(seed)

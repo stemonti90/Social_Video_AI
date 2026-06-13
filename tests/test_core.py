@@ -25,6 +25,13 @@ class FootageLogic(unittest.TestCase):
         diagram = {"title": "Titan data map", "description": "chart"}
         self.assertGreater(footage._score(photo, terms), footage._score(diagram, terms))
 
+    def test_score_penalizes_diagram(self):
+        terms = ["mars"]
+        photo = {"title": "Mars surface photo", "description": ""}
+        diagram = {"title": "Mars orbit diagram", "description": "chart"}
+        self.assertGreater(footage._score(photo, terms), footage._score(diagram, terms))
+        self.assertLess(footage._score(diagram, terms), 0)   # diagrams get a real negative penalty
+
     def test_key_terms(self):
         seg = Segment(index=1, narration="x", visual="Jupiter storm", keywords=["Great Red Spot"])
         t = footage._key_terms(seg, Script(title="t", segments=[seg], topic="Jupiter"))
@@ -221,6 +228,28 @@ class EncodeFlags(unittest.TestCase):
             self.assertIn(must, s)
         self.assertEqual(flags[flags.index("-g") + 1], "60")     # GOP = 2 x fps
         self.assertEqual(flags[flags.index("-crf") + 1], "20")   # crf threaded through
+
+
+class QualityCaptions(unittest.TestCase):
+    """Regression: text must always be on screen (gap-free caption/subtitle timelines)."""
+    def test_caption_timeline_gap_free(self):
+        from avp.config import CaptionStyle, VideoConfig
+        from avp.stt import Word
+        ws = [Word("a", 0.0, 0.3), Word("b", 1.0, 1.3), Word("c", 2.0, 2.3), Word("d", 2.4, 2.7)]
+        with tempfile.TemporaryDirectory() as td:
+            items = captions.render_caption_pngs(ws, Path(td), CaptionStyle(), VideoConfig(), total_dur=9.0)
+        self.assertEqual(items[0][1], 0.0)                  # on screen from the first frame
+        self.assertAlmostEqual(items[-1][2], 9.0)           # last runs to the full duration
+        for i in range(len(items) - 1):
+            self.assertAlmostEqual(items[i][2], items[i + 1][1])   # zero gaps between captions
+
+    def test_phrase_subtitles_gap_free(self):
+        from avp.config import CaptionStyle, VideoConfig
+        with tempfile.TemporaryDirectory() as td:
+            items = captions.render_phrase_pngs(
+                [("riga uno", 0.0, 3.0), ("una riga ben piu lunga da mandare a capo", 3.0, 6.0)],
+                Path(td), CaptionStyle(), VideoConfig())
+        self.assertEqual(items[0][2], items[1][1])          # contiguous
 
 
 class CaptionFont(unittest.TestCase):
