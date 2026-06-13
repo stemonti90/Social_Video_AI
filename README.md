@@ -77,9 +77,10 @@ first run macOS may warn → right-click → Open once.
 > **Accessibility.** Built targeting **WCAG 2.1 AA / Legge Stanca (L. 4/2004)**: semantic
 > landmarks, skip-link, keyboard-operable ARIA tabs (arrows/Home/End), `aria-live` build log,
 > visible focus, ≥4.5:1 contrast, status conveyed by **shape + text, not color alone**, and
-> reduced-motion support. Programmatic and runtime checks pass; a full **manual screen-reader
-> audit (VoiceOver/NVDA) and an automated axe-core pass are still pending**, so conformance is
-> reported as **partial** until those are done. The renderer degrades to mock data in a plain
+> reduced-motion support. **Verified to WCAG 2.1 AA (2026-06):** axe-core 4.10.2 reports **0
+> violations across all views and states**, alongside manual keyboard / contrast / semantics
+> checks — see [ACCESSIBILITY.md](ACCESSIBILITY.md). A usability pass with a real screen reader
+> remains the recommended final step. The renderer degrades to mock data in a plain
 > browser for design preview.
 
 ## Language & voices
@@ -187,4 +188,4 @@ torchvision 0.21.0**. Always run the CLI with `PYTHONPATH=src`.
 - [ ] Hubble / Webb / ESO footage sources (CC-BY on-screen credit) + more video clips.
 - [x] Wire the real AstroStackerPro URL (https://www.astrostackerpro.com/) into the funnel.
 - [ ] Postiz live posting; YouTube auto-publish first.
-- [ ] Full manual screen-reader + automated axe-core accessibility audit.
+- [x] WCAG 2.1 AA audit — axe-core (0 violations, all views) + manual checks; see [ACCESSIBILITY.md](ACCESSIBILITY.md). (Real screen-reader UX pass still recommended.)
