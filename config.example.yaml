@@ -14,7 +14,7 @@ funnel:                   # appended as a spoken + on-screen endcard (objective 
   enabled: true
   app_name: AstroStackerPro
   tagline: Turn your phone into an astrophotography studio.
-  url: https://apps.apple.com/app/astrostackerpro   # TODO: confirm the real App Store URL
+  url: https://www.astrostackerpro.com/
   handle: "@astrostackerpro"
   cta_line: "Want to capture the cosmos yourself? Get {app} — link in the bio."
 

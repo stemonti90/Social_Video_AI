@@ -31,7 +31,7 @@ class FunnelConfig:
     enabled: bool = True
     app_name: str = "AstroStackerPro"
     tagline: str = "Turn your phone into an astrophotography studio."
-    url: str = "https://apps.apple.com/app/astrostackerpro"   # TODO: confirm real App Store URL
+    url: str = "https://www.astrostackerpro.com/"
     handle: str = "@astrostackerpro"
     cta_line: str = "Want to capture the cosmos yourself? Get {app} — link in the bio."
 

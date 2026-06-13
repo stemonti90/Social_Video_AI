@@ -185,6 +185,6 @@ torchvision 0.21.0**. Always run the CLI with `PYTHONPATH=src`.
 - [x] Accessible Electron desktop app driving the CLI.
 - [x] Footage fallback chain (no black frames) + ITA/ENG language switch.
 - [ ] Hubble / Webb / ESO footage sources (CC-BY on-screen credit) + more video clips.
-- [ ] Wire the real AstroStackerPro App Store URL into the funnel.
+- [x] Wire the real AstroStackerPro URL (https://www.astrostackerpro.com/) into the funnel.
 - [ ] Postiz live posting; YouTube auto-publish first.
 - [ ] Full manual screen-reader + automated axe-core accessibility audit.
