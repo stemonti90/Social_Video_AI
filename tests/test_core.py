@@ -378,5 +378,32 @@ class CaptionMonotonic(unittest.TestCase):
             self.assertLessEqual(s, e)                          # every window valid
 
 
+class OllamaClientPayload(unittest.TestCase):
+    """Regression (2026-06-14 hang): cap num_ctx (the model's 40K default bloated memory into
+    swap) and use a bounded (connect, read) timeout so a stuck/restarted Ollama can't silently
+    hang a build for the old 10-minute timeout."""
+    def test_payload_caps_ctx_and_uses_bounded_timeout(self):
+        from avp.config import LLMConfig
+        captured = {}
+
+        class _Resp:
+            def raise_for_status(self):
+                pass
+
+            def json(self):
+                return {"message": {"content": "{}"}}
+
+        def _fake_post(url, json=None, timeout=None):
+            captured["json"] = json
+            captured["timeout"] = timeout
+            return _Resp()
+
+        with mock.patch("avp.llm.requests.post", _fake_post):
+            out = llm.OllamaClient(LLMConfig()).chat("sys", "usr")
+        self.assertEqual(out, "{}")
+        self.assertEqual(captured["json"]["options"]["num_ctx"], 8192)
+        self.assertEqual(captured["timeout"], (10, 300))      # (connect, read) — no 10-min hang
+
+
 if __name__ == "__main__":
     unittest.main()

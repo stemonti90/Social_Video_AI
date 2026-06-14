@@ -73,12 +73,19 @@ class OllamaClient:
                 {"role": "user", "content": user},
             ],
             "stream": False,
-            "options": {"temperature": self.cfg.temperature if temperature is None else temperature},
+            # num_ctx caps the KV cache: script/metadata prompts are a few K tokens, so 8K is ample
+            # and avoids a multi-GB cache (the model's default 40K context bloated memory → swap).
+            "options": {
+                "temperature": self.cfg.temperature if temperature is None else temperature,
+                "num_ctx": 8192,
+            },
         }
         if fmt:
             payload["format"] = fmt
         try:
-            r = requests.post(f"{self.cfg.host}/api/chat", json=payload, timeout=600)
+            # (connect, read): fail fast (10s) if the daemon is down; bound the read at 5 min so a
+            # restarted/stuck Ollama can't silently hang a build for the old 10-minute timeout.
+            r = requests.post(f"{self.cfg.host}/api/chat", json=payload, timeout=(10, 300))
             r.raise_for_status()
         except requests.RequestException as e:
             raise RuntimeError(
