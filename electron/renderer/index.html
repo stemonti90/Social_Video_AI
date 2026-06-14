@@ -119,6 +119,38 @@
                 <option value="parakeet">Parakeet (veloce, MLX)</option><option value="whisperx">WhisperX</option><option value="even">Base</option>
               </select>
             </div>
+            <div class="field">
+              <label class="field__label" for="set-subtitle-language">Lingua sottotitoli</label>
+              <select class="field__input" id="set-subtitle-language">
+                <option value="">Stessa dell'audio (karaoke)</option>
+                <option value="it">Italiano (tradotti)</option>
+                <option value="en">English (tradotti)</option>
+              </select>
+            </div>
+            <div class="field">
+              <label class="field__label" for="set-refine">Rifiniture copione (qualità)</label>
+              <select class="field__input" id="set-refine">
+                <option value="0">0 — bozza singola</option>
+                <option value="1">1 — consigliato</option>
+                <option value="2">2 — massima</option>
+              </select>
+            </div>
+            <div class="field">
+              <label class="field__label" for="set-music-source">Musica</label>
+              <select class="field__input" id="set-music-source">
+                <option value="generate">Genera originale (Stable Audio)</option>
+                <option value="library">Libreria (assets/music)</option>
+                <option value="none">Nessuna</option>
+              </select>
+            </div>
+            <div class="field">
+              <label class="field__label" for="set-music-mood">Mood musica</label>
+              <select class="field__input" id="set-music-mood">
+                <option value="ethereal">Eterea</option>
+                <option value="cinematic">Cinematografica</option>
+                <option value="dark">Cupa</option>
+              </select>
+            </div>
           </div>
 
           <fieldset class="platforms">
@@ -126,6 +158,7 @@
             <label class="check"><input type="checkbox" id="set-video" /> <span>Usa video reali (NASA)</span></label>
             <label class="check"><input type="checkbox" id="set-trans" /> <span>Transizioni (crossfade)</span></label>
             <label class="check"><input type="checkbox" id="set-credits" /> <span>Crediti footage a schermo</span></label>
+            <label class="check"><input type="checkbox" id="set-trim" /> <span>Togli i silenzi (zero vuoti)</span></label>
           </fieldset>
 
           <fieldset class="platforms">

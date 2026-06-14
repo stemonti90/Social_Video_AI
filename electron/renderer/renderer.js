@@ -332,15 +332,24 @@ async function loadSettings() {
   set("set-app-name", fn.app_name);
   set("set-app-url", fn.url);
   set("set-app-tag", fn.tagline);
+  set("set-subtitle-language", (c.script || {}).subtitle_language || "");
+  set("set-refine", String((c.script || {}).refine_passes ?? 1));
+  set("set-music-source", v.music_source || "generate");
+  set("set-music-mood", v.music_mood || "ethereal");
+  $("#set-trim").checked = v.trim_silence !== false;
 }
 $("#settings-form").addEventListener("submit", async (e) => {
   e.preventDefault();
   const plats = ["youtube", "tiktok", "instagram"].filter((p) => $("#set-pf-" + p).checked);
   const patch = {
-    script: { language: $("#set-language").value, target_seconds: Number($("#set-seconds").value) || 75 },
+    script: { language: $("#set-language").value, target_seconds: Number($("#set-seconds").value) || 75,
+              subtitle_language: $("#set-subtitle-language").value || null,
+              refine_passes: Number($("#set-refine").value) || 0 },
     tts: { engine: $("#set-engine").value, primary: $("#set-primary").value },
     stt: { engine: $("#set-stt").value },
-    video: { prefer_video: $("#set-video").checked, transition: $("#set-trans").checked ? 0.4 : 0, show_credits: $("#set-credits").checked },
+    video: { prefer_video: $("#set-video").checked, transition: $("#set-trans").checked ? 0.4 : 0,
+             show_credits: $("#set-credits").checked, trim_silence: $("#set-trim").checked,
+             music_source: $("#set-music-source").value, music_mood: $("#set-music-mood").value },
     publish: { platforms: plats },
     funnel: { app_name: $("#set-app-name").value, url: $("#set-app-url").value, tagline: $("#set-app-tag").value },
   };
