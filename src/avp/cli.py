@@ -137,7 +137,15 @@ def main(argv: list[str] | None = None) -> int:
         print(json.dumps(cfg.to_dict()))
         return 0
     if args.cmd == "config-set":
-        _config_set(args.config, json.loads(args.patch))
+        try:
+            patch = json.loads(args.patch)
+        except json.JSONDecodeError as e:
+            log.error("config-set: patch is not valid JSON (%s)", e)
+            return 1
+        if not isinstance(patch, dict):
+            log.error("config-set: patch must be a JSON object, got %s", type(patch).__name__)
+            return 1
+        _config_set(args.config, patch)
         print("ok")
         return 0
 

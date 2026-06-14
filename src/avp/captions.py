@@ -137,14 +137,22 @@ def render_caption_pngs(words: list[Word], out_dir: Path, style: CaptionStyle, v
     events = _caption_events(words, max(1, style.group))
     if not events:
         return []
-    # Gap-free display timeline: show each caption until the next one starts.
+    # Gap-free, MONOTONIC display timeline: text is on screen from frame 0 to total_dur with no
+    # gaps and no two captions ever overlapping — even if STT word timings arrive out of order or
+    # bunched closer than the per-event minimum. Force starts non-decreasing (and within
+    # total_dur), then run each caption exactly until the next one begins; the last → total_dur.
+    n = len(events)
+    cap = float(total_dur) if total_dur else None
     starts = [max(0.0, e[2]) for e in events]
+    for i in range(1, n):
+        starts[i] = max(starts[i], starts[i - 1])    # never let a later caption start earlier
+    if cap is not None:
+        starts = [min(s, cap) for s in starts]       # keep the whole timeline within the video
+    starts[0] = 0.0                                  # cover the lead-in: text from the first frame
     ends = []
-    for i in range(len(events)):
-        nxt = starts[i + 1] if i + 1 < len(events) else (
-            total_dur if total_dur else events[i][3] + 0.8)
-        ends.append(max(starts[i] + 0.05, nxt))
-    starts[0] = 0.0  # cover the lead-in so text is on screen from the first frame
+    for i in range(n):
+        nxt = starts[i + 1] if i + 1 < n else (cap if cap is not None else events[i][3] + 0.8)
+        ends.append(max(starts[i], nxt))             # contiguous (end == next start), never < start
 
     items = []
     for idx, (phrase, active, _s, _e) in enumerate(events):

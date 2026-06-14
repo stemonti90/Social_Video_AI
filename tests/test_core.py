@@ -277,5 +277,106 @@ class WikimediaLicense(unittest.TestCase):
             self.assertTrue(footage._wm_license_ok(ok), ok)
 
 
+class ConfigRobustness(unittest.TestCase):
+    """Regression (stress test 2026-06-14): a typo'd key or malformed YAML must never brick the
+    tool. Config.load now ignores unknown keys and errors cleanly on non-mapping config."""
+    def _load(self, text):
+        with tempfile.TemporaryDirectory() as td:
+            p = Path(td) / "config.yaml"
+            p.write_text(text)
+            return Config.load(str(p))
+
+    def test_unknown_leaf_key_ignored(self):
+        c = self._load("script:\n  language: it\n  oops_typo: 1\n")
+        self.assertEqual(c.script.language, "it")   # known key honored, unknown one dropped
+
+    def test_config_set_typo_then_load_does_not_brick(self):
+        # The HIGH finding: config-set with a bad key used to crash EVERY later command at load.
+        with tempfile.TemporaryDirectory() as td:
+            p = Path(td) / "config.yaml"
+            p.write_text("script:\n  language: it\n")
+            cli._config_set(str(p), {"script": {"bogus": 123}})   # writes ok (no validation there)
+            c = Config.load(str(p))                                # must NOT raise
+            self.assertEqual(c.script.language, "it")
+
+    def test_malformed_non_mapping_raises_clean(self):
+        for bad in ("- a\n- b\n", "just a scalar\n"):
+            with self.assertRaises(RuntimeError):
+                self._load(bad)
+
+    def test_non_mapping_section_uses_defaults(self):
+        c = self._load("script: 42\n")              # section is a scalar, not a mapping
+        self.assertEqual(c.script.language, "en")   # falls back to defaults, no crash
+
+    def test_empty_env_host_falls_back(self):
+        with mock.patch.dict("os.environ", {"OLLAMA_HOST": ""}, clear=False):
+            self.assertTrue(Config.load(None).llm.host)   # empty env must not blank the default
+
+    def test_config_set_rejects_non_object_patch(self):
+        with tempfile.TemporaryDirectory() as td:
+            p = Path(td) / "config.yaml"
+            self.assertEqual(cli.main(["config-set", "42", "--config", str(p)]), 1)
+            self.assertEqual(cli.main(["config-set", "[1,2]", "--config", str(p)]), 1)
+            self.assertFalse(p.exists())             # nothing written on a rejected patch
+
+
+class FootageRobustness(unittest.TestCase):
+    """Regression (stress test 2026-06-14): footage helpers must not crash on dirty inputs."""
+    def test_safe_url_none(self):
+        self.assertEqual(footage._safe_url(None), "")
+
+    def test_key_terms_tolerates_none_and_non_str(self):
+        seg = Segment(index=1, narration="n", visual="v", keywords=["Mars", None])
+        script = Script(title="t", topic="Saturn rings", segments=[seg])
+        terms = footage._key_terms(seg, script)
+        self.assertIn("mars", terms)
+        self.assertNotIn("none", terms)             # a None keyword must not leak as text
+        script.topic = 12345                         # non-str topic must not crash
+        self.assertIsInstance(footage._key_terms(seg, script), list)
+
+    def test_score_on_sparse_dict(self):
+        self.assertIsInstance(footage._score({}, ["mars"]), int)            # no KeyError
+        self.assertIsInstance(footage._score({"title": "Mars"}, ["mars"]), int)
+
+    def test_wm_license_rejects_spaced_no_derivatives(self):
+        for bad in ("CC No Derivative Works 3.0", "Attribution-NoDerivs"):
+            self.assertFalse(footage._wm_license_ok(bad), bad)
+
+
+class LlmRobustness(unittest.TestCase):
+    """Regression (stress test 2026-06-14): tolerate odd JSON shapes from the model."""
+    def test_norm_keywords(self):
+        self.assertEqual(llm._norm_keywords("Mars, Saturn"), ["Mars", "Saturn"])
+        self.assertEqual(llm._norm_keywords(["Mars", None, "  "]), ["Mars"])
+        self.assertEqual(llm._norm_keywords(None), [])
+
+    def test_segment_dicts(self):
+        self.assertEqual(llm._segment_dicts([1, 2]), [])                    # non-dict top level
+        self.assertEqual(len(llm._segment_dicts({"segments": {"0": {"narration": "x"}}})), 1)  # dict segments
+        got = llm._segment_dicts({"segments": [{"narration": "x"}, "junk"]})
+        self.assertEqual(len(got), 1)                                       # stray entry dropped
+
+
+class CaptionMonotonic(unittest.TestCase):
+    """Regression (stress test 2026-06-14): out-of-order/bunched STT timings must still yield a
+    gap-free, non-overlapping caption timeline."""
+    def test_out_of_order_timings(self):
+        from avp.config import CaptionStyle, VideoConfig
+        from avp.stt import Word
+        style = CaptionStyle()
+        style.group = 1
+        ws = [Word("a", 5.0, 6.0), Word("b", 1.0, 2.0), Word("c", 3.0, 4.0)]
+        with tempfile.TemporaryDirectory() as td:
+            items = captions.render_caption_pngs(ws, Path(td), style, VideoConfig(), total_dur=8.0)
+        starts = [it[1] for it in items]
+        self.assertEqual(starts[0], 0.0)
+        self.assertEqual(starts, sorted(starts))               # monotonic non-decreasing
+        self.assertAlmostEqual(items[-1][2], 8.0)              # last runs to total_dur
+        for i in range(len(items) - 1):
+            self.assertAlmostEqual(items[i][2], items[i + 1][1])   # contiguous, no overlap/gap
+        for s, e in ((it[1], it[2]) for it in items):
+            self.assertLessEqual(s, e)                          # every window valid
+
+
 if __name__ == "__main__":
     unittest.main()

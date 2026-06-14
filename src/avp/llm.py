@@ -101,6 +101,30 @@ def _extract_json(text: str) -> dict:
         return json.loads(m.group(0))
 
 
+def _norm_keywords(raw) -> list[str]:
+    """Coerce a model's `keywords` field into a clean list. The model occasionally returns a
+    bare string ("Mars, Saturn") instead of a list — splitting on chars would be wrong — or
+    sneaks a None into the list, which would otherwise leak a literal 'None' keyword."""
+    if isinstance(raw, str):
+        raw = re.split(r"[,;]", raw)
+    if not isinstance(raw, (list, tuple)):
+        return []
+    return [str(k).strip() for k in raw if k is not None and str(k).strip()]
+
+
+def _segment_dicts(data) -> list[dict]:
+    """Pull the segment list out of model JSON defensively: tolerate a non-dict top level,
+    `segments` given as a dict instead of a list, and stray non-dict entries."""
+    if not isinstance(data, dict):
+        return []
+    segs = data.get("segments")
+    if isinstance(segs, dict):
+        segs = list(segs.values())
+    if not isinstance(segs, list):
+        return []
+    return [s for s in segs if isinstance(s, dict)]
+
+
 LANG_NAME = {"en": "English", "it": "Italian"}
 
 
@@ -114,6 +138,8 @@ def generate_script(cfg: LLMConfig, topic: str, seconds: int = 60, language: str
     client = OllamaClient(cfg)
     log.info("Generating %s script for %r with %s ...", name, topic, cfg.model)
     data = _extract_json(client.chat(system, user, temperature=0.85))   # creative first draft
+    if not isinstance(data, dict):
+        raise RuntimeError("Model returned non-object JSON for the script. Try re-running or a different model.")
 
     for n in range(max(0, refine_passes)):     # critique → refine; never regress a usable draft
         try:
@@ -123,7 +149,7 @@ def generate_script(cfg: LLMConfig, topic: str, seconds: int = 60, language: str
             refined = _extract_json(client.chat(
                 system + REFINE_SUFFIX, REFINE_USER.format(script=draft, critique=critique),
                 temperature=0.4))
-            if [s for s in refined.get("segments", []) if str(s.get("narration", "")).strip()]:
+            if [s for s in _segment_dicts(refined) if str(s.get("narration", "")).strip()]:
                 data = refined
                 log.info("Script refine pass %d/%d applied.", n + 1, refine_passes)
         except Exception as e:  # noqa: BLE001 — refinement must never break a usable draft
@@ -135,14 +161,15 @@ def generate_script(cfg: LLMConfig, topic: str, seconds: int = 60, language: str
             index=i + 1,
             narration=str(s.get("narration", "")).strip(),
             visual=str(s.get("visual", "")).strip(),
-            keywords=[str(k).strip() for k in (s.get("keywords") or []) if str(k).strip()],
+            keywords=_norm_keywords(s.get("keywords")),
         )
-        for i, s in enumerate(data.get("segments", []))
+        for i, s in enumerate(_segment_dicts(data))
         if str(s.get("narration", "")).strip()
     ]
     if not segments:
         raise RuntimeError("Model returned no usable segments. Try re-running or a different model.")
-    return Script(title=str(data.get("title", topic)).strip(), segments=segments,
+    title = data.get("title") if isinstance(data.get("title"), (str, int, float)) else topic
+    return Script(title=str(title or topic).strip(), segments=segments,
                   target_seconds=seconds, topic=topic)
 
 

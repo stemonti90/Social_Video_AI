@@ -6,10 +6,14 @@ with 24GB unified memory. Copy config.example.yaml -> config.yaml to customize.
 from __future__ import annotations
 
 import os
-from dataclasses import asdict, dataclass, field
+from dataclasses import asdict, dataclass, field, fields
 from pathlib import Path
 
 import yaml
+
+from .log import get_logger
+
+log = get_logger("avp.config")
 
 
 @dataclass
@@ -122,23 +126,50 @@ class Config:
     def load(cls, path: str | Path | None = None) -> "Config":
         data: dict = {}
         if path and Path(path).exists():
-            data = yaml.safe_load(Path(path).read_text()) or {}
+            try:
+                loaded = yaml.safe_load(Path(path).read_text())
+            except yaml.YAMLError as e:
+                raise RuntimeError(f"Invalid YAML in config file {path}: {e}") from e
+            if loaded is None:
+                loaded = {}
+            if not isinstance(loaded, dict):
+                raise RuntimeError(
+                    f"Config file {path} must contain a YAML mapping at the top level, "
+                    f"got {type(loaded).__name__}."
+                )
+            data = loaded
+
+        def _section(name: str, dc):
+            """Build one section dataclass, tolerating non-mapping values and IGNORING unknown
+            keys (with a warning). This makes a typo'd `config-set` or a config written for a
+            different version non-fatal instead of crashing every later command at load time."""
+            raw = data.get(name) or {}
+            if not isinstance(raw, dict):
+                log.warning("config section %r is not a mapping (got %s) — using defaults.",
+                            name, type(raw).__name__)
+                return dc()
+            known = {f.name for f in fields(dc)}
+            clean = {k: v for k, v in raw.items() if k in known}
+            for k in raw.keys() - clean.keys():
+                log.warning("config: ignoring unknown key %s.%s", name, k)
+            return dc(**clean)
 
         cfg = cls(
-            llm=LLMConfig(**(data.get("llm") or {})),
-            script=ScriptConfig(**(data.get("script") or {})),
-            funnel=FunnelConfig(**(data.get("funnel") or {})),
-            tts=TTSConfig(**(data.get("tts") or {})),
-            stt=STTConfig(**(data.get("stt") or {})),
-            video=VideoConfig(**(data.get("video") or {})),
-            captions=CaptionStyle(**(data.get("captions") or {})),
-            publish=PublishConfig(**(data.get("publish") or {})),
-            paths=PathsConfig(**(data.get("paths") or {})),
+            llm=_section("llm", LLMConfig),
+            script=_section("script", ScriptConfig),
+            funnel=_section("funnel", FunnelConfig),
+            tts=_section("tts", TTSConfig),
+            stt=_section("stt", STTConfig),
+            video=_section("video", VideoConfig),
+            captions=_section("captions", CaptionStyle),
+            publish=_section("publish", PublishConfig),
+            paths=_section("paths", PathsConfig),
         )
 
-        # Environment overrides win over the file.
-        cfg.llm.host = os.getenv("OLLAMA_HOST", cfg.llm.host)
-        cfg.llm.model = os.getenv("AVP_LLM_MODEL", cfg.llm.model)
+        # Environment overrides win over the file (but an empty/unset env var must NOT blank a
+        # good default — `OLLAMA_HOST=""` should fall back, not override with "").
+        cfg.llm.host = os.getenv("OLLAMA_HOST") or cfg.llm.host
+        cfg.llm.model = os.getenv("AVP_LLM_MODEL") or cfg.llm.model
         return cfg
 
     def to_dict(self) -> dict:

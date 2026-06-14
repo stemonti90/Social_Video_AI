@@ -30,7 +30,7 @@ def _safe_url(url: str) -> str:
     """Percent-encode characters urllib forbids (spaces, control chars) without
     double-encoding already-escaped sequences. NASA hrefs sometimes contain literal
     spaces, e.g. a nasa_id like 'What is a Black Hole'."""
-    return urllib.parse.quote(url, safe="%:/?#[]@!$&'()*+,;=~")
+    return urllib.parse.quote(url or "", safe="%:/?#[]@!$&'()*+,;=~")
 
 
 def _get_json(url: str) -> dict | list:
@@ -82,8 +82,10 @@ def _is_diagram(title: str, desc: str) -> bool:
 def _key_terms(seg: "Script", script: Script) -> list[str]:
     """Significant words (>=4 chars) from a segment's keywords/visual/topic, for relevance scoring."""
     terms: list[str] = []
-    for blob in (" ".join(seg.keywords), seg.visual, script.topic):
-        terms += [w.lower() for w in re.findall(r"[A-Za-z]{4,}", blob or "")]
+    kw = seg.keywords if isinstance(seg.keywords, (list, tuple)) else []
+    keywords_blob = " ".join(str(k) for k in kw if k is not None)
+    for blob in (keywords_blob, seg.visual, script.topic):
+        terms += [w.lower() for w in re.findall(r"[A-Za-z]{4,}", str(blob or ""))]
     return list(dict.fromkeys(terms))
 
 
@@ -116,7 +118,7 @@ def _score(c: dict, terms: list[str]) -> int:
             score += 3
         elif t in desc:
             score += 1
-    if _is_diagram(c["title"], c["description"]):
+    if _is_diagram(title, desc):             # reuse the already-extracted fields (no KeyError on sparse dicts)
         score -= 5                           # real penalty: push diagrams/figures below photos
     else:
         score += 2                           # cinematic-photo bonus
@@ -165,7 +167,8 @@ def _wm_license_ok(lic: str) -> bool:
     Non-Commercial or No-Derivatives (overlaying captions + Ken Burns makes a derivative)."""
     s = (lic or "").lower()
     return not any(b in s for b in
-                   ("non-commercial", "noncommercial", "by-nc", "-nc-", "by-nd", "-nd", "noderiv", "fair use"))
+                   ("non-commercial", "noncommercial", "by-nc", "-nc-", "by-nd", "-nd",
+                    "noderiv", "no deriv", "no-deriv", "fair use"))
 
 
 def wikimedia_pick(queries: list[str], used_ids: set) -> dict | None:
