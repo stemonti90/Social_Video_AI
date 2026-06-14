@@ -60,6 +60,15 @@ ipcMain.handle("avp:list", () => {
     });
 });
 
+ipcMain.handle("avp:delete", async (_e, slug) => {
+  // Defense in depth: validate here too (the CLI re-validates and is the source of truth).
+  if (typeof slug !== "string" || !/^[a-z0-9_][a-z0-9_-]*$/.test(slug)) {
+    throw new Error("slug non valido");
+  }
+  await runAvp(["delete", slug]);   // CLI safely removes projects/<slug> (folder + all files)
+  return true;
+});
+
 ipcMain.handle("avp:config-get", async () => {
   try { return JSON.parse(await runAvp(["config-get"])); } catch { return {}; }
 });

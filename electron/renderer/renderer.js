@@ -79,13 +79,96 @@ async function loadProjects() {
       return `<span class="stage-dot"><span class="stat stat--${s.cls}" aria-hidden="true">${s.g}</span> ${label}<span class="sr-only">: ${s.label}</span></span>`;
     }).join("");
     li.innerHTML = `
-      <h2 class="card__title">${escapeHtml(p.title || p.slug)}</h2>
-      <p class="card__slug">${escapeHtml(p.slug)}</p>
+      <div class="card__head">
+        <div class="card__heading">
+          <h2 class="card__title">${escapeHtml(p.title || p.slug)}</h2>
+          <p class="card__slug">${escapeHtml(p.slug)}</p>
+        </div>
+        <div class="card__actions">
+          <button type="button" class="card__menu-btn" aria-haspopup="true" aria-expanded="false"
+                  aria-label="Azioni per ${escapeHtml(p.title || p.slug)}">⋯</button>
+          <div class="card__menu" role="menu" hidden>
+            <button type="button" role="menuitem" class="card__delete">Elimina progetto</button>
+          </div>
+        </div>
+      </div>
       <div class="card__stages" role="group" aria-label="Stato stadi di ${escapeHtml(p.slug)}">${stages}</div>
       <button type="button" class="btn btn--ghost card__open">Apri progetto</button>`;
     li.querySelector(".card__open").addEventListener("click", () => openProject(p.slug, p.title));
+    wireCardMenu(li, p);
     list.appendChild(li);
   }
+}
+
+/* ---------------- card ⋯ menu + delete ---------------- */
+function closeAllMenus(except) {
+  $$(".card__menu").forEach((m) => {
+    if (m === except || m.hidden) return;
+    m.hidden = true;
+    const b = m.parentElement.querySelector(".card__menu-btn");
+    if (b) b.setAttribute("aria-expanded", "false");
+  });
+}
+
+function wireCardMenu(li, p) {
+  const btn = li.querySelector(".card__menu-btn");
+  const menu = li.querySelector(".card__menu");
+  const del = li.querySelector(".card__delete");
+  btn.addEventListener("click", (e) => {
+    e.stopPropagation();
+    const willOpen = menu.hidden;
+    closeAllMenus(menu);
+    menu.hidden = !willOpen;
+    btn.setAttribute("aria-expanded", String(willOpen));
+    if (willOpen) del.focus();
+  });
+  menu.addEventListener("keydown", (e) => {
+    if (e.key === "Escape") { menu.hidden = true; btn.setAttribute("aria-expanded", "false"); btn.focus(); }
+  });
+  del.addEventListener("click", () => {
+    menu.hidden = true; btn.setAttribute("aria-expanded", "false");
+    confirmDelete(p.slug, p.title || p.slug);
+  });
+}
+// any click outside an open menu closes it (clicks on a card's own ⋯/menu manage themselves)
+document.addEventListener("click", (e) => {
+  if (e.target.closest && e.target.closest(".card__actions")) return;
+  closeAllMenus();
+});
+
+async function doDelete(slug, label) {
+  try {
+    await API.deleteProject(slug);
+    if (current === slug) { current = null; showView("projects"); }
+    announce(`Progetto ${label} eliminato.`);
+    await loadProjects();
+  } catch (e) {
+    console.error(e);
+    announce(`Errore nell'eliminare ${label}: ${(e && e.message) || e}`);
+  }
+}
+
+function confirmDelete(slug, label) {
+  const dlg = $("#confirm-delete");
+  if (!dlg || typeof dlg.showModal !== "function") {   // fallback when <dialog> is unsupported
+    if (window.confirm(`Eliminare «${label}»? L'operazione non è reversibile.`)) doDelete(slug, label);
+    return;
+  }
+  $("#confirm-delete-name").textContent = label;
+  const go = $("#confirm-delete-go");
+  const cancel = $("#confirm-delete-cancel");
+  // wire fresh each time so the handlers close over THIS slug; clean up to avoid stacking
+  const cleanup = () => {
+    go.removeEventListener("click", onGo);
+    cancel.removeEventListener("click", onCancel);
+    dlg.removeEventListener("close", onCancel);
+  };
+  const onGo = () => { cleanup(); dlg.close(); doDelete(slug, label); };
+  const onCancel = () => { cleanup(); if (dlg.open) dlg.close(); };
+  go.addEventListener("click", onGo);
+  cancel.addEventListener("click", onCancel);
+  dlg.addEventListener("close", onCancel);   // Escape / backdrop also cancels cleanly
+  dlg.showModal();
 }
 
 /* ---------------- new project ---------------- */
@@ -383,6 +466,7 @@ function makeMock() {
   return {
     listProjects: async () => projects,
     newProject: async (topic) => { const slug = topic.toLowerCase().replace(/[^a-z0-9]+/g, "-").slice(0, 28).replace(/^-|-$/g, ""); projects.unshift({ slug, title: topic, stages: { script: "done" } }); return { slug, title: topic }; },
+    deleteProject: async (slug) => { const i = projects.findIndex((x) => x.slug === slug); if (i >= 0) projects.splice(i, 1); return true; },
     readScript: async () => "# Saturn's Rings Are Vanishing — Here's Why\n\n## 1\nNARRATION: Saturn's iconic rings aren't eternal — they're slowly disappearing.\nVISUAL: Cassini wide view of Saturn\nKEYWORDS: Saturn rings, Cassini\n\n## 2\nNARRATION: NASA calls it \"ring rain\".\nVISUAL: ice falling into Saturn\nKEYWORDS: ring rain\n\n## 9\nNARRATION: Want to capture the cosmos yourself? Get AstroStackerPro — link in the bio.\nVISUAL: App endcard\nKEYWORDS:\n",
     saveScript: async () => {},
     onBuildEvent: (cb) => { buildCb = cb; return () => { buildCb = null; }; },

@@ -15,6 +15,8 @@ import argparse
 import json
 import logging
 import os
+import re
+import shutil
 import sys
 import warnings
 from pathlib import Path
@@ -76,6 +78,10 @@ def _build_parser() -> argparse.ArgumentParser:
 
     sub.add_parser("list", parents=[common], help="list projects and stage status")
 
+    dl = sub.add_parser("delete", parents=[common],
+                        help="permanently delete a project and its folder")
+    dl.add_argument("slug")
+
     sub.add_parser("config-get", parents=[common], help="print the current config as JSON")
     cs = sub.add_parser("config-set", parents=[common], help="merge a JSON patch into config.yaml")
     cs.add_argument("patch", help="JSON object to merge into config.yaml")
@@ -92,6 +98,37 @@ def _cmd_list(cfg: Config) -> int:
         m = json.loads(mpath.read_text())
         status = " ".join(f"{k}:{v.get('state', '?')[:4]}" for k, v in m["stages"].items())
         print(f"{m['slug']:<28} {status}")
+    return 0
+
+
+# A safe project folder name: lowercase/digits/_/- only, first char alnum or _ (never a leading
+# '-' that looks like a flag, never a leading '.'). Real slugs come from slugify ([a-z0-9-]); the
+# leading '_' covers existing test projects like '_smoke'. Traversal is blocked here AND below.
+_SLUG_RE = re.compile(r"^[a-z0-9_][a-z0-9_-]*$")
+
+
+def _cmd_delete(cfg: Config, slug: str) -> int:
+    """Permanently remove a project folder. Deliberately defensive — this is destructive:
+    the slug must be a single safe path component, the resolved path must sit *directly*
+    inside the projects dir, and it must actually be a project (have a manifest)."""
+    log = get_logger()
+    if not slug or ".." in slug or "/" in slug or "\\" in slug or not _SLUG_RE.match(slug):
+        log.error("delete: invalid project slug %r", slug)
+        return 1
+    projects = Path(cfg.paths.projects_dir).resolve()
+    target = (projects / slug).resolve()
+    if target.parent != projects:                       # never escape the projects directory
+        log.error("delete: refusing to delete outside the projects directory (%s)", target)
+        return 1
+    if not target.is_dir():
+        log.error("delete: project %r not found", slug)
+        return 1
+    if not (target / "manifest.json").exists():         # only delete real projects, never stray dirs
+        log.error("delete: %r has no manifest.json — not a project, not deleting", slug)
+        return 1
+    shutil.rmtree(target)
+    log.info("Deleted project %s (%s)", slug, target)
+    print(f"deleted {slug}")
     return 0
 
 
@@ -132,6 +169,8 @@ def main(argv: list[str] | None = None) -> int:
 
     if args.cmd == "list":
         return _cmd_list(cfg)
+    if args.cmd == "delete":
+        return _cmd_delete(cfg, args.slug)
 
     if args.cmd == "config-get":
         print(json.dumps(cfg.to_dict()))

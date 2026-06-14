@@ -405,5 +405,47 @@ class OllamaClientPayload(unittest.TestCase):
         self.assertEqual(captured["timeout"], (10, 300))      # (connect, read) — no 10-min hang
 
 
+class CliDelete(unittest.TestCase):
+    """delete removes a real project folder but refuses unsafe slugs and non-project dirs."""
+    def _cfg(self, projects_dir):
+        c = Config.load(None)
+        c.paths.projects_dir = str(projects_dir)
+        return c
+
+    def test_deletes_real_project(self):
+        with tempfile.TemporaryDirectory() as td:
+            for slug in ("demo", "_smoke", "saturn-rings-2"):   # incl. leading-underscore projects
+                proj = Path(td) / slug
+                (proj / "footage").mkdir(parents=True)
+                (proj / "manifest.json").write_text("{}")
+                (proj / "script.md").write_text("x")
+                self.assertEqual(cli._cmd_delete(self._cfg(td), slug), 0, slug)
+                self.assertFalse(proj.exists(), slug)
+
+    def test_refuses_unsafe_slugs_and_keeps_files_outside(self):
+        with tempfile.TemporaryDirectory() as td:
+            outside = Path(td) / "secret"
+            outside.mkdir()
+            (outside / "keep.txt").write_text("important")
+            projects = Path(td) / "projects"
+            projects.mkdir()
+            cfg = self._cfg(projects)
+            for bad in ("../secret", "..", "a/b", "", "Demo", "x;rm", "a b"):
+                self.assertEqual(cli._cmd_delete(cfg, bad), 1, bad)
+            self.assertTrue(outside.exists() and (outside / "keep.txt").exists())
+
+    def test_refuses_dir_without_manifest(self):
+        with tempfile.TemporaryDirectory() as td:
+            d = Path(td) / "notaproject"
+            d.mkdir()
+            (d / "random.txt").write_text("x")
+            self.assertEqual(cli._cmd_delete(self._cfg(td), "notaproject"), 1)
+            self.assertTrue(d.exists())                 # untouched: not a real project
+
+    def test_missing_project_is_clean_error(self):
+        with tempfile.TemporaryDirectory() as td:
+            self.assertEqual(cli._cmd_delete(self._cfg(td), "ghost"), 1)
+
+
 if __name__ == "__main__":
     unittest.main()

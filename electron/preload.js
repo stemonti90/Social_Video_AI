@@ -6,6 +6,7 @@ contextBridge.exposeInMainWorld("avp", {
   getConfig: () => ipcRenderer.invoke("avp:config-get"),
   setConfig: (patch) => ipcRenderer.invoke("avp:config-set", patch),
   newProject: (topic) => ipcRenderer.invoke("avp:new", topic),
+  deleteProject: (slug) => ipcRenderer.invoke("avp:delete", slug),
   readScript: (slug) => ipcRenderer.invoke("avp:readScript", slug),
   saveScript: (slug, text) => ipcRenderer.invoke("avp:saveScript", { slug, text }),
   readMetadata: (slug) => ipcRenderer.invoke("avp:readMetadata", slug),

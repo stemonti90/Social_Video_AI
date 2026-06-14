@@ -280,6 +280,21 @@
   <!-- global announcements for screen readers -->
   <div class="sr-only" role="status" aria-live="assertive" id="announce"></div>
 
+  <!-- confirm: delete a project (folder + all files) -->
+  <dialog class="modal" id="confirm-delete" aria-labelledby="confirm-delete-title">
+    <div class="modal__box">
+      <h2 class="modal__title" id="confirm-delete-title">Eliminare il progetto?</h2>
+      <p class="modal__body">
+        Stai per eliminare <strong id="confirm-delete-name"></strong> e l'intera sua cartella
+        (copione, audio, footage, video). <strong>L'operazione non è reversibile.</strong>
+      </p>
+      <div class="modal__actions">
+        <button type="button" class="btn btn--ghost" id="confirm-delete-cancel">Annulla</button>
+        <button type="button" class="btn btn--danger" id="confirm-delete-go">Elimina definitivamente</button>
+      </div>
+    </div>
+  </dialog>
+
   <script src="renderer.js"></script>
 </body>
 </html>
