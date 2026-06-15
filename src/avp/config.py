@@ -108,6 +108,9 @@ class PathsConfig:
     projects_dir: str = "projects"
     footage_dir: str = "assets/footage"
     music_dir: str = "assets/music"
+    # Per-project copy of the shareable outputs (final mp4 + metadata), for quick share/storage.
+    # ~ is expanded; set to "" to disable. One subfolder per project: <export_dir>/<slug>/.
+    export_dir: str = "~/Desktop/Social AstroStacker"
 
 
 @dataclass

@@ -466,5 +466,40 @@ class MakeClipFallback(unittest.TestCase):
         self.assertFalse(any("zoompan" in str(a) for a in calls[1]))     # fallback = static scale/crop
 
 
+class ExportOutputs(unittest.TestCase):
+    """Per-project Desktop share folder (paths.export_dir): copies mp4 + metadata, disableable, safe."""
+    def _project(self, td):
+        projects = Path(td) / "projects"
+        (projects / "demo").mkdir(parents=True)
+        (projects / "demo" / "demo.mp4").write_bytes(b"VIDEO")
+        (projects / "demo" / "metadata.md").write_text("meta")
+        (projects / "demo" / "metadata.json").write_text("{}")
+        cfg = Config.load(None)
+        cfg.paths.projects_dir = str(projects)
+        from avp.manifest import VideoProject as VP
+        return VP("demo", cfg), cfg
+
+    def test_copies_video_and_metadata(self):
+        from avp import stages
+        with tempfile.TemporaryDirectory() as td:
+            project, cfg = self._project(td)
+            cfg.paths.export_dir = str(Path(td) / "out")
+            dest = stages.export_outputs(project, cfg)
+            self.assertEqual(dest, Path(td) / "out" / "demo")
+            for f in ("demo.mp4", "metadata.md", "metadata.json"):
+                self.assertTrue((Path(td) / "out" / "demo" / f).exists(), f)
+
+    def test_disabled_when_empty(self):
+        from avp import stages
+        with tempfile.TemporaryDirectory() as td:
+            project, cfg = self._project(td)
+            cfg.paths.export_dir = ""
+            self.assertIsNone(stages.export_outputs(project, cfg))
+
+    def test_expands_tilde(self):
+        from avp import config as cfgmod
+        self.assertTrue(cfgmod.PathsConfig().export_dir.startswith("~/"))   # default lives under HOME
+
+
 if __name__ == "__main__":
     unittest.main()

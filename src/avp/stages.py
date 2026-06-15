@@ -358,7 +358,32 @@ def stage_assemble(project: VideoProject, cfg: Config) -> Path:
 
     project.manifest.mark("assemble", "done", outputs=outputs, primary=primary)
     log.info("Outputs ready: %s", outputs)
+    export_outputs(project, cfg)
     return project.output
+
+
+def export_outputs(project: VideoProject, cfg: Config) -> Path | None:
+    """Copy the shareable artifacts (final mp4 + metadata) into a per-project folder on the
+    Desktop (paths.export_dir → <export_dir>/<slug>/), so each finished video is immediately
+    ready to share/store. Idempotent; export_dir="" disables it. Never raises — a failed export
+    must not fail the build."""
+    root = (getattr(cfg.paths, "export_dir", "") or "").strip()
+    if not root:
+        return None
+    try:
+        dest = Path(root).expanduser() / project.slug
+        dest.mkdir(parents=True, exist_ok=True)
+        copied = []
+        for src in (project.output, project.root / "metadata.md", project.root / "metadata.json"):
+            if src.exists():
+                shutil.copy2(src, dest / src.name)
+                copied.append(src.name)
+        if copied:
+            log.info("Exported to %s — %s", dest, ", ".join(copied))
+        return dest
+    except Exception as e:  # noqa: BLE001 — export is a convenience, never break the build
+        log.warning("Could not export outputs to %s (%s).", root, e)
+        return None
 
 
 # --------------------------------------------------------------------------- metadata
@@ -370,6 +395,7 @@ def stage_metadata(project: VideoProject, cfg: Config) -> None:
     _write_metadata_md(project, cfg, meta)
     project.manifest.mark("metadata", "done")
     log.info("Metadata ready: %s", project.root / "metadata.json")
+    export_outputs(project, cfg)   # refresh the Desktop folder now that metadata exists
 
 
 def _write_metadata_md(project: VideoProject, cfg: Config, meta: dict) -> None:
