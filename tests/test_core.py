@@ -523,5 +523,17 @@ class FfmpegBinResolve(unittest.TestCase):
         ffmpeg._bin.cache_clear()
 
 
+class EndcardRender(unittest.TestCase):
+    """The redesigned end card must render a valid full-frame image (brand chip + CTA button)."""
+    def test_renders_valid_full_frame(self):
+        from avp.config import FunnelConfig, VideoConfig
+        from PIL import Image
+        with tempfile.TemporaryDirectory() as td:
+            p = Path(td) / "end.png"
+            captions.render_endcard(p, FunnelConfig(), VideoConfig())
+            self.assertTrue(p.exists())
+            self.assertEqual(Image.open(p).size, (VideoConfig().width, VideoConfig().height))
+
+
 if __name__ == "__main__":
     unittest.main()

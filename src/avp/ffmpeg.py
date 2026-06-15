@@ -182,11 +182,19 @@ def make_clip(src: Path, duration: float, w: int, h: int, fps: int,
          "-r", str(fps), "-c:v", "libx264", "-pix_fmt", "yuv420p", str(out)])
 
 
+# Warm up a thin/metallic small-model TTS voice: roll off rumble, tame the harsh ~3 kHz
+# "tinny" presence, add a touch of low-mid body, gentle compression for evenness.
+VOICE_WARM = ("highpass=f=70,"
+              "equalizer=f=2900:width_type=q:w=1.6:g=-3.5,"
+              "equalizer=f=180:width_type=q:w=1.0:g=2,"
+              "acompressor=threshold=-18dB:ratio=2.5:attack=8:release=140")
+
+
 def mix_audio(voice: Path, music: Path | None, music_gain_db: float, out: Path,
               loudness_lufs: float = -14.0) -> None:
-    """Mux narration with optional music **ducked under the voice** (sidechain compression),
-    then EBU R128 loudness-normalize. Falls back to a fixed-level mix if the build lacks
-    sidechaincompress."""
+    """Warm the narration, then mux it with optional music kept **clearly audible** under the
+    voice (the bed is loudness-normalized so even a quiet generated track comes through, then
+    only gently ducked), and EBU R128 loudness-normalize the result."""
     norm = f"loudnorm=I={loudness_lufs}:TP=-1.5:LRA=11" if loudness_lufs else "anull"
     if music and music.exists():
         if has_filter("sidechaincompress"):
@@ -194,26 +202,28 @@ def mix_audio(voice: Path, music: Path | None, music_gain_db: float, out: Path,
                 vdur = ffprobe_duration(voice)
             except Exception:  # noqa: BLE001
                 vdur = 0.0
-            # 2 s fade-in (no abrupt start), broadcast-style gentle duck (~6-8 dB dip, no pump),
-            # 2 s fade-out landing on the last word so the short never ends abruptly.
             fadeout = f"[mduck]afade=t=out:st={max(0.0, vdur - 2.0):.3f}:d=2[mf];" if vdur > 3.0 else ""
             mlabel = "[mf]" if fadeout else "[mduck]"
             fc = (
-                f"[0:a]asplit=2[v0][v1];"                       # voice → mix + sidechain key
-                f"[1:a]volume={music_gain_db}dB,afade=t=in:st=0:d=2[mraw];"
-                f"[mraw][v0]sidechaincompress=threshold=0.05:ratio=4:attack=5:release=250:detection=rms:makeup=1[mduck];"
+                f"[0:a]{VOICE_WARM}[vw];[vw]asplit=2[v0][v1];"          # warmed voice → mix + key
+                # normalize the (often low-energy) generated bed to a steady ~-23 LUFS so it's
+                # actually heard ~9 dB under the -14 LUFS voice, +music_gain_db trim, 2 s fade-in
+                f"[1:a]loudnorm=I=-23:TP=-2:LRA=11,volume={music_gain_db}dB,afade=t=in:st=0:d=2[mraw];"
+                # GENTLE duck: ~3-4 dB dip under speech, music stays present (no hard pumping)
+                f"[mraw][v0]sidechaincompress=threshold=0.1:ratio=2.5:attack=20:release=400:detection=rms:makeup=1[mduck];"
                 f"{fadeout}"
                 f"[v1]{mlabel}amix=inputs=2:duration=first:dropout_transition=2:normalize=0[mx];"
                 f"[mx]{norm}[a]"
             )
         else:
-            fc = (f"[1:a]volume={music_gain_db}dB[m];"
-                  f"[0:a][m]amix=inputs=2:duration=first:dropout_transition=2[mx];"
+            fc = (f"[0:a]{VOICE_WARM}[vw];"
+                  f"[1:a]loudnorm=I=-23:TP=-2,volume={music_gain_db}dB[m];"
+                  f"[vw][m]amix=inputs=2:duration=first:dropout_transition=2[mx];"
                   f"[mx]{norm}[a]")
         run(["-i", str(voice), "-stream_loop", "-1", "-i", str(music),
              "-filter_complex", fc, "-map", "[a]", "-c:a", "aac", "-b:a", "192k", "-ar", "48000", str(out)])
     else:
-        run(["-i", str(voice), "-af", norm, "-c:a", "aac", "-b:a", "192k", "-ar", "48000", str(out)])
+        run(["-i", str(voice), "-af", f"{VOICE_WARM},{norm}", "-c:a", "aac", "-b:a", "192k", "-ar", "48000", str(out)])
 
 
 @functools.lru_cache(maxsize=None)

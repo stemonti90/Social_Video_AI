@@ -66,7 +66,7 @@ class VideoConfig:
     height: int = 1920
     fps: int = 30
     music: str | None = None     # path to a royalty-free track; if None, auto-pick from music_dir
-    music_gain_db: float = -18.0   # base music level before sidechain ducking under the voice
+    music_gain_db: float = 0.0     # trim on the loudness-normalized (~-23 LUFS) music bed; 0 = audible under the voice
     music_source: str = "library"  # library (assets/music) | generate (Stable Audio Open) | none
     music_mood: str = "ethereal"   # ethereal | cinematic | dark  (when music_source='generate')
     music_steps: int = 100         # Stable Audio diffusion steps (higher = better, slower)

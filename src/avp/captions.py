@@ -230,26 +230,48 @@ def _wrap(draw, text: str, font, max_w: int) -> list[str]:
 
 
 def render_endcard(path: Path, funnel: FunnelConfig, video: VideoConfig) -> None:
-    """A deep-space card: app name + tagline + 'link in bio' — backdrop for the spoken CTA."""
+    """An inviting but sober end card over a soft cosmic backdrop: brand chip + app name +
+    tagline + a clear amber CTA button + handle — the visual behind the spoken call-to-action."""
     from PIL import Image, ImageDraw
 
     w, h = video.width, video.height
-    img = Image.new("RGB", (w, h), (7, 9, 20))
-    draw = ImageDraw.Draw(img)
     cx = w // 2
+    amber, ink = (255, 194, 75), (10, 14, 24)
 
-    name_f = _truetype(int(w * 0.11))
-    tag_f = _truetype(int(w * 0.045))
-    small_f = _truetype(int(w * 0.040))
+    # soft generated space scene (not a flat panel), then darkened so text/button pop
+    render_cosmic_backdrop(path, video, seed=99)
+    img = Image.blend(Image.open(path).convert("RGB"), Image.new("RGB", (w, h), (5, 7, 16)), 0.5)
+    draw = ImageDraw.Draw(img)
 
-    draw.text((cx, int(h * 0.40)), funnel.app_name, font=name_f, fill=(255, 255, 255),
-              anchor="mm", stroke_width=4, stroke_fill=(0, 0, 0))
-    y = int(h * 0.50)
-    for line in _wrap(draw, funnel.tagline, tag_f, int(w * 0.86)):
-        draw.text((cx, y), line, font=tag_f, fill=(176, 208, 255), anchor="mm")
-        y += int(w * 0.06)
-    draw.text((cx, int(h * 0.62)), f"{funnel.handle}   ·   Link in bio", font=small_f,
-              fill=(255, 229, 0), anchor="mm", stroke_width=2, stroke_fill=(0, 0, 0))
+    # brand chip with initials (amber rounded square)
+    words = funnel.app_name.split()
+    initials = (words[0][:1] + words[1][:1] if len(words) >= 2 else funnel.app_name[:2]).upper()
+    chip, chip_y = int(w * 0.17), int(h * 0.30)
+    draw.rounded_rectangle([cx - chip // 2, chip_y - chip // 2, cx + chip // 2, chip_y + chip // 2],
+                           radius=int(chip * 0.28), fill=amber)
+    draw.text((cx, chip_y), initials, font=_truetype(int(chip * 0.46)), fill=ink, anchor="mm")
+
+    # app name
+    draw.text((cx, int(h * 0.45)), funnel.app_name, font=_truetype(int(w * 0.092)),
+              fill=(255, 255, 255), anchor="mm", stroke_width=4, stroke_fill=(0, 0, 0))
+
+    # tagline
+    tag_f = _truetype(int(w * 0.042))
+    y = int(h * 0.525)
+    for line in _wrap(draw, funnel.tagline, tag_f, int(w * 0.82)):
+        draw.text((cx, y), line, font=tag_f, fill=(190, 214, 255), anchor="mm")
+        y += int(w * 0.058)
+
+    # amber CTA pill button
+    cta, cta_f = "Scarica  ·  Link in bio", _truetype(int(w * 0.05))
+    bw, bh, by = int(draw.textlength(cta, font=cta_f) + w * 0.14), int(w * 0.125), int(h * 0.66)
+    draw.rounded_rectangle([cx - bw // 2, by - bh // 2, cx + bw // 2, by + bh // 2],
+                           radius=bh // 2, fill=amber)
+    draw.text((cx, by), cta, font=cta_f, fill=ink, anchor="mm")
+
+    # handle
+    draw.text((cx, int(h * 0.735)), funnel.handle, font=_truetype(int(w * 0.036)),
+              fill=(220, 228, 245), anchor="mm")
     img.save(path)
 
 
