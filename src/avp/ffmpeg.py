@@ -149,8 +149,16 @@ def make_clip(src: Path, duration: float, w: int, h: int, fps: int,
         uw, uh = int(w * 1.5), int(h * 1.5)
         vf = (f"scale={uw}:{uh}:force_original_aspect_ratio=increase,crop={uw}:{uh},"
               f"zoompan=z='min(zoom+0.0008,1.15)':d={frames}:s={w}x{h}:fps={fps},setsar=1")
-    else:
-        vf = f"{cover},setsar=1"
+        try:
+            run(["-loop", "1", "-i", str(src), "-t", f"{duration:.3f}", "-vf", vf,
+                 "-r", str(fps), "-c:v", "libx264", "-pix_fmt", "yuv420p", str(out)])
+            return
+        except subprocess.CalledProcessError:
+            # zoompan is memory-heavy and can still SIGSEGV under load even after retries; a static
+            # scale+crop is far lighter, so fall back to it — the build completes (just no Ken Burns
+            # motion on this clip) instead of dying. Never a black frame, never a failed stage.
+            log.warning("Ken Burns (zoompan) failed for %s — rendering a static clip instead.", src.name)
+    vf = f"{cover},setsar=1"
     run(["-loop", "1", "-i", str(src), "-t", f"{duration:.3f}", "-vf", vf,
          "-r", str(fps), "-c:v", "libx264", "-pix_fmt", "yuv420p", str(out)])
 

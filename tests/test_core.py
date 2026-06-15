@@ -447,5 +447,24 @@ class CliDelete(unittest.TestCase):
             self.assertEqual(cli._cmd_delete(self._cfg(td), "ghost"), 1)
 
 
+class MakeClipFallback(unittest.TestCase):
+    """Regression (2026-06-15): zoompan (Ken Burns) can SIGSEGV under memory pressure even after
+    retries; make_clip must fall back to a static clip so the assemble stage never dies."""
+    def test_falls_back_to_static_on_zoompan_failure(self):
+        calls = []
+
+        def fake_run(args, retries=6):
+            calls.append(args)
+            if any("zoompan" in str(a) for a in args):
+                raise subprocess.CalledProcessError(-11, ["ffmpeg"])   # simulate SIGSEGV
+            return None
+
+        with mock.patch("avp.ffmpeg.run", fake_run):
+            ffmpeg.make_clip(Path("/x/01.jpg"), 6.0, 1080, 1920, 30, True, Path("/tmp/out.mp4"))
+        self.assertEqual(len(calls), 2)                                  # zoompan try + static fallback
+        self.assertTrue(any("zoompan" in str(a) for a in calls[0]))      # first attempt = Ken Burns
+        self.assertFalse(any("zoompan" in str(a) for a in calls[1]))     # fallback = static scale/crop
+
+
 if __name__ == "__main__":
     unittest.main()
