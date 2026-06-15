@@ -35,5 +35,10 @@ node_modules/
 .claude/
 auditions/
 
-# Built launcher bundle (generated; hardcodes the local project path)
+# Built app bundles (generated; live in electron/dist/, also ignored)
 AUT Video Pipeline.app/
+Social AstroStacker App.app/
+
+# keep the Electron app icon (build resource) even though build/ is ignored
+!electron/build/
+!electron/build/icon.icns

@@ -1,10 +1,15 @@
-// AUT Video Pipeline — Electron main process. Wraps the local `avp` CLI.
+// Social AstroStacker — Electron main process. Wraps the local `avp` CLI.
 const { app, BrowserWindow, ipcMain } = require("electron");
 const path = require("path");
 const fs = require("fs");
 const { spawn } = require("child_process");
 
-const ROOT = path.resolve(__dirname, "..");                 // project root (config.yaml, projects/, .venv)
+// In dev, the project root is one level up from electron/. When packaged, the bundled app lives
+// elsewhere, so the local Python engine (.venv) + data (projects/, config.yaml, src/) are located
+// at a fixed path — overridable via AVP_PROJECT_ROOT. The heavy local AI engine/models can't be
+// bundled into a clickable app, so the packaged UI still drives the engine in this project folder.
+const ROOT = process.env.AVP_PROJECT_ROOT
+  || (app.isPackaged ? "/Users/ste/Desktop/Progetti/AUT_VIDEO_PIPELINE" : path.resolve(__dirname, ".."));
 const AVP = path.join(ROOT, ".venv", "bin", "avp");
 const PROJECTS = path.join(ROOT, "projects");
 const ENV = { ...process.env, PYTHONPATH: path.join(ROOT, "src") };
@@ -14,7 +19,7 @@ function createWindow() {
   win = new BrowserWindow({
     width: 1200, height: 820, minWidth: 940, minHeight: 640,
     backgroundColor: "#070a13",
-    title: "AUT · Video Pipeline",
+    title: "Social AstroStacker",
     webPreferences: {
       preload: path.join(__dirname, "preload.js"),
       contextIsolation: true,

@@ -1,12 +1,26 @@
 {
-  "name": "avp-ui",
+  "name": "social-astrostacker",
   "version": "0.1.0",
-  "description": "AUT Video Pipeline — accessible desktop control panel (Electron)",
+  "description": "Social AstroStacker — accessible desktop control panel (Electron)",
   "main": "main.js",
   "scripts": {
-    "start": "electron ."
+    "start": "electron .",
+    "dist": "electron-builder --mac"
+  },
+  "build": {
+    "appId": "com.astrostacker.social",
+    "productName": "Social AstroStacker App",
+    "directories": { "output": "dist", "buildResources": "build" },
+    "files": ["main.js", "preload.js", "renderer/**/*"],
+    "mac": {
+      "icon": "build/icon.icns",
+      "category": "public.app-category.video",
+      "target": "dir",
+      "identity": null
+    }
   },
   "devDependencies": {
-    "electron": "^33.0.0"
+    "electron": "^33.0.0",
+    "electron-builder": "^25.1.8"
   }
 }
