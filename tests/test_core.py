@@ -501,5 +501,27 @@ class ExportOutputs(unittest.TestCase):
         self.assertTrue(cfgmod.PathsConfig().export_dir.startswith("~/"))   # default lives under HOME
 
 
+class FfmpegBinResolve(unittest.TestCase):
+    """Regression (2026-06-15): GUI-launched apps (Finder/Dock, packaged app) inherit a minimal
+    PATH without Homebrew, so a bare 'ffmpeg' raises FileNotFoundError. _bin() must resolve via
+    fallback dirs so the engine works however it's launched."""
+    def test_resolves_from_fallback_dir_when_not_on_path(self):
+        with tempfile.TemporaryDirectory() as td:
+            fake = Path(td) / "ffmpeg"
+            fake.write_text("#!/bin/sh\n")
+            fake.chmod(0o755)
+            ffmpeg._bin.cache_clear()
+            with mock.patch("avp.ffmpeg.shutil.which", return_value=None), \
+                 mock.patch("avp.ffmpeg._FALLBACK_BINDIRS", (td,)):
+                self.assertEqual(ffmpeg._bin("ffmpeg"), str(fake))
+            ffmpeg._bin.cache_clear()
+
+    def test_prefers_path_when_available(self):
+        ffmpeg._bin.cache_clear()
+        with mock.patch("avp.ffmpeg.shutil.which", return_value="/usr/bin/ffmpeg"):
+            self.assertEqual(ffmpeg._bin("ffmpeg"), "/usr/bin/ffmpeg")
+        ffmpeg._bin.cache_clear()
+
+
 if __name__ == "__main__":
     unittest.main()

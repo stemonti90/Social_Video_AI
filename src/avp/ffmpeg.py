@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import functools
 import json
+import os
 import re
 import shutil
 import subprocess
@@ -17,17 +18,35 @@ log = get_logger("avp.ffmpeg")
 
 VIDEO_EXT = {".mp4", ".mov", ".mkv", ".webm", ".m4v", ".avi"}
 
+# GUI-launched apps (Finder/Dock, incl. the packaged app) inherit a minimal PATH WITHOUT Homebrew,
+# so a bare "ffmpeg" raises FileNotFoundError. Resolve to an absolute path, falling back to the
+# usual install dirs, so the engine works the same however it's launched (shell, app, cron).
+_FALLBACK_BINDIRS = ("/opt/homebrew/bin", "/usr/local/bin", "/opt/local/bin", "/usr/bin")
+
+
+@functools.lru_cache(maxsize=None)
+def _bin(name: str) -> str:
+    found = shutil.which(name)
+    if found:
+        return found
+    for d in _FALLBACK_BINDIRS:
+        cand = os.path.join(d, name)
+        if os.path.exists(cand):
+            return cand
+    return name   # not found anywhere — let it fail with a clear error
+
 
 def ensure_ffmpeg() -> None:
-    if not shutil.which("ffmpeg") or not shutil.which("ffprobe"):
-        raise RuntimeError("ffmpeg/ffprobe not found — run ./setup.sh or `brew install ffmpeg`.")
+    missing = [n for n in ("ffmpeg", "ffprobe") if not os.path.exists(_bin(n))]
+    if missing:
+        raise RuntimeError(f"{'/'.join(missing)} not found — run ./setup.sh or `brew install ffmpeg`.")
 
 
 def run(args: list[str], retries: int = 6) -> None:
     """Run an ffmpeg pass. brew's minimal ffmpeg transiently SIGSEGVs under load, so we
     retry on signal death (negative returncode) with growing backoff (lets memory pressure
     clear) but fail fast on a genuine ffmpeg error."""
-    cmd = ["ffmpeg", "-y", "-hide_banner", "-loglevel", "error", *args]
+    cmd = [_bin("ffmpeg"), "-y", "-hide_banner", "-loglevel", "error", *args]
     log.debug("ffmpeg %s", " ".join(args))
     last_rc = 1
     for attempt in range(retries):
@@ -65,7 +84,7 @@ def ffprobe_duration(path: Path) -> float:
     for _ in range(3):   # ffprobe can transiently SIGSEGV under heavy load — retry
         try:
             out = subprocess.run(
-                ["ffprobe", "-v", "error", "-show_entries", "format=duration", "-of", "json", str(path)],
+                [_bin("ffprobe"), "-v", "error", "-show_entries", "format=duration", "-of", "json", str(path)],
                 check=True, capture_output=True, text=True,
             ).stdout
             return float(json.loads(out)["format"]["duration"])
@@ -201,7 +220,7 @@ def mix_audio(voice: Path, music: Path | None, music_gain_db: float, out: Path,
 def has_filter(name: str) -> bool:
     """True if this ffmpeg build exposes the given filter (e.g. 'subtitles' needs libass)."""
     try:
-        out = subprocess.run(["ffmpeg", "-hide_banner", "-filters"],
+        out = subprocess.run([_bin("ffmpeg"), "-hide_banner", "-filters"],
                              capture_output=True, text=True).stdout
     except Exception:  # noqa: BLE001
         return False
