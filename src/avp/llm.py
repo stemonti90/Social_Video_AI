@@ -94,6 +94,18 @@ class OllamaClient:
         return r.json()["message"]["content"]
 
 
+def unload(cfg: LLMConfig) -> None:
+    """Ask Ollama to evict the model from RAM (keep_alive=0). Frees several GB before the
+    ffmpeg-heavy assemble — ffmpeg SIGSEGVs under memory pressure. Best-effort and reversible:
+    the model reloads automatically on the next request (e.g. the metadata stage)."""
+    try:
+        requests.post(f"{cfg.host}/api/generate",
+                      json={"model": cfg.model, "keep_alive": 0}, timeout=(5, 30))
+        log.info("Asked Ollama to unload %s (free RAM for assemble).", cfg.model)
+    except requests.RequestException:
+        pass
+
+
 def _extract_json(text: str) -> dict:
     text = re.sub(r"<think>.*?</think>", "", text, flags=re.S).strip()  # qwen3 reasoning traces
     if text.startswith("```"):

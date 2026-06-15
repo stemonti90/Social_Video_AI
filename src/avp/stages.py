@@ -337,8 +337,29 @@ def _assemble_engine(project: VideoProject, cfg: Config, script: Script, eng: st
     return out
 
 
+def _free_memory(cfg: Config) -> None:
+    """Free RAM before the ffmpeg-heavy assemble. ffmpeg SIGSEGVs under memory pressure, and a
+    build accumulates GBs (Ollama model ~8GB held from the script stage, torch/TTS caches). Evict
+    the Ollama model and release torch's cached MPS memory so clip rendering has headroom. All
+    best-effort — reversible (Ollama reloads for metadata) and never raises."""
+    try:
+        llm.unload(cfg.llm)
+    except Exception:  # noqa: BLE001
+        pass
+    import gc
+    gc.collect()
+    try:
+        import sys
+        torch = sys.modules.get("torch")
+        if torch is not None and getattr(torch.backends, "mps", None) and torch.backends.mps.is_available():
+            torch.mps.empty_cache()
+    except Exception:  # noqa: BLE001
+        pass
+
+
 def stage_assemble(project: VideoProject, cfg: Config) -> Path:
     ffmpeg.ensure_ffmpeg()
+    _free_memory(cfg)            # reclaim RAM (Ollama + torch) so ffmpeg won't SIGSEGV under load
     script = load_script(project)
     engines = _produced_engines(project, cfg)
     if not engines:
