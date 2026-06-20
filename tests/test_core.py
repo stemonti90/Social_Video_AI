@@ -451,6 +451,7 @@ class MakeClipFallback(unittest.TestCase):
     """Regression (2026-06-15): zoompan (Ken Burns) can SIGSEGV under memory pressure even after
     retries; make_clip must fall back to a static clip so the assemble stage never dies."""
     def test_falls_back_to_static_on_zoompan_failure(self):
+        from PIL import Image
         calls = []
 
         def fake_run(args, retries=6):
@@ -459,11 +460,14 @@ class MakeClipFallback(unittest.TestCase):
                 raise subprocess.CalledProcessError(-11, ["ffmpeg"])   # simulate SIGSEGV
             return None
 
-        with mock.patch("avp.ffmpeg.run", fake_run):
-            ffmpeg.make_clip(Path("/x/01.jpg"), 6.0, 1080, 1920, 30, True, Path("/tmp/out.mp4"))
+        with tempfile.TemporaryDirectory() as td:
+            src = Path(td) / "01.jpg"
+            Image.new("RGB", (1200, 800), (20, 30, 60)).save(src)      # real image: PIL prep needs it
+            with mock.patch("avp.ffmpeg.run", fake_run):
+                ffmpeg.make_clip(src, 6.0, 1080, 1920, 30, True, Path(td) / "out.mp4")
         self.assertEqual(len(calls), 2)                                  # zoompan try + static fallback
         self.assertTrue(any("zoompan" in str(a) for a in calls[0]))      # first attempt = Ken Burns
-        self.assertFalse(any("zoompan" in str(a) for a in calls[1]))     # fallback = static scale/crop
+        self.assertFalse(any("zoompan" in str(a) for a in calls[1]))     # fallback = static (PIL-scaled)
 
 
 class ExportOutputs(unittest.TestCase):

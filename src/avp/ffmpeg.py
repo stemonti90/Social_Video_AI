@@ -141,6 +141,25 @@ def black_still(out: Path, w: int, h: int) -> Path:
     return out
 
 
+def _still_clip_via_pil(src: Path, w: int, h: int, duration: float, fps: int, out: Path) -> None:
+    """Cover-crop the image to exactly w×h with PIL (robust, low memory — `draft` decodes big
+    JPEGs at reduced size), then encode a static clip with a MINIMAL ffmpeg pass (no scale
+    filter). This survives tight memory where ffmpeg's own scaler SIGSEGVs."""
+    from PIL import Image, ImageOps
+    tmp = Path(str(out) + ".frame.png")
+    with Image.open(src) as im:
+        im.draft("RGB", (w, h))
+        ImageOps.fit(im.convert("RGB"), (w, h), method=Image.LANCZOS).save(tmp)
+    try:
+        run(["-loop", "1", "-i", str(tmp), "-t", f"{duration:.3f}", "-vf", "setsar=1",
+             "-r", str(fps), "-c:v", "libx264", "-pix_fmt", "yuv420p", str(out)])
+    finally:
+        try:
+            tmp.unlink()
+        except OSError:
+            pass
+
+
 def make_clip(src: Path, duration: float, w: int, h: int, fps: int,
               ken_burns: bool, out: Path, seek: float = 0.0) -> None:
     """Render one segment clip (image or video) scaled+cropped to w x h for `duration` s."""
@@ -163,23 +182,28 @@ def make_clip(src: Path, duration: float, w: int, h: int, fps: int,
 
     if ken_burns:
         frames = max(1, int(duration * fps))
-        # Scale to a 1.5x intermediate (sharp enough for a 1.15 zoom) instead of 2x/4K, which made
-        # brew's minimal ffmpeg SIGSEGV on large source images. Then zoompan down to the frame.
         uw, uh = int(w * 1.5), int(h * 1.5)
-        vf = (f"scale={uw}:{uh}:force_original_aspect_ratio=increase,crop={uw}:{uh},"
-              f"zoompan=z='min(zoom+0.0008,1.15)':d={frames}:s={w}x{h}:fps={fps},setsar=1")
+        # Pre-cover-crop to a 1.5x intermediate with PIL (low memory) so ffmpeg only has to zoom,
+        # not decode+scale a huge NASA image — that scaling is what SIGSEGVs under memory pressure.
+        pre = Path(str(out) + ".kb.png")
         try:
-            run(["-loop", "1", "-i", str(src), "-t", f"{duration:.3f}", "-vf", vf,
+            from PIL import Image, ImageOps
+            with Image.open(src) as im:
+                im.draft("RGB", (uw, uh))
+                ImageOps.fit(im.convert("RGB"), (uw, uh), method=Image.LANCZOS).save(pre)
+            vf = f"zoompan=z='min(zoom+0.0008,1.15)':d={frames}:s={w}x{h}:fps={fps},setsar=1"
+            run(["-loop", "1", "-i", str(pre), "-t", f"{duration:.3f}", "-vf", vf,
                  "-r", str(fps), "-c:v", "libx264", "-pix_fmt", "yuv420p", str(out)])
             return
-        except subprocess.CalledProcessError:
-            # zoompan is memory-heavy and can still SIGSEGV under load even after retries; a static
-            # scale+crop is far lighter, so fall back to it — the build completes (just no Ken Burns
-            # motion on this clip) instead of dying. Never a black frame, never a failed stage.
-            log.warning("Ken Burns (zoompan) failed for %s — rendering a static clip instead.", src.name)
-    vf = f"{cover},setsar=1"
-    run(["-loop", "1", "-i", str(src), "-t", f"{duration:.3f}", "-vf", vf,
-         "-r", str(fps), "-c:v", "libx264", "-pix_fmt", "yuv420p", str(out)])
+        except Exception as e:  # noqa: BLE001 — zoompan can still SIGSEGV under load; fall back
+            log.warning("Ken Burns failed for %s (%s) — rendering a static clip instead.", src.name, e)
+        finally:
+            try:
+                pre.unlink()
+            except OSError:
+                pass
+    # static (or fallback): PIL does the scaling, ffmpeg just encodes — minimal memory, robust.
+    _still_clip_via_pil(src, w, h, duration, fps, out)
 
 
 # Warm up a thin/metallic small-model TTS voice: roll off rumble, tame the harsh ~3 kHz

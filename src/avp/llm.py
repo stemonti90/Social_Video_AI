@@ -95,15 +95,27 @@ class OllamaClient:
 
 
 def unload(cfg: LLMConfig) -> None:
-    """Ask Ollama to evict the model from RAM (keep_alive=0). Frees several GB before the
-    ffmpeg-heavy assemble — ffmpeg SIGSEGVs under memory pressure. Best-effort and reversible:
-    the model reloads automatically on the next request (e.g. the metadata stage)."""
+    """Ask Ollama to evict the model from RAM (keep_alive=0) and WAIT until it's actually gone.
+    Frees several GB before the ffmpeg-heavy assemble — ffmpeg SIGSEGVs under memory pressure.
+    The eviction is async, so we must block until /api/ps no longer lists it, otherwise the
+    caller starts ffmpeg while the RAM is still held. Best-effort; reloads on the next request."""
+    import time
     try:
         requests.post(f"{cfg.host}/api/generate",
                       json={"model": cfg.model, "keep_alive": 0}, timeout=(5, 30))
-        log.info("Asked Ollama to unload %s (free RAM for assemble).", cfg.model)
     except requests.RequestException:
-        pass
+        return
+    base = cfg.model.split(":")[0]
+    for _ in range(24):                     # up to ~12 s for the model to leave RAM
+        try:
+            models = requests.get(f"{cfg.host}/api/ps", timeout=3).json().get("models", [])
+        except requests.RequestException:
+            return
+        if not any(str(m.get("name", "")).startswith(base) for m in models):
+            log.info("Ollama unloaded %s — RAM freed for assemble.", cfg.model)
+            return
+        time.sleep(0.5)
+    log.warning("Ollama still reports %s loaded after wait — proceeding anyway.", cfg.model)
 
 
 def _extract_json(text: str) -> dict:
