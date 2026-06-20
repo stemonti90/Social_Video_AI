@@ -220,11 +220,13 @@ def main(argv: list[str] | None = None) -> int:
             publish_mod.stage_publish(project, cfg, go=args.go, platforms=args.platforms)
             print(f"📤 {project.root / 'publish_plan.json'}")
         elif args.cmd == "build":
-            out = pipeline.build(project, cfg, force=args.force)
+            out = pipeline.build(project, cfg, force=args.force,
+                                 config_path=args.config, verbose=args.verbose)
             print(f"✅ {out}")
         elif args.cmd == "run":
             stages.stage_script(project, cfg, args.topic)
-            out = pipeline.build(project, cfg, force=args.force)
+            out = pipeline.build(project, cfg, force=args.force,
+                                 config_path=args.config, verbose=args.verbose)
             print(f"✅ {out}")
     except Exception as e:  # noqa: BLE001 — present a clean message, full trace in -v
         log.error("%s", e)
