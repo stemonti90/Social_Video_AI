@@ -118,6 +118,36 @@ def unload(cfg: LLMConfig) -> None:
     log.warning("Ollama still reports %s loaded after wait — proceeding anyway.", cfg.model)
 
 
+def unload_all(cfg: LLMConfig) -> None:
+    """Evict EVERY currently-loaded Ollama model from RAM and wait until none remain. Frees the
+    most RAM before the ffmpeg-heavy assemble (incl. unrelated models the user has loaded, e.g. a
+    big custom one) so nothing competes for memory. Reversible: each reloads on its next request."""
+    import time
+    try:
+        loaded = requests.get(f"{cfg.host}/api/ps", timeout=5).json().get("models", [])
+    except requests.RequestException:
+        return
+    names = [str(m.get("name") or m.get("model") or "") for m in loaded]
+    names = [n for n in names if n]
+    if not names:
+        return
+    for n in names:
+        try:
+            requests.post(f"{cfg.host}/api/generate", json={"model": n, "keep_alive": 0}, timeout=(5, 30))
+        except requests.RequestException:
+            pass
+    for _ in range(24):                     # up to ~12 s for RAM to clear
+        try:
+            still = requests.get(f"{cfg.host}/api/ps", timeout=3).json().get("models", [])
+        except requests.RequestException:
+            return
+        if not still:
+            log.info("Ollama unloaded all models (%s) — RAM freed for assemble.", ", ".join(names))
+            return
+        time.sleep(0.5)
+    log.warning("Ollama still reports models loaded after wait — proceeding anyway.")
+
+
 def _extract_json(text: str) -> dict:
     text = re.sub(r"<think>.*?</think>", "", text, flags=re.S).strip()  # qwen3 reasoning traces
     if text.startswith("```"):

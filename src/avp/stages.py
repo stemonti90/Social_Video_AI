@@ -341,9 +341,9 @@ def _free_memory(cfg: Config) -> None:
     """Free RAM before the ffmpeg-heavy assemble. ffmpeg SIGSEGVs under memory pressure, and a
     build accumulates GBs (Ollama model ~8GB held from the script stage, torch/TTS caches). Evict
     the Ollama model and release torch's cached MPS memory so clip rendering has headroom. All
-    best-effort — reversible (Ollama reloads for metadata) and never raises."""
+    best-effort — reversible (each model reloads on demand) and never raises."""
     try:
-        llm.unload(cfg.llm)
+        llm.unload_all(cfg.llm)     # evict ALL Ollama models (incl. unrelated user-loaded ones)
     except Exception:  # noqa: BLE001
         pass
     import gc

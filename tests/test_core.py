@@ -539,5 +539,30 @@ class EndcardRender(unittest.TestCase):
             self.assertEqual(Image.open(p).size, (VideoConfig().width, VideoConfig().height))
 
 
+class OllamaUnloadAll(unittest.TestCase):
+    """Before assemble, free ALL loaded Ollama models (incl. unrelated big ones) so nothing
+    competes for RAM with ffmpeg. Reversible — each reloads on demand."""
+    def test_unloads_each_loaded_model(self):
+        from avp.config import LLMConfig
+        posts, ps = [], {"n": 0}
+
+        class _R:
+            def __init__(self, p): self._p = p
+            def json(self): return self._p
+
+        def fake_get(url, timeout=None):
+            ps["n"] += 1
+            return _R({"models": [{"name": "qwen3:14b"}, {"name": "knightfall:latest"}]}) if ps["n"] == 1 \
+                else _R({"models": []})          # after the unloads, RAM is clear
+
+        def fake_post(url, json=None, timeout=None):
+            posts.append(json["model"])
+            return _R({})
+
+        with mock.patch("avp.llm.requests.get", fake_get), mock.patch("avp.llm.requests.post", fake_post):
+            llm.unload_all(LLMConfig())
+        self.assertEqual(sorted(posts), ["knightfall:latest", "qwen3:14b"])   # both evicted
+
+
 if __name__ == "__main__":
     unittest.main()
