@@ -44,7 +44,7 @@ class FunnelConfig:
 
 @dataclass
 class TTSConfig:
-    engine: str = "both"         # kokoro | chatterbox | both
+    engine: str = "kokoro"       # kokoro | chatterbox | both (Chatterbox is EN-only + flaky on MPS)
     primary: str = "kokoro"      # which engine feeds the final cut when engine == both
     kokoro_voice: str = "af_heart"
     kokoro_lang: str = "a"       # 'a' = American English, 'b' = British

@@ -144,10 +144,14 @@ def stage_voice(project: VideoProject, cfg: Config) -> Script:
             ffmpeg.concat_audio(seg_paths, adir / "narration.wav", gap=cfg.video.segment_gap)
             engines.append(prov.name)
         except Exception as e:  # noqa: BLE001
-            if prov.name == primary:
-                raise  # the engine that feeds the cut must work
-            log.warning("TTS engine %r failed (%s) — skipping it; primary %r is unaffected.",
-                        prov.name, e, primary)
+            log.warning("TTS engine %r failed (%s) — skipping it.", prov.name, e)
+
+    if not engines:
+        raise RuntimeError("All TTS engines failed — no narration was produced.")
+    if primary not in engines:   # primary broke (e.g. Chatterbox) but another worked → use that
+        log.warning("Primary voice %r unavailable — using %r for the final cut instead.",
+                    primary, engines[0])
+        primary = engines[0]
 
     for seg in script.segments:
         wav = project.audio_dir / primary / f"{seg.index:02d}.wav"
@@ -371,8 +375,12 @@ def stage_assemble(project: VideoProject, cfg: Config) -> Path:
         if out:
             outputs.append(str(out))
 
-    # Convenience: <slug>.mp4 mirrors the chosen primary engine.
+    # Convenience: <slug>.mp4 mirrors the primary engine — or the first one that actually produced
+    # audio, so a failed/unused engine never leaves the canonical file missing.
+    produced = _produced_engines(project, cfg)
     primary = tts_mod.primary_engine(cfg)
+    if primary not in produced and produced:
+        primary = produced[0]
     primary_out = project.output_for(primary)
     if primary_out.exists():
         shutil.copyfile(primary_out, project.output)

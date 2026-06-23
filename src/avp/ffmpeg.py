@@ -208,9 +208,10 @@ def make_clip(src: Path, duration: float, w: int, h: int, fps: int,
 
 # Warm up a thin/metallic small-model TTS voice: roll off rumble, tame the harsh ~3 kHz
 # "tinny" presence, add a touch of low-mid body, gentle compression for evenness.
-VOICE_WARM = ("highpass=f=70,"
-              "equalizer=f=2900:width_type=q:w=1.6:g=-3.5,"
-              "equalizer=f=180:width_type=q:w=1.0:g=2,"
+VOICE_WARM = ("highpass=f=80,"
+              "equalizer=f=2800:width_type=q:w=1.5:g=-5,"     # tame harsh 'tinny' presence (stronger)
+              "equalizer=f=200:width_type=q:w=1.0:g=2.5,"     # add warmth/body
+              "treble=g=-3.5:f=7500,"                         # high-shelf: soften the metallic top end
               "acompressor=threshold=-18dB:ratio=2.5:attack=8:release=140")
 
 
@@ -230,18 +231,19 @@ def mix_audio(voice: Path, music: Path | None, music_gain_db: float, out: Path,
             mlabel = "[mf]" if fadeout else "[mduck]"
             fc = (
                 f"[0:a]{VOICE_WARM}[vw];[vw]asplit=2[v0][v1];"          # warmed voice → mix + key
-                # normalize the (often low-energy) generated bed to a steady ~-23 LUFS so it's
-                # actually heard ~9 dB under the -14 LUFS voice, +music_gain_db trim, 2 s fade-in
-                f"[1:a]loudnorm=I=-23:TP=-2:LRA=11,volume={music_gain_db}dB,afade=t=in:st=0:d=2[mraw];"
+                # normalize the (often low-energy) generated bed to a steady ~-21 LUFS so it sits
+                # clearly under the voice, +music_gain_db trim, 2 s fade-in
+                f"[1:a]loudnorm=I=-21:TP=-2:LRA=11,volume={music_gain_db}dB,afade=t=in:st=0:d=2[mraw];"
                 # GENTLE duck: ~3-4 dB dip under speech, music stays present (no hard pumping)
                 f"[mraw][v0]sidechaincompress=threshold=0.1:ratio=2.5:attack=20:release=400:detection=rms:makeup=1[mduck];"
                 f"{fadeout}"
-                f"[v1]{mlabel}amix=inputs=2:duration=first:dropout_transition=2:normalize=0[mx];"
+                f"[v1]volume=-2dB[vq];"                                  # voice a touch lower vs music
+                f"[vq]{mlabel}amix=inputs=2:duration=first:dropout_transition=2:normalize=0[mx];"
                 f"[mx]{norm}[a]"
             )
         else:
-            fc = (f"[0:a]{VOICE_WARM}[vw];"
-                  f"[1:a]loudnorm=I=-23:TP=-2,volume={music_gain_db}dB[m];"
+            fc = (f"[0:a]{VOICE_WARM},volume=-2dB[vw];"
+                  f"[1:a]loudnorm=I=-21:TP=-2,volume={music_gain_db}dB[m];"
                   f"[vw][m]amix=inputs=2:duration=first:dropout_transition=2[mx];"
                   f"[mx]{norm}[a]")
         run(["-i", str(voice), "-stream_loop", "-1", "-i", str(music),
