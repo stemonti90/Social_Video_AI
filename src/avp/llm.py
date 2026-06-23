@@ -13,7 +13,7 @@ import requests
 
 from .config import FunnelConfig, LLMConfig
 from .log import get_logger
-from .models import Script, Segment
+from .models import Script, Segment, dedupe_segments
 
 log = get_logger("avp.llm")
 
@@ -227,6 +227,10 @@ def generate_script(cfg: LLMConfig, topic: str, seconds: int = 60, language: str
         for i, s in enumerate(_segment_dicts(data))
         if str(s.get("narration", "")).strip()
     ]
+    before = len(segments)
+    segments = dedupe_segments(segments)          # drop the model's repeated 'payoff' lines
+    if len(segments) < before:
+        log.info("Removed %d duplicate segment(s) from the generated script.", before - len(segments))
     if not segments:
         raise RuntimeError("Model returned no usable segments. Try re-running or a different model.")
     title = data.get("title") if isinstance(data.get("title"), (str, int, float)) else topic

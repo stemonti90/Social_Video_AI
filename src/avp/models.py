@@ -1,8 +1,27 @@
 """Domain models — the data that flows through the pipeline."""
 from __future__ import annotations
 
+import difflib
+import re
 from dataclasses import asdict, dataclass, field
 from typing import Any
+
+
+def dedupe_segments(segments: list["Segment"]) -> list["Segment"]:
+    """Drop segments whose narration repeats an earlier one (verbatim or near-verbatim, ratio
+    >= 0.9) and re-index. The local model sometimes pads to the requested segment count by
+    repeating its 'payoff' line (e.g. identical segments 8 & 9). Keeps the first occurrence."""
+    kept: list[Segment] = []
+    keys: list[str] = []
+    for seg in segments:
+        norm = re.sub(r"[^a-z0-9]+", " ", (seg.narration or "").lower()).strip()
+        if norm and any(difflib.SequenceMatcher(None, norm, k).ratio() >= 0.9 for k in keys):
+            continue
+        keys.append(norm)
+        kept.append(seg)
+    for i, seg in enumerate(kept):
+        seg.index = i + 1
+    return kept
 
 
 @dataclass

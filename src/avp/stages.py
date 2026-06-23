@@ -21,7 +21,7 @@ from . import tts as tts_mod
 from .config import Config
 from .log import get_logger
 from .manifest import VideoProject
-from .models import Script, Segment
+from .models import Script, Segment, dedupe_segments
 
 log = get_logger("avp.stages")
 
@@ -84,6 +84,10 @@ def load_script(project: VideoProject) -> Script:
     base = Script.from_dict(json.loads(project.script_json.read_text()))
     if project.script_md.exists():
         base = parse_script_md(project.script_md, base)
+    n = len(base.segments)                        # coherence guard at build time (any script source)
+    base.segments = dedupe_segments(base.segments)
+    if len(base.segments) < n:
+        log.info("Coherence check: dropped %d duplicate segment(s) from the script.", n - len(base.segments))
     return base
 
 

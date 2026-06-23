@@ -564,5 +564,29 @@ class OllamaUnloadAll(unittest.TestCase):
         self.assertEqual(sorted(posts), ["knightfall:latest", "qwen3:14b"])   # both evicted
 
 
+class DedupeSegments(unittest.TestCase):
+    """Coherence guard: the local model sometimes pads to the segment count by repeating its
+    payoff line (e.g. identical segments 8 & 9) — dedupe_segments drops the repeats + re-indexes."""
+    def test_removes_duplicates_and_reindexes(self):
+        from avp.models import Segment, dedupe_segments
+        segs = [
+            Segment(index=1, narration="Il 27% dell'universo è materia oscura."),
+            Segment(index=2, narration="Le curve di rotazione rivelano massa mancante."),
+            Segment(index=3, narration="Il 27% invisibile struttura l'universo come un telaio di filamenti."),
+            Segment(index=4, narration="Il 27% invisibile struttura l'universo come un telaio di filamenti."),  # dup
+            Segment(index=5, narration="Want to capture the cosmos yourself? Get AstroStackerPro."),
+        ]
+        out = dedupe_segments(segs)
+        self.assertEqual([s.narration for s in out],
+                         [segs[0].narration, segs[1].narration, segs[2].narration, segs[4].narration])
+        self.assertEqual([s.index for s in out], [1, 2, 3, 4])      # contiguous re-index
+
+    def test_keeps_distinct_similar_segments(self):
+        from avp.models import Segment, dedupe_segments
+        segs = [Segment(index=1, narration="La materia oscura forma il telaio delle galassie."),
+                Segment(index=2, narration="La lente gravitazionale distorce la luce lontana.")]
+        self.assertEqual(len(dedupe_segments(segs)), 2)            # different → both kept
+
+
 if __name__ == "__main__":
     unittest.main()
