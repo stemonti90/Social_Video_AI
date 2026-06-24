@@ -104,13 +104,17 @@ def _safe_duration(audio: Path, text: str) -> float:
         return est
 
 
-def transcribe(audio: Path, text_fallback: str, cfg: STTConfig, language: str = "en") -> list[Word]:
+def transcribe(audio: Path, text_fallback: str, cfg: STTConfig, language: str = "en",
+               duration: float | None = None) -> list[Word]:
     engine = cfg.engine.lower()
+    # even-timing must spread the words over the SPOKEN content only; pass `duration` (content
+    # length, excluding the silent endcard) so captions don't drift into the endcard.
+    dur = duration if duration is not None else _safe_duration(audio, text_fallback)
     try:
         if engine == "whisperx":
-            return _whisperx(audio, cfg, language) or words_even(text_fallback, _safe_duration(audio, text_fallback))
+            return _whisperx(audio, cfg, language) or words_even(text_fallback, dur)
         if engine == "parakeet":
-            return _parakeet(audio, cfg) or words_even(text_fallback, _safe_duration(audio, text_fallback))
+            return _parakeet(audio, cfg) or words_even(text_fallback, dur)
     except Exception as e:  # noqa: BLE001 — any backend issue should not block the build
         log.warning("STT backend %r failed (%s) — using even timing.", engine, e)
-    return words_even(text_fallback, _safe_duration(audio, text_fallback))
+    return words_even(text_fallback, dur)

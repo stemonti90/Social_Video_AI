@@ -25,6 +25,8 @@ from .models import Script, Segment, dedupe_segments
 
 log = get_logger("avp.stages")
 
+ENDCARD_SECONDS = 2.5     # the app endcard is shown (with music) but not spoken, for this long
+
 
 def _json(d: dict) -> str:
     return json.dumps(d, indent=2, ensure_ascii=False)
@@ -131,6 +133,9 @@ def stage_voice(project: VideoProject, cfg: Config) -> Script:
                 out = adir / f"{seg.index:02d}.wav"   # canonical, edge-trimmed segment audio
                 if out.exists():   # idempotent: reuse cached audio (delete audio/ to re-synth)
                     log.info("[%s] segment %d/%d (cached)", prov.name, seg.index, len(script.segments))
+                elif seg.kind == "cta":
+                    ffmpeg.silence(out, ENDCARD_SECONDS)   # endcard is shown, NOT spoken
+                    log.info("[%s] segment %d/%d (silent endcard)", prov.name, seg.index, len(script.segments))
                 else:
                     log.info("[%s] segment %d/%d", prov.name, seg.index, len(script.segments))
                     raw = adir / f"{seg.index:02d}.raw.wav"
@@ -196,9 +201,11 @@ def stage_captions(project: VideoProject, cfg: Config) -> None:
     engines = _produced_engines(project, cfg)
     if not engines:
         raise RuntimeError("No narration audio found; run `voice` first.")
+    content_dur = sum(s.duration for s in script.segments if s.kind != "cta" and s.duration) or None
     for eng in engines:
         narration = project.audio_dir / eng / "narration.wav"
-        words = stt_mod.transcribe(narration, script.narration, cfg.stt, cfg.script.language)
+        words = stt_mod.transcribe(narration, script.narration, cfg.stt, cfg.script.language,
+                                   duration=content_dur)
         captions_mod.write_ass(words, project.root / f"captions.{eng}.ass", cfg.captions, cfg.video)
         (project.root / f"captions.{eng}.json").write_text(
             _json([{"text": w.text, "start": w.start, "end": w.end} for w in words]))
@@ -308,11 +315,15 @@ def _assemble_engine(project: VideoProject, cfg: Config, script: Script, eng: st
 
     items: list[dict] = []
     cap_y = f"main_h-overlay_h-{cfg.captions.margin_v}"
+    # captions cover the SPOKEN content only — the silent endcard gets no subtitle
+    caption_dur = sum(d for seg, d in zip(segs_used, content_durs) if seg.kind != "cta")
     sub_json = (project.root / f"subtitles.{sub_lang}.json") if sub_lang else None
     if want_translated and sub_json and sub_json.exists():   # EN audio + translated phrase subtitles
         trans = {d["index"]: d["text"] for d in json.loads(sub_json.read_text())}
         phrases, t0 = [], 0.0
         for seg, dur in zip(segs_used, content_durs):
+            if seg.kind == "cta":
+                continue                                     # don't subtitle the endcard
             phrases.append((trans.get(seg.index, seg.narration), t0, t0 + dur))
             t0 += dur
         for png, s, e in captions_mod.render_phrase_pngs(
@@ -323,7 +334,7 @@ def _assemble_engine(project: VideoProject, cfg: Config, script: Script, eng: st
         words = [Word(**w) for w in json.loads(cap_json.read_text())]
         for png, s, e in captions_mod.render_caption_pngs(
                 words, project.root / f"captions_png_{eng}", cfg.captions, cfg.video,
-                total_dur=sum(content_durs)):
+                total_dur=caption_dur):
             items.append({"path": png, "start": s, "end": e, "x": "(main_w-overlay_w)/2", "y": cap_y})
     if cfg.video.show_credits:
         cdir = project.root / f"credits_png_{eng}"

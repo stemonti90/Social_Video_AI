@@ -155,22 +155,35 @@ def render_caption_pngs(words: list[Word], out_dir: Path, style: CaptionStyle, v
         ends.append(max(starts[i], nxt))             # contiguous (end == next start), never < start
 
     items = []
+    max_w = width * 0.95                              # the line + plate must stay inside the frame
     for idx, (phrase, active, _s, _e) in enumerate(events):
         img = Image.new("RGBA", (width, band_h), (0, 0, 0, 0))
         draw = ImageDraw.Draw(img)
         tokens = [w.text for w in phrase]
-        space_w = draw.textlength(" ", font=font)
-        widths = [draw.textlength(t, font=font) for t in tokens]
+
+        # Shrink the font for THIS group until the line (+ plate padding ≈ 1.1·fs) fits inside the
+        # frame — otherwise a long word/group ran off both edges (x went negative → clipped/invisible).
+        def _line_total(fnt):
+            sw = draw.textlength(" ", font=fnt)
+            return sum(draw.textlength(t, font=fnt) for t in tokens) + sw * (len(tokens) - 1)
+
+        fs, f = style.fontsize, font
+        while fs > 30 and _line_total(f) + int(fs * 1.1) > max_w:
+            fs = int(fs * 0.9)
+            f = _truetype(fs, style.font)
+
+        space_w = draw.textlength(" ", font=f)
+        widths = [draw.textlength(t, font=f) for t in tokens]
         total = sum(widths) + space_w * (len(tokens) - 1)
         x = (width - total) / 2.0
         y = band_h / 2.0
-        # legibility plate behind the text
-        pad_x, pad_y = int(style.fontsize * 0.55), int(style.fontsize * 0.40)
-        half = style.fontsize * 0.72
+        # legibility plate behind the text (sized to the actual font used)
+        pad_x, pad_y = int(fs * 0.55), int(fs * 0.40)
+        half = fs * 0.72
         draw.rounded_rectangle([x - pad_x, y - half - pad_y, x + total + pad_x, y + half + pad_y],
-                               radius=int(style.fontsize * 0.32), fill=(0, 0, 0, 140))
+                               radius=int(fs * 0.32), fill=(0, 0, 0, 140))
         for k, token in enumerate(tokens):
-            draw.text((x, y), token, font=font, anchor="lm",
+            draw.text((x, y), token, font=f, anchor="lm",
                       fill=(highlight if k == active else primary),
                       stroke_width=style.outline, stroke_fill=(0, 0, 0, 255))
             x += widths[k] + space_w

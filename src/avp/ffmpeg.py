@@ -141,6 +141,14 @@ def black_still(out: Path, w: int, h: int) -> Path:
     return out
 
 
+def silence(out: Path, seconds: float, rate: int = 24000) -> Path:
+    """A silent mono wav (matches Kokoro's 24 kHz) — used for the endcard, which is shown but not
+    spoken, so music keeps playing over it while the voice is silent."""
+    run(["-f", "lavfi", "-t", f"{seconds:.3f}", "-i", f"anullsrc=r={rate}:cl=mono",
+         "-c:a", "pcm_s16le", str(out)])
+    return out
+
+
 def _still_clip_via_pil(src: Path, w: int, h: int, duration: float, fps: int, out: Path) -> None:
     """Cover-crop the image to exactly w×h with PIL (robust, low memory — `draft` decodes big
     JPEGs at reduced size), then encode a static clip with a MINIMAL ffmpeg pass (no scale
@@ -211,7 +219,7 @@ def make_clip(src: Path, duration: float, w: int, h: int, fps: int,
 VOICE_WARM = ("highpass=f=80,"
               "equalizer=f=2800:width_type=q:w=1.5:g=-5,"     # tame harsh 'tinny' presence (stronger)
               "equalizer=f=200:width_type=q:w=1.0:g=2.5,"     # add warmth/body
-              "treble=g=-3.5:f=7500,"                         # high-shelf: soften the metallic top end
+              "treble=g=-4.5:f=7000,"                         # high-shelf: soften the metallic top end
               "acompressor=threshold=-18dB:ratio=2.5:attack=8:release=140")
 
 

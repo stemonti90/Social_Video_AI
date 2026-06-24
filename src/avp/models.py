@@ -48,7 +48,9 @@ class Script:
 
     @property
     def narration(self) -> str:
-        return " ".join(s.narration.strip() for s in self.segments if s.narration.strip())
+        # the CTA endcard is shown, not spoken → keep it out of the spoken/captioned text
+        return " ".join(s.narration.strip() for s in self.segments
+                        if s.narration.strip() and s.kind != "cta")
 
     def to_dict(self) -> dict[str, Any]:
         return asdict(self)
