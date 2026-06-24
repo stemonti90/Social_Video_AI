@@ -241,7 +241,7 @@ def mix_audio(voice: Path, music: Path | None, music_gain_db: float, out: Path,
                 f"[0:a]{VOICE_WARM}[vw];[vw]asplit=2[v0][v1];"          # warmed voice → mix + key
                 # normalize the (often low-energy) generated bed to a steady ~-21 LUFS so it sits
                 # clearly under the voice, +music_gain_db trim, 2 s fade-in
-                f"[1:a]loudnorm=I=-21:TP=-2:LRA=11,volume={music_gain_db}dB,afade=t=in:st=0:d=2[mraw];"
+                f"[1:a]loudnorm=I=-19.5:TP=-2:LRA=11,volume={music_gain_db}dB,afade=t=in:st=0:d=2[mraw];"
                 # GENTLE duck: ~3-4 dB dip under speech, music stays present (no hard pumping)
                 f"[mraw][v0]sidechaincompress=threshold=0.1:ratio=2.5:attack=20:release=400:detection=rms:makeup=1[mduck];"
                 f"{fadeout}"
@@ -251,7 +251,7 @@ def mix_audio(voice: Path, music: Path | None, music_gain_db: float, out: Path,
             )
         else:
             fc = (f"[0:a]{VOICE_WARM},volume=-2dB[vw];"
-                  f"[1:a]loudnorm=I=-21:TP=-2,volume={music_gain_db}dB[m];"
+                  f"[1:a]loudnorm=I=-19.5:TP=-2,volume={music_gain_db}dB[m];"
                   f"[vw][m]amix=inputs=2:duration=first:dropout_transition=2[mx];"
                   f"[mx]{norm}[a]")
         run(["-i", str(voice), "-stream_loop", "-1", "-i", str(music),
