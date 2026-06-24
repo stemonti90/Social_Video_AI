@@ -96,5 +96,7 @@ def get_providers(cfg) -> list[TTSProvider]:
     return [KokoroProvider(lang_code, voice, cfg.tts.device, speed)]
 
 
-def primary_engine(cfg) -> str:
+def primary_engine() -> str:
+    """The single shipped voice engine (Chatterbox was removed). No arg — callers used to pass
+    inconsistent values (cfg vs cfg.tts) that were silently ignored."""
     return "kokoro"

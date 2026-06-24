@@ -10,7 +10,10 @@ import time
 from pathlib import Path
 
 from .config import Config
+from .log import get_logger
 from .models import Attribution
+
+log = get_logger("avp.manifest")
 
 STAGES = ["script", "voice", "footage", "captions", "assemble", "metadata"]
 
@@ -32,14 +35,24 @@ class Manifest:
     @classmethod
     def load_or_create(cls, path: Path) -> "Manifest":
         if path.exists():
-            return cls(path, json.loads(path.read_text()))
+            try:
+                return cls(path, json.loads(path.read_text()))
+            except (json.JSONDecodeError, OSError) as e:
+                # A crash mid-write (SIGSEGV/OOM/Ctrl-C — the exact conditions this pipeline is built
+                # to survive) can truncate manifest.json. Don't make the project unrecoverable: fall
+                # back to a fresh manifest (artifacts on disk stay intact; stages just re-verify).
+                log.warning("manifest %s unreadable (%s) — starting a fresh one.", path, e)
         m = cls(path)
         m.save()
         return m
 
     def save(self) -> None:
         self.path.parent.mkdir(parents=True, exist_ok=True)
-        self.path.write_text(json.dumps(self.data, indent=2, ensure_ascii=False))
+        # Atomic write: a crash mid-write must never truncate the live manifest. Write a sibling tmp
+        # then rename — os.replace is atomic on the same filesystem.
+        tmp = self.path.with_name(self.path.name + ".tmp")
+        tmp.write_text(json.dumps(self.data, indent=2, ensure_ascii=False))
+        tmp.replace(self.path)
 
     def mark(self, stage: str, state: str, **info) -> None:
         entry = {"state": state, "ts": time.strftime("%Y-%m-%d %H:%M:%S")}

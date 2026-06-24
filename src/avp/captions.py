@@ -275,8 +275,8 @@ def render_endcard(path: Path, funnel: FunnelConfig, video: VideoConfig) -> None
         draw.text((cx, y), line, font=tag_f, fill=(190, 214, 255), anchor="mm")
         y += int(w * 0.058)
 
-    # amber CTA pill button
-    cta, cta_f = "Scarica  ·  Link in bio", _truetype(int(w * 0.05))
+    # amber CTA pill button (label configurable per channel language, not hardcoded Italian)
+    cta, cta_f = (getattr(funnel, "cta_button", "") or "Get the app  ·  Link in bio"), _truetype(int(w * 0.05))
     bw, bh, by = int(draw.textlength(cta, font=cta_f) + w * 0.14), int(w * 0.125), int(h * 0.66)
     draw.rounded_rectangle([cx - bw // 2, by - bh // 2, cx + bw // 2, by + bh // 2],
                            radius=bh // 2, fill=amber)

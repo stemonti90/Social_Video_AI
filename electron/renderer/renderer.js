@@ -355,11 +355,11 @@ function classify(line) {
 /* ---------------- preview ---------------- */
 async function loadPreview() {
   if (currentStages.assemble !== "done") return;   // nothing to preview before a build
-  for (const eng of ["kokoro", "chatterbox"]) {
+  for (const eng of ["kokoro"]) {   // Kokoro is the only engine (Chatterbox removed)
     try {
       const url = await API.videoUrl(current, eng);
       const v = $("#vid-" + eng);
-      if (url) { v.src = url; v.load(); }
+      if (url && v) { v.src = url; v.load(); }
     } catch (e) {}
   }
   try {
@@ -491,7 +491,7 @@ function makeMock() {
     publish: async (slug, platforms, go) => ({ plan: platforms.map((p) => ({ platform: p, caption: "…", dry_run: !go })) }),
     getConfig: async () => ({
       script: { language: "en", target_seconds: 75 },
-      tts: { engine: "both", primary: "kokoro" },
+      tts: { engine: "kokoro", primary: "kokoro" },
       stt: { engine: "parakeet" },
       video: { prefer_video: true, transition: 0.4, show_credits: true },
       publish: { platforms: ["youtube", "tiktok", "instagram"] },

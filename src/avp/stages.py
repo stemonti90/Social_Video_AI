@@ -121,7 +121,7 @@ def stage_script(project: VideoProject, cfg: Config, topic: str | None) -> Scrip
 def stage_voice(project: VideoProject, cfg: Config) -> Script:
     script = load_script(project)
     providers = tts_mod.get_providers(cfg)
-    primary = tts_mod.primary_engine(cfg)
+    primary = tts_mod.primary_engine()
     engines: list[str] = []
     for prov in providers:
         adir = project.audio_dir / prov.name
@@ -266,6 +266,7 @@ def _assemble_engine(project: VideoProject, cfg: Config, script: Script, eng: st
     """Render one final mp4 for a single voice engine, with crossfades, credits and loudness."""
     adir = project.audio_dir / eng
     work = project.root / "work" / eng
+    shutil.rmtree(work, ignore_errors=True)   # clear any truncated clips from a prior crashed run
     work.mkdir(parents=True, exist_ok=True)
     gap = cfg.video.segment_gap or 0.0
     trans = cfg.video.transition or 0.0
@@ -393,7 +394,7 @@ def stage_assemble(project: VideoProject, cfg: Config) -> Path:
     # Convenience: <slug>.mp4 mirrors the primary engine — or the first one that actually produced
     # audio, so a failed/unused engine never leaves the canonical file missing.
     produced = _produced_engines(project, cfg)
-    primary = tts_mod.primary_engine(cfg)
+    primary = tts_mod.primary_engine()
     if primary not in produced and produced:
         primary = produced[0]
     primary_out = project.output_for(primary)

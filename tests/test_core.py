@@ -101,9 +101,7 @@ class TtsLanguage(unittest.TestCase):
         self.assertEqual([p.name for p in tts.get_providers(self._cfg("it", "chatterbox"))], ["kokoro"])
 
     def test_primary_is_kokoro(self):
-        c = self._cfg("it", "both")
-        c.tts.primary = "chatterbox"
-        self.assertEqual(tts.primary_engine(c), "kokoro")
+        self.assertEqual(tts.primary_engine(), "kokoro")   # no arg — Kokoro is the only engine
 
     def test_en_uses_native_voice(self):
         self.assertEqual(tts.get_providers(self._cfg("en", "kokoro"))[0].voice, "af_heart")
@@ -404,6 +402,162 @@ class OllamaClientPayload(unittest.TestCase):
         self.assertEqual(out, "{}")
         self.assertEqual(captured["json"]["options"]["num_ctx"], 8192)
         self.assertEqual(captured["timeout"], (10, 300))      # (connect, read) — no 10-min hang
+
+
+class OllamaConstrainedJsonByModel(unittest.TestCase):
+    """Regression (2026-06-24): Gemma collapses to an empty `{}` (format="json") or hangs (schema)
+    under Ollama's constrained decoding, so we MUST NOT send `format` for gemma models — the prompt
+    demands strict JSON and _extract_json digs it out of free text. qwen3 et al. KEEP constrained
+    JSON (guaranteed-parseable output). This guards the per-model branch."""
+    def test_helper_excludes_only_gemma(self):
+        for m in ("gemma4:26b", "gemma4:31b", "Gemma3:12b", " gemma2:9b"):
+            self.assertFalse(llm._supports_constrained_json(m), m)
+        for m in ("qwen3:14b", "qwen3:8b", "ministral:8b", "llama3.1:8b", "mistral"):
+            self.assertTrue(llm._supports_constrained_json(m), m)
+
+    def test_gemma_omits_format_others_keep_it(self):
+        from avp.config import LLMConfig
+
+        class _Resp:
+            def raise_for_status(self):
+                pass
+
+            def json(self):
+                return {"message": {"content": "{}"}}
+
+        def _run(model):
+            captured = {}
+
+            def _fake_post(url, json=None, timeout=None):
+                captured["json"] = json
+                return _Resp()
+
+            with mock.patch("avp.llm.requests.post", _fake_post):
+                llm.OllamaClient(LLMConfig(model=model)).chat("sys", "usr", fmt="json")
+            return captured["json"]
+
+        self.assertNotIn("format", _run("gemma4:26b"))        # constraint dropped → free-text JSON
+        self.assertEqual(_run("qwen3:14b").get("format"), "json")   # constraint kept
+
+
+class DraftRetry(unittest.TestCase):
+    """Regression (2026-06-24): gemma4:26b in free-text mode intermittently returns an EMPTY reply,
+    which crashed the script stage at the first draft. _draft_script_json must retry transient duds
+    (empty / unparseable / segment-less) and only raise when every attempt fails."""
+    _GOOD = '{"title": "T", "segments": [{"narration": "A real fact.", "visual": "v", "keywords": ["k"]}]}'
+
+    def _client(self, replies):
+        seq = list(replies)
+
+        class _C:
+            def chat(self, system, user, fmt="json", temperature=None, num_predict=None):
+                return seq.pop(0)
+        return _C()
+
+    def test_retries_past_empty_and_garbage(self):
+        client = self._client(["", "   ", "not json at all", self._GOOD])
+        data = llm._draft_script_json(client, "sys", "usr", attempts=4)
+        self.assertEqual(llm._segment_dicts(data)[0]["narration"], "A real fact.")
+
+    def test_raises_when_all_attempts_fail(self):
+        client = self._client(["", "{}", "  ", "{}"])           # empty / segment-less only
+        with self.assertRaises(RuntimeError):
+            llm._draft_script_json(client, "sys", "usr", attempts=4)
+
+    def test_retries_past_a_call_exception(self):
+        """A chat() that RAISES (e.g. a cold-reload timeout) must be caught and retried warm,
+        not propagated — regression for the metadata stage timing out on the 16GB MLX reload."""
+        calls = {"n": 0}
+
+        class _C:
+            def chat(self, system, user, fmt="json", temperature=None, num_predict=None):
+                calls["n"] += 1
+                if calls["n"] == 1:
+                    raise RuntimeError("Ollama request failed (read timeout=600)")
+                return DraftRetry._GOOD
+
+        data = llm._draft_script_json(_C(), "sys", "usr", attempts=4)
+        self.assertEqual(calls["n"], 2)                         # retried once, then succeeded
+        self.assertTrue(llm._segment_dicts(data))
+
+
+class ReadTimeoutByModel(unittest.TestCase):
+    """Heavy gemma (16GB MLX) gets a longer read timeout for its slow cold-load; others stay tight."""
+    def test_gemma_gets_more_time(self):
+        self.assertEqual(llm._read_timeout("gemma4:26b-mlx"), 600)
+        self.assertEqual(llm._read_timeout("gemma4:26b"), 600)
+        self.assertEqual(llm._read_timeout("qwen3:14b"), 300)
+        self.assertEqual(llm._read_timeout("ministral:8b"), 300)
+
+
+class BuildStagesOrder(unittest.TestCase):
+    """Optimization 2026-06-24: metadata MUST run before assemble so the 16GB LLM is still warm
+    (assemble's unload_all evicts it) — avoids a ~7-8min cold reload."""
+    def test_metadata_before_assemble(self):
+        from avp import pipeline
+        s = pipeline.BUILD_STAGES
+        self.assertIn("metadata", s)
+        self.assertIn("assemble", s)
+        self.assertLess(s.index("metadata"), s.index("assemble"))
+
+
+class ManifestAtomicResilient(unittest.TestCase):
+    """save() must be atomic (no truncation on crash) and load_or_create must survive a corrupt
+    manifest instead of making the project unrecoverable."""
+    def test_save_is_atomic_and_valid(self):
+        from avp.manifest import Manifest
+        with tempfile.TemporaryDirectory() as td:
+            p = Path(td) / "proj" / "manifest.json"
+            m = Manifest(p)
+            m.mark("voice", "done")
+            self.assertFalse((p.parent / (p.name + ".tmp")).exists())   # tmp renamed away
+            self.assertTrue(p.exists())
+            self.assertEqual(Manifest.load_or_create(p).state("voice"), "done")   # valid on disk
+
+    def test_load_or_create_survives_corruption(self):
+        from avp.manifest import Manifest
+        with tempfile.TemporaryDirectory() as td:
+            p = Path(td) / "manifest.json"
+            p.write_text('{"stages": {"voice": ')                       # truncated JSON
+            m = Manifest.load_or_create(p)                              # must NOT raise
+            self.assertEqual(m.state("voice"), "pending")               # fell back to fresh
+
+
+class ChatNumPredict(unittest.TestCase):
+    """num_predict bounds generation for qwen3/others, but MUST be skipped for gemma: its Ollama MLX
+    runner returns an EMPTY reply when num_predict is set (verified 2026-06-24)."""
+    def _opts(self, model):
+        from avp.config import LLMConfig
+        captured = {}
+
+        class _Resp:
+            def raise_for_status(self): pass
+            def json(self): return {"message": {"content": "{}"}}
+
+        def _fake_post(url, json=None, timeout=None):
+            captured["json"] = json
+            return _Resp()
+
+        with mock.patch("avp.llm.requests.post", _fake_post):
+            llm.OllamaClient(LLMConfig(model=model)).chat("s", "u", num_predict=1536)
+        return captured["json"]["options"]
+
+    def test_applied_for_qwen_skipped_for_gemma(self):
+        self.assertEqual(self._opts("qwen3:14b").get("num_predict"), 1536)   # honoured
+        self.assertNotIn("num_predict", self._opts("gemma4:26b-mlx"))         # skipped (empty-reply bug)
+        self.assertNotIn("num_predict", self._opts("gemma4:26b"))
+
+
+class FootageVerifyDownload(unittest.TestCase):
+    """A 200 returning an HTML error page / truncated body must be rejected so the resolver falls
+    through to the next source instead of feeding ffmpeg a broken file."""
+    def test_rejects_tiny_file(self):
+        from avp import footage
+        with tempfile.TemporaryDirectory() as td:
+            bad = Path(td) / "x.jpg"
+            bad.write_bytes(b"<html>403</html>")                        # < 1KB
+            with self.assertRaises(Exception):
+                footage._verify_download(bad)
 
 
 class CliDelete(unittest.TestCase):

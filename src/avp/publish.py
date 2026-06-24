@@ -66,7 +66,7 @@ def stage_publish(project: VideoProject, cfg: Config, go: bool = False,
     meta_path = project.root / "metadata.json"
     meta = json.loads(meta_path.read_text()) if meta_path.exists() else {}
 
-    eng = cfg.publish.voice or tts_mod.primary_engine(cfg.tts)
+    eng = cfg.publish.voice or tts_mod.primary_engine()
     video = project.output_for(eng)
     if not video.exists():
         video = project.output

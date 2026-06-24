@@ -43,6 +43,19 @@ def _download(url: str, dest: Path) -> None:
     req = urllib.request.Request(_safe_url(url), headers=_UA)
     with urllib.request.urlopen(req, timeout=120) as r, open(dest, "wb") as f:
         shutil.copyfileobj(r, f)
+    _verify_download(dest)   # raise on a truncated body / HTML error page → caller tries next source
+
+
+def _verify_download(dest: Path) -> None:
+    """A 200 can still hand back an HTML error page or a truncated body (NASA/Wikimedia hiccups).
+    Reject those here so the resolver falls through to the next source (NASA→Wikimedia→backdrop)
+    instead of writing a broken file that aborts the whole assemble at clip time."""
+    if not dest.exists() or dest.stat().st_size < 1024:        # < 1KB ≈ error page / empty body
+        raise ValueError(f"download too small/empty: {dest.name} ({dest.stat().st_size if dest.exists() else 0}B)")
+    if dest.suffix.lower() in (".jpg", ".jpeg", ".png"):
+        from PIL import Image                                  # already a dep; lazy to keep import light
+        with Image.open(dest) as im:
+            im.verify()                                        # decodes the header; raises on corruption
 
 
 def _best_media(collection_url: str, video: bool = False) -> str | None:

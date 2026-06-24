@@ -40,6 +40,7 @@ class FunnelConfig:
     url: str = "https://www.astrostackerpro.com/"
     handle: str = "@astrostackerpro"
     cta_line: str = "Want to capture the cosmos yourself? Get {app} — link in the bio."
+    cta_button: str = "Get the app  ·  Link in bio"   # endcard pill label; set per channel language
 
 
 @dataclass

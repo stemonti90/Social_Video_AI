@@ -6,22 +6,17 @@ import sys
 
 from pathlib import Path
 
-from . import stages
 from .config import Config
 from .log import get_logger
 from .manifest import VideoProject
 
 log = get_logger("avp.pipeline")
 
-BUILD_STAGES = ["voice", "footage", "captions", "assemble", "metadata"]
-
-_DISPATCH = {
-    "voice": stages.stage_voice,
-    "footage": stages.stage_footage,
-    "captions": stages.stage_captions,
-    "assemble": stages.stage_assemble,
-    "metadata": stages.stage_metadata,
-}
+# metadata runs BEFORE assemble on purpose: assemble's _free_memory/unload_all evicts the 16GB LLM,
+# so generating metadata afterwards forces a ~7-8min cold reload. Before assemble the model is still
+# warm (the script just used it, within keep_alive), so metadata is near-free and assemble's unload
+# becomes the final RAM reclaim. metadata only needs script.json — no dependency on the rendered mp4.
+BUILD_STAGES = ["voice", "footage", "captions", "metadata", "assemble"]
 
 
 def _run_stage_subprocess(name: str, slug: str, config_path: str, verbose: bool) -> int:
@@ -47,6 +42,9 @@ def build(project: VideoProject, cfg: Config, force: bool = False,
         log.info("▶ %s", name)
         rc = _run_stage_subprocess(name, project.slug, config_path, verbose)
         if rc != 0:
-            project.manifest.mark(name, "failed")
+            # Mark via a FRESH manifest read, not the parent's stale in-memory copy: the stage
+            # subprocess wrote its own manifest (incl. license attributions) this run, and saving
+            # the parent's pre-loop snapshot here would clobber those records.
+            VideoProject(project.slug, cfg).manifest.mark(name, "failed")
             raise RuntimeError(f"stage {name!r} failed (exit {rc}) — see the project log.")
     return project.output

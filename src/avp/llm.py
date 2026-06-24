@@ -63,12 +63,42 @@ def _words_for(seconds: int) -> int:
     return max(20, round(seconds * 2.5))  # ~150 words per minute
 
 
+def _read_timeout(model: str) -> int:
+    """Read-timeout (seconds) for an Ollama call. The 16GB gemma4 MLX build can need several minutes
+    to COLD-LOAD from disk and then generate — notably the metadata stage, which runs after the
+    assemble stage evicted every model under memory pressure, so it reloads from scratch. A 5-min
+    bound (fine for ~10GB qwen3) was too tight and timed metadata out. Give gemma 10 min; others 5."""
+    return 600 if model.lower().lstrip().startswith("gemma") else 300
+
+
+def _supports_constrained_json(model: str) -> bool:
+    """Whether Ollama's constrained-decoding (`format="json"` or a JSON schema) is safe for this
+    model. It is NOT for Gemma: under the grammar constraint gemma4 either collapses to an empty
+    `{}` (format="json") or hangs past the read timeout (schema) — verified on gemma4:26b. For those
+    models we drop the constraint and let `_extract_json` pull the JSON out of a free-text reply
+    (the prompts already demand "STRICT JSON only", and gemma honours that in free-text mode).
+    qwen3 and the other defaults keep constrained JSON, which guarantees parseable output."""
+    return not model.lower().lstrip().startswith("gemma")
+
+
 class OllamaClient:
     def __init__(self, cfg: LLMConfig):
         self.cfg = cfg
 
     def chat(self, system: str, user: str, fmt: str | None = "json",
-             temperature: float | None = None) -> str:
+             temperature: float | None = None, num_predict: int | None = None) -> str:
+        options = {
+            "temperature": self.cfg.temperature if temperature is None else temperature,
+            # num_ctx caps the KV cache: script/metadata prompts are a few K tokens, so 8K is ample
+            # and avoids a multi-GB cache (the model's default 40K context bloated memory → swap).
+            "num_ctx": 8192,
+        }
+        if num_predict and not self.cfg.model.lower().lstrip().startswith("gemma"):
+            # Bound generation so a model that "runs away" past the JSON doesn't burn minutes; callers
+            # size this generously so a real script never truncates. SKIP for gemma: its Ollama MLX
+            # runner returns an EMPTY reply when num_predict is set (verified 2026-06-24) — the prompt
+            # + natural stop bound it anyway. qwen3/others honour num_predict fine.
+            options["num_predict"] = num_predict
         payload = {
             "model": self.cfg.model,
             "messages": [
@@ -76,19 +106,16 @@ class OllamaClient:
                 {"role": "user", "content": user},
             ],
             "stream": False,
-            # num_ctx caps the KV cache: script/metadata prompts are a few K tokens, so 8K is ample
-            # and avoids a multi-GB cache (the model's default 40K context bloated memory → swap).
-            "options": {
-                "temperature": self.cfg.temperature if temperature is None else temperature,
-                "num_ctx": 8192,
-            },
+            "options": options,
         }
-        if fmt:
+        if fmt and _supports_constrained_json(self.cfg.model):
             payload["format"] = fmt
         try:
-            # (connect, read): fail fast (10s) if the daemon is down; bound the read at 5 min so a
-            # restarted/stuck Ollama can't silently hang a build for the old 10-minute timeout.
-            r = requests.post(f"{self.cfg.host}/api/chat", json=payload, timeout=(10, 300))
+            # (connect, read): fail fast (10s) if the daemon is down; bound the read per-model so a
+            # restarted/stuck Ollama can't silently hang a build, while a heavy 16GB model still gets
+            # enough time to cold-load + generate (see _read_timeout).
+            r = requests.post(f"{self.cfg.host}/api/chat", json=payload,
+                              timeout=(10, _read_timeout(self.cfg.model)))
             r.raise_for_status()
         except requests.RequestException as e:
             raise RuntimeError(
@@ -192,6 +219,34 @@ def _segment_dicts(data) -> list[dict]:
 LANG_NAME = {"en": "English", "it": "Italian"}
 
 
+def _draft_script_json(client: "OllamaClient", system: str, user: str,
+                       temperature: float = 0.85, attempts: int = 4,
+                       num_predict: int | None = None) -> dict:
+    """Get a script-shaped JSON draft, retrying transient duds. Local models — notably gemma4 in
+    free-text mode (it can't use Ollama's constrained JSON; see _supports_constrained_json) —
+    intermittently return an EMPTY or unparseable reply. Each call is independent, so a retry
+    self-heals; we accept the first reply that parses to a dict with at least one segment."""
+    last = "no attempts"
+    for i in range(max(1, attempts)):
+        try:
+            raw = client.chat(system, user, temperature=temperature, num_predict=num_predict)
+            if raw and raw.strip():
+                data = _extract_json(raw)
+                if isinstance(data, dict) and _segment_dicts(data):
+                    if i:
+                        log.info("Script draft succeeded on attempt %d/%d.", i + 1, attempts)
+                    return data
+                last = "parsed JSON had no usable segments"
+            else:
+                last = "empty reply"
+        except Exception as e:  # noqa: BLE001 — incl. a request timeout (cold model reload): retry warm
+            last = f"call/parse failed ({e})"
+        log.warning("Script draft attempt %d/%d unusable (%s) — retrying.", i + 1, attempts, last)
+    raise RuntimeError(
+        f"Model returned no usable script after {attempts} attempts ({last}). "
+        "Try re-running or a different model.")
+
+
 def generate_script(cfg: LLMConfig, topic: str, seconds: int = 60, language: str = "en",
                     refine_passes: int = 1) -> Script:
     words = _words_for(seconds)
@@ -200,19 +255,22 @@ def generate_script(cfg: LLMConfig, topic: str, seconds: int = 60, language: str
     name = LANG_NAME.get(language, "English")
     system = SYSTEM + f"\n- Write ALL narration in {name}."
     client = OllamaClient(cfg)
+    # Generation caps sized with wide margin so a real script never truncates, while a runaway model
+    # (gemma free-text can append prose past the JSON) can't burn minutes. The JSON output (narration
+    # + visual + keywords + syntax) is a few× the narration words → words*8 with a 1536 floor.
+    script_cap = max(1536, words * 8)
     log.info("Generating %s script for %r with %s ...", name, topic, cfg.model)
-    data = _extract_json(client.chat(system, user, temperature=0.85))   # creative first draft
-    if not isinstance(data, dict):
-        raise RuntimeError("Model returned non-object JSON for the script. Try re-running or a different model.")
+    data = _draft_script_json(client, system, user, temperature=0.85,   # creative first draft (retried)
+                              num_predict=script_cap)
 
     for n in range(max(0, refine_passes)):     # critique → refine; never regress a usable draft
         try:
             draft = json.dumps(data, ensure_ascii=False)
             critique = client.chat(CRITIQUE_SYSTEM, CRITIQUE_USER.format(script=draft),
-                                   fmt=None, temperature=0.6)
+                                   fmt=None, temperature=0.6, num_predict=1024)
             refined = _extract_json(client.chat(
                 system + REFINE_SUFFIX, REFINE_USER.format(script=draft, critique=critique),
-                temperature=0.4))
+                temperature=0.4, num_predict=script_cap))
             if [s for s in _segment_dicts(refined) if str(s.get("narration", "")).strip()]:
                 data = refined
                 log.info("Script refine pass %d/%d applied.", n + 1, refine_passes)
@@ -281,6 +339,20 @@ def generate_metadata(cfg: LLMConfig, script: Script, funnel: FunnelConfig, lang
     user = META_USER.format(title=script.title, narration=script.narration,
                             app=funnel.app_name, tagline=funnel.tagline, url=funnel.url)
     system = META_SYSTEM + f" Write titles, descriptions and captions in {name} (hashtags may stay English)."
+    client = OllamaClient(cfg)
     log.info("Generating %s metadata with %s ...", name, cfg.model)
-    raw = OllamaClient(cfg).chat(system, user)
-    return _extract_json(raw)
+    last = "no attempts"                       # same gemma free-text flakiness as the script draft;
+    for i in range(4):                          # the metadata stage also COLD-RELOADS a 16GB model
+        try:                                    # (assemble evicted it) → first call may time out, so
+            raw = client.chat(system, user, num_predict=1024)   # catch it & retry warm (see _read_timeout)
+            if raw and raw.strip():
+                data = _extract_json(raw)
+                if isinstance(data, dict) and data:
+                    return data
+                last = "empty/non-object JSON"
+            else:
+                last = "empty reply"
+        except Exception as e:  # noqa: BLE001 — incl. a request timeout on the cold reload
+            last = f"call/parse failed ({e})"
+        log.warning("Metadata attempt %d/4 unusable (%s) — retrying.", i + 1, last)
+    raise RuntimeError(f"Model returned no usable metadata after 4 attempts ({last}).")

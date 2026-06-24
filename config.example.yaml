@@ -3,7 +3,7 @@
 
 llm:
   host: http://localhost:11434
-  model: qwen3:14b        # any installed Ollama model. Zero-download start: use "llama3".
+  model: gemma4:26b-mlx   # any installed Ollama model. Lighter/faster default: "qwen3:14b".
   temperature: 0.7
 
 script:
@@ -17,13 +17,12 @@ funnel:                   # appended as a spoken + on-screen endcard (objective 
   url: https://www.astrostackerpro.com/
   handle: "@astrostackerpro"
   cta_line: "Want to capture the cosmos yourself? Get {app} — link in the bio."
+  cta_button: "Get the app  ·  Link in bio"   # endcard pill label (set to your channel language)
 
 tts:
-  engine: both            # kokoro | chatterbox | both  (both = render one video per voice)
-  primary: kokoro         # <slug>.mp4 mirrors this; with `both` you also get <slug>.kokoro.mp4 + <slug>.chatterbox.mp4
-  kokoro_voice: af_heart  # see Kokoro voices (af_*, am_*, bf_*, bm_*)
-  kokoro_lang: a          # a = American English, b = British
-  chatterbox_ref:         # path to a 5-10s reference wav to CLONE a voice (optional)
+  engine: kokoro          # kokoro (the only shipped engine — Apache-2.0, commercial-clean)
+  kokoro_voice: af_heart  # see Kokoro voices (af_*, am_*, bf_*, bm_*); IT uses if_sara automatically
+  kokoro_lang: a          # a = American English, b = British, i = Italian
   device: mps             # Apple Silicon GPU
 
 stt:                      # for caption word-timing

@@ -67,6 +67,24 @@ def _pipe(device: str = "mps"):
     return _PIPE
 
 
+def _free_pipe() -> None:
+    """Release the ~5GB Stable Audio model after the bed is written. Music is generated once per
+    project (cached to music.wav), so it's never needed twice in a build — and dropping it before
+    assemble's ffmpeg-heavy mux/overlay lowers peak memory, cutting SIGSEGV risk on the 24GB budget."""
+    global _PIPE
+    if _PIPE is None:
+        return
+    _PIPE = None
+    try:
+        import gc
+        import torch
+        gc.collect()
+        if torch.backends.mps.is_available():
+            torch.mps.empty_cache()
+    except Exception as e:  # noqa: BLE001
+        log.warning("Could not free Stable Audio pipeline (%s).", e)
+
+
 def generate_track(out_path: Path, prompt: str | None = None, mood: str = "ethereal",
                    seconds: float = 40.0, steps: int = 160, seed: int = 0,
                    device: str = "mps") -> Path:
@@ -86,4 +104,5 @@ def generate_track(out_path: Path, prompt: str | None = None, mood: str = "ether
     out_path.parent.mkdir(parents=True, exist_ok=True)
     sf.write(str(out_path), audio, sr)
     log.info("Generated %.0fs music (%s) → %s (sr=%d)", seconds, mood, out_path, sr)
+    _free_pipe()      # drop ~5GB before assemble's ffmpeg mux — music is cached, never needed twice
     return out_path
