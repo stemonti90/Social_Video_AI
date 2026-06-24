@@ -439,5 +439,22 @@ dialog.modal::backdrop { background: rgba(4, 7, 14, .72); }
   .stars { animation: none; }
   .view.is-active, .panel.is-active { animation: none; }
   .lamp--active { animation: none; }
+  .buildbar__fill { transition: none; }
   * { scroll-behavior: auto !important; }
+}
+
+/* build progress bar */
+.buildbar { margin: 10px 0 16px; }
+.buildbar__track {
+  height: 8px; background: var(--bg-3); border: 1px solid var(--line);
+  border-radius: 999px; overflow: hidden;
+}
+.buildbar__fill {
+  height: 100%; width: 0%;
+  background: linear-gradient(90deg, var(--amber-d), var(--amber));
+  border-radius: 999px; transition: width 0.5s linear;
+}
+.buildbar__meta {
+  margin: 6px 2px 0; font: 500 12px/1.2 var(--font-mono);
+  color: var(--muted); letter-spacing: 0.02em;
 }

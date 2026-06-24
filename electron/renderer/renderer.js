@@ -4,7 +4,7 @@
 
 const STAGES = [
   ["script", "Copione"], ["voice", "Voce"], ["footage", "Footage"],
-  ["captions", "Sottotitoli"], ["assemble", "Montaggio"], ["metadata", "Metadati"],
+  ["captions", "Sottotitoli"], ["metadata", "Metadati"], ["assemble", "Montaggio"],
 ];
 const $ = (s, r = document) => r.querySelector(s);
 const $$ = (s, r = document) => [...r.querySelectorAll(s)];
@@ -328,21 +328,61 @@ function appendLog(line, cls) {
   pre.appendChild(span);
   pre.scrollTop = pre.scrollHeight;
 }
+// Weighted build progress. `build` runs these 5 stages (script is already done); start/end are
+// cumulative %, `expect` is the typical seconds (measured) so the bar creeps smoothly inside a long
+// stage and the elapsed counter keeps moving — a 4-min assemble never looks frozen.
+const BUILD_PLAN = [
+  { key: "voice", label: "Voce", start: 0, end: 3, expect: 12 },
+  { key: "footage", label: "Footage", start: 3, end: 26, expect: 88 },
+  { key: "captions", label: "Sottotitoli", start: 26, end: 28, expect: 4 },
+  { key: "metadata", label: "Metadati", start: 28, end: 42, expect: 60 },
+  { key: "assemble", label: "Montaggio", start: 42, end: 100, expect: 240 },
+];
+let _progTimer = null, _progStageStart = 0, _progPlan = null;
+
+function _setBar(pct, stageLabel, elapsedS) {
+  const fill = $("#build-progress-fill"), track = $("#build-progress-track");
+  if (fill) fill.style.width = Math.max(0, Math.min(100, pct)).toFixed(1) + "%";
+  if (track) track.setAttribute("aria-valuenow", Math.round(pct));
+  if (stageLabel != null) $("#build-progress-stage").textContent = stageLabel;
+  if (elapsedS != null) $("#build-progress-elapsed").textContent = elapsedS + "s";
+}
+function _stopProgTimer() { if (_progTimer) { clearInterval(_progTimer); _progTimer = null; } }
+function showBuildProgress(show) {
+  const el = $("#build-progress"); if (el) el.hidden = !show;
+  if (!show) { _stopProgTimer(); _setBar(0, "—", 0); }
+}
+function onBuildStage(stage) {
+  _stopProgTimer();
+  _progPlan = BUILD_PLAN.find((p) => p.key === stage) || null;
+  _progStageStart = Date.now();
+  if (!_progPlan) return;
+  _setBar(_progPlan.start, _progPlan.label, 0);
+  _progTimer = setInterval(() => {
+    const elapsed = (Date.now() - _progStageStart) / 1000;
+    const frac = Math.min(elapsed / _progPlan.expect, 1);
+    // creep toward (but never reach) the next stage's start, so completion comes from the next event
+    const pct = _progPlan.start + (_progPlan.end - _progPlan.start) * frac * 0.97;
+    _setBar(pct, _progPlan.label, Math.round(elapsed));
+  }, 500);
+}
+
 async function startBuild() {
   if (busy) return;                  // inhibit duplicate build triggers
   setBusy(true);
   $("#build-state").textContent = "in corso…";
   setConn("build in corso", "active");
   announce("Build avviata");
+  showBuildProgress(true); _setBar(0, "avvio…", 0);
   if (unsubscribeBuild) unsubscribeBuild();
   unsubscribeBuild = API.onBuildEvent((ev) => {
     if (ev.type === "log") appendLog(ev.line, classify(ev.line));
-    else if (ev.type === "stage") { announce("Stadio: " + ev.stage); refreshStatus(); }
-    else if (ev.type === "done") { $("#build-state").textContent = "completato ✓"; setConn("pronto", "done"); announce("Build completata"); }
-    else if (ev.type === "error") { $("#build-state").textContent = "errore"; appendLog(ev.line || "errore", "err"); setConn("errore build", "fail"); announce("Build fallita"); }
+    else if (ev.type === "stage") { onBuildStage(ev.stage); announce("Stadio: " + ev.stage); refreshStatus(); }
+    else if (ev.type === "done") { _stopProgTimer(); _setBar(100, "completato", null); $("#build-state").textContent = "completato ✓"; setConn("pronto", "done"); announce("Build completata"); }
+    else if (ev.type === "error") { _stopProgTimer(); $("#build-state").textContent = "errore"; appendLog(ev.line || "errore", "err"); setConn("errore build", "fail"); announce("Build fallita"); }
   });
   try { await API.build(current); }
-  catch (e) { appendLog(String(e), "err"); $("#build-state").textContent = "errore"; setConn("errore build", "fail"); }
+  catch (e) { appendLog(String(e), "err"); $("#build-state").textContent = "errore"; setConn("errore build", "fail"); _stopProgTimer(); }
   finally { setBusy(false); refreshStatus(); loadPreview(); }
 }
 function classify(line) {
@@ -402,6 +442,7 @@ async function loadSettings() {
   try { c = await API.getConfig(); } catch (e) {}
   const set = (id, v) => { const el = $("#" + id); if (el && v != null) el.value = v; };
   set("set-language", (c.script || {}).language);
+  set("set-model", (c.llm || {}).model);
   set("set-engine", (c.tts || {}).engine);
   set("set-primary", (c.tts || {}).primary);
   set("set-seconds", (c.script || {}).target_seconds);
@@ -425,6 +466,7 @@ $("#settings-form").addEventListener("submit", async (e) => {
   e.preventDefault();
   const plats = ["youtube", "tiktok", "instagram"].filter((p) => $("#set-pf-" + p).checked);
   const patch = {
+    llm: { model: $("#set-model").value },
     script: { language: $("#set-language").value, target_seconds: Number($("#set-seconds").value) || 75,
               subtitle_language: $("#set-subtitle-language").value || null,
               refine_passes: Number($("#set-refine").value) || 0 },
@@ -490,6 +532,7 @@ function makeMock() {
     videoUrl: async () => "",
     publish: async (slug, platforms, go) => ({ plan: platforms.map((p) => ({ platform: p, caption: "…", dry_run: !go })) }),
     getConfig: async () => ({
+      llm: { model: "gemma4:26b-mlx" },
       script: { language: "en", target_seconds: 75 },
       tts: { engine: "kokoro", primary: "kokoro" },
       stt: { engine: "parakeet" },

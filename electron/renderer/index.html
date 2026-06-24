@@ -98,6 +98,13 @@
               </select>
             </div>
             <div class="field">
+              <label class="field__label" for="set-model">Modello copione (qualità / velocità)</label>
+              <select class="field__input" id="set-model">
+                <option value="gemma4:26b-mlx">Gemma 4 26B · MLX — qualità (~13 min)</option>
+                <option value="qwen3:14b">Qwen3 14B — veloce (~9 min)</option>
+              </select>
+            </div>
+            <div class="field">
               <label class="field__label" for="set-engine">Voce</label>
               <select class="field__input" id="set-engine">
                 <option value="kokoro">Kokoro</option>
@@ -216,8 +223,15 @@
           <!-- PANEL: BUILD -->
           <div class="panel" role="tabpanel" id="panel-build" aria-labelledby="tab-build" tabindex="0" hidden>
             <h2 class="panel__title">Build</h2>
-            <p class="panel__hint">Voce → footage → sottotitoli → montaggio → metadata. Tutto in locale. Avvia dal pulsante <em>Avvia build</em> in basso.</p>
+            <p class="panel__hint">Voce → footage → sottotitoli → metadata → montaggio. Tutto in locale. Avvia dal pulsante <em>Avvia build</em> in basso.</p>
             <p class="inline-status" id="build-state" role="status" aria-live="polite">In attesa di avvio…</p>
+            <div class="buildbar" id="build-progress" hidden>
+              <div class="buildbar__track" role="progressbar" aria-labelledby="build-progress-stage"
+                   aria-valuemin="0" aria-valuemax="100" aria-valuenow="0" id="build-progress-track">
+                <div class="buildbar__fill" id="build-progress-fill"></div>
+              </div>
+              <p class="buildbar__meta"><span id="build-progress-stage">—</span> · <span id="build-progress-elapsed">0s</span></p>
+            </div>
             <h3 class="log__title" id="log-title">Log di build</h3>
             <pre class="log" id="build-log" role="log" aria-live="polite" aria-labelledby="log-title" tabindex="0"></pre>
           </div>
