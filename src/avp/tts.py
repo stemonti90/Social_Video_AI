@@ -79,72 +79,22 @@ class KokoroProvider(TTSProvider):
         sf.write(str(out_path), data, self.sample_rate)
 
 
-class ChatterboxProvider(TTSProvider):
-    name = "chatterbox"
-
-    def __init__(self, cfg: TTSConfig):
-        self.device = cfg.device
-        self.ref = cfg.chatterbox_ref
-        self._model = None
-
-    def _load(self):
-        if self._model is None:
-            from chatterbox.tts import ChatterboxTTS  # lazy
-            self._model = ChatterboxTTS.from_pretrained(device=self.device)
-            self.sample_rate = self._model.sr
-        return self._model
-
-    def synthesize(self, text: str, out_path: Path) -> None:
-        import torch
-        import torchaudio
-
-        model = self._load()
-        wavs = []
-        for chunk in split_sentences(text):
-            kwargs = {"audio_prompt_path": self.ref} if self.ref else {}
-            wav = None
-            for attempt in range(3):   # MPS sampling occasionally yields inf/nan — retry
-                try:
-                    wav = model.generate(chunk, **kwargs)
-                    break
-                except Exception:  # noqa: BLE001
-                    if attempt == 2:
-                        raise
-            wavs.append(wav)
-        wav = torch.cat(wavs, dim=-1) if len(wavs) > 1 else wavs[0]
-        torchaudio.save(str(out_path), wav.cpu(), model.sr)
-
-
-# language -> (Kokoro lang_code, default voice). Chatterbox is English-only.
+# language -> (Kokoro lang_code, default voice). EN voice (af_heart) is native; IT (if_sara) is
+# the Italian voice. For an EN-voice video with Italian subtitles set language=en + subtitle_language=it.
 LANG_KOKORO = {"en": ("a", "af_heart"), "it": ("i", "if_sara")}
 
 
 def get_providers(cfg) -> list[TTSProvider]:
-    """cfg is the full Config. Engines depend on tts.engine AND the script language."""
+    """Kokoro only (Apache-2.0, commercial-clean). Chatterbox was removed (English-only + flaky on
+    MPS); any legacy engine value just falls back to Kokoro."""
     language = getattr(cfg.script, "language", "en")
     lang_code, voice = LANG_KOKORO.get(language, LANG_KOKORO["en"])
     # Italian reads more naturally a touch slower; an explicit cfg.tts.speed always wins.
     speed = cfg.tts.speed if cfg.tts.speed != 1.0 else (0.94 if language == "it" else 1.0)
-    kok = lambda: KokoroProvider(lang_code, voice, cfg.tts.device, speed)  # noqa: E731
-    cbx = lambda: ChatterboxProvider(cfg.tts)                             # noqa: E731
-    engine = cfg.tts.engine.lower()
-    if engine == "both":
-        provs = [kok()]
-        if language == "en":
-            provs.append(cbx())
-        else:
-            log.info("Chatterbox is English-only — using Kokoro for language %r.", language)
-        return provs
-    if engine == "chatterbox":
-        if language != "en":
-            log.info("Chatterbox is English-only — using Kokoro for language %r.", language)
-            return [kok()]
-        return [cbx()]
-    if engine == "kokoro":
-        return [kok()]
-    raise ValueError(f"Unknown tts.engine {cfg.tts.engine!r} (use kokoro | chatterbox | both)")
+    if cfg.tts.engine.lower() not in ("kokoro", ""):
+        log.info("Voice engine %r is no longer available — using Kokoro.", cfg.tts.engine)
+    return [KokoroProvider(lang_code, voice, cfg.tts.device, speed)]
 
 
 def primary_engine(cfg) -> str:
-    names = [p.name for p in get_providers(cfg)]
-    return cfg.tts.primary if cfg.tts.primary in names else (names[0] if names else "kokoro")
+    return "kokoro"

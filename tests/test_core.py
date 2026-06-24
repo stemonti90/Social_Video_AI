@@ -96,17 +96,18 @@ class TtsLanguage(unittest.TestCase):
         c.tts.engine = engine
         return c
 
-    def test_en_both(self):
-        self.assertEqual([p.name for p in tts.get_providers(self._cfg("en", "both"))],
-                         ["kokoro", "chatterbox"])
+    def test_only_kokoro(self):                          # Chatterbox removed → always Kokoro
+        self.assertEqual([p.name for p in tts.get_providers(self._cfg("en", "both"))], ["kokoro"])
+        self.assertEqual([p.name for p in tts.get_providers(self._cfg("it", "chatterbox"))], ["kokoro"])
 
-    def test_it_both_skips_chatterbox(self):
-        self.assertEqual([p.name for p in tts.get_providers(self._cfg("it", "both"))], ["kokoro"])
-
-    def test_primary_falls_back_for_it(self):
+    def test_primary_is_kokoro(self):
         c = self._cfg("it", "both")
         c.tts.primary = "chatterbox"
         self.assertEqual(tts.primary_engine(c), "kokoro")
+
+    def test_en_uses_native_voice(self):
+        self.assertEqual(tts.get_providers(self._cfg("en", "kokoro"))[0].voice, "af_heart")
+        self.assertEqual(tts.get_providers(self._cfg("it", "kokoro"))[0].voice, "if_sara")
 
 
 class ScriptMdRoundtrip(unittest.TestCase):
