@@ -85,6 +85,10 @@ def _build_parser() -> argparse.ArgumentParser:
     sub.add_parser("config-get", parents=[common], help="print the current config as JSON")
     cs = sub.add_parser("config-set", parents=[common], help="merge a JSON patch into config.yaml")
     cs.add_argument("patch", help="JSON object to merge into config.yaml")
+
+    ab = sub.add_parser("ab", parents=[common], help="A/B compare fp16 vs fp32 and voice variants")
+    ab.add_argument("--kinds", nargs="*", default=["fp16", "voice"], help="which comparisons to run")
+    ab.add_argument("--text", default=None, help="sample line to synthesize for the voice A/B")
     return p
 
 
@@ -186,6 +190,16 @@ def main(argv: list[str] | None = None) -> int:
             return 1
         _config_set(args.config, patch)
         print("ok")
+        return 0
+
+    if args.cmd == "ab":
+        from pathlib import Path
+        from . import abtest
+        out_dir = Path(cfg.paths.projects_dir).expanduser() / "_ab"
+        setup_logging(level, out_dir / "ab.log")
+        text = args.text or "Otto pianeti orbitano il Sole a velocità molto diverse."
+        report = abtest.run_ab(out_dir, cfg, text=text, kinds=tuple(args.kinds))
+        print(json.dumps(report, indent=2, ensure_ascii=False))
         return 0
 
     if args.cmd == "new":

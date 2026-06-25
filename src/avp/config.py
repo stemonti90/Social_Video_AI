@@ -29,6 +29,7 @@ class ScriptConfig:
     language: str = "en"         # en | it — language of the spoken narration
     subtitle_language: str | None = None   # if set & != language → translated phrase subtitles (e.g. EN audio, IT subs)
     refine_passes: int = 1       # extra LLM critique→refine passes on the script (0 = single draft)
+    normalize_numbers: bool = True   # rewrite digits → spoken words for TTS ("85%"→"ottantacinque per cento")
 
 
 @dataclass
@@ -69,7 +70,7 @@ class VideoConfig:
     music: str | None = None     # path to a royalty-free track; if None, auto-pick from music_dir
     music_gain_db: float = 0.0     # trim on the loudness-normalized (~-23 LUFS) music bed; 0 = audible under the voice
     music_source: str = "library"  # library (assets/music) | generate (Stable Audio Open) | none
-    music_mood: str = "ethereal"   # ethereal | cinematic | dark  (when music_source='generate')
+    music_mood: str = "ethereal"   # auto (classify from script tone) | ethereal | cinematic | dark | tense | emotional | documentary
     music_steps: int = 100         # Stable Audio diffusion steps (higher = better, slower)
     music_seconds: float = 45.0    # generated bed length (Stable Audio Open max ≈47s; looped to fit)
     ken_burns: bool = True
@@ -81,6 +82,8 @@ class VideoConfig:
     prefer_video: bool = True    # use NASA *video* clips when available, else stills + Ken Burns
     video_seek: float = 3.0      # skip N seconds into video clips (avoids NASA title cards)
     show_credits: bool = True    # burn a small source credit per clip
+    footage_relevance_floor: float = 0.35   # min normalized relevance (0-1) of a visual to its segment; below → re-search then fallback
+    footage_strict: bool = False            # strict: refuse a below-floor visual outright (generated backdrop) vs best-effort
 
 
 @dataclass

@@ -142,6 +142,7 @@ async function doDelete(slug, label) {
     if (current === slug) { current = null; showView("projects"); }
     announce(`Progetto ${label} eliminato.`);
     await loadProjects();
+    const r = $("#refresh-projects"); if (r) r.focus();   // move focus off the now-gone card
   } catch (e) {
     console.error(e);
     announce(`Errore nell'eliminare ${label}: ${(e && e.message) || e}`);
@@ -172,21 +173,36 @@ function confirmDelete(slug, label) {
 }
 
 /* ---------------- new project ---------------- */
+// Inline status helper: green success (auto-clears after 3s), red error (persists), plain otherwise.
+function setStatus(sel, text, kind) {
+  const el = $(sel); if (!el) return;
+  el.textContent = text;
+  el.classList.remove("inline-status--ok", "inline-status--err");
+  if (kind) el.classList.add("inline-status--" + kind);
+  if (kind === "ok") setTimeout(() => {
+    if (el.textContent === text) { el.textContent = ""; el.classList.remove("inline-status--ok"); }
+  }, 3000);
+}
+
 $("#new-form").addEventListener("submit", async (e) => {
   e.preventDefault();
   const topic = $("#topic").value.trim();
   if (!topic) return;
   const btn = $("#generate-btn");
-  btn.disabled = true; btn.textContent = "Genero…"; announce("Generazione del copione in corso");
+  btn.disabled = true; btn.setAttribute("aria-busy", "true"); btn.textContent = "Genero…";
+  setStatus("#new-status", "Scrivo il copione… può richiedere qualche minuto", null);
+  announce("Generazione del copione in corso");
   try {
     const res = await API.newProject(topic);
     await openProject(res.slug, res.title);
+    setStatus("#new-status", "", null);
     selectTab("tab-review");
     announce("Copione pronto per la revisione");
   } catch (err) {
-    announce("Errore nella generazione: " + err.message);
+    setStatus("#new-status", "Errore nella generazione: " + ((err && err.message) || err), "err");
+    announce("Errore nella generazione");
   } finally {
-    btn.disabled = false; btn.textContent = "Genera copione";
+    btn.disabled = false; btn.removeAttribute("aria-busy"); btn.textContent = "Genera copione";
   }
 });
 
@@ -198,8 +214,10 @@ async function openProject(slug, title) {
   showView("project");
   renderStageRail({});
   selectTab("tab-review");
-  $("#build-log").textContent = "";
-  $("#script-status").textContent = "";
+  const blog = $("#build-log");                       // re-seed the placeholder (don't leave it blank)
+  blog.textContent = "Il log apparirà qui all'avvio della build.";
+  blog.dataset.seeded = "1";
+  setStatus("#script-status", "", null);
   await loadScript();
   refreshStatus();
 }
@@ -287,6 +305,7 @@ function updateWizardFoot(id) {
   $("#nav-back").textContent = i === 0 ? "← Progetti" : "← Indietro";
   $("#nav-back").disabled = busy;
   $("#nav-next").disabled = busy || i === STEPS.length - 1;
+  $("#nav-next").title = i === STEPS.length - 1 ? "Ultimo passo" : (busy ? "Attendi: operazione in corso" : "");
   const prim = $("#nav-primary");
   prim.textContent = STEP_PRIMARY[id].label;
   prim.onclick = STEP_PRIMARY[id].run;
@@ -309,12 +328,17 @@ async function loadScript() {
   try { $("#script-text").value = await API.readScript(current); }
   catch (e) { $("#script-text").value = ""; }
 }
-$("#reload-script").addEventListener("click", () => { loadScript(); $("#script-status").textContent = "Ricaricato."; });
+$("#reload-script").addEventListener("click", () => { loadScript(); setStatus("#script-status", "Ricaricato.", "ok"); });
 async function saveAndBuild() {
   if (busy) return;
-  $("#script-status").textContent = "Salvataggio…";
-  try { await API.saveScript(current, $("#script-text").value); } catch (e) {}
-  $("#script-status").textContent = "Salvato. Avvio build.";
+  setStatus("#script-status", "Salvataggio…", null);
+  try {
+    await API.saveScript(current, $("#script-text").value);
+  } catch (e) {                                   // do NOT build stale text on a failed save
+    setStatus("#script-status", "Errore nel salvataggio — build non avviata: " + ((e && e.message) || e), "err");
+    return;
+  }
+  setStatus("#script-status", "Salvato. Avvio build.", null);
   selectTab("tab-build");
   startBuild();
 }
@@ -322,11 +346,13 @@ async function saveAndBuild() {
 /* ---------------- build ---------------- */
 function appendLog(line, cls) {
   const pre = $("#build-log");
+  if (pre.dataset.seeded === "1") { pre.textContent = ""; delete pre.dataset.seeded; }  // clear placeholder
+  const atBottom = pre.scrollHeight - pre.clientHeight - pre.scrollTop < 40;   // measure BEFORE append
   const span = document.createElement("span");
   if (cls) span.className = cls;
   span.textContent = line + "\n";
   pre.appendChild(span);
-  pre.scrollTop = pre.scrollHeight;
+  if (atBottom) pre.scrollTop = pre.scrollHeight;   // only auto-follow if the user was already at the end
 }
 // Weighted build progress. `build` runs these 5 stages (script is already done); start/end are
 // cumulative %, `expect` is the typical seconds (measured) so the bar creeps smoothly inside a long
@@ -427,11 +453,11 @@ async function doPublish(go) {
   try {
     const res = await API.publish(current, platforms, go);
     $("#publish-plan").textContent = JSON.stringify(res.plan || res, null, 2);
-    $("#publish-state").textContent = go ? "inviato ✓" : "piano pronto (dry run)";
+    setStatus("#publish-state", go ? "inviato ✓" : "piano pronto (dry run)", "ok");
     announce(go ? "Pubblicazione inviata" : "Piano di pubblicazione pronto");
   } catch (e) {
     $("#publish-plan").textContent = String(e);
-    $("#publish-state").textContent = "errore";
+    setStatus("#publish-state", "errore", "err");
   } finally { setBusy(false); }
 }
 $("#publish-btn").addEventListener("click", () => doPublish(true));
@@ -481,10 +507,10 @@ $("#settings-form").addEventListener("submit", async (e) => {
   $("#settings-status").textContent = "Salvataggio…";
   try {
     await API.setConfig(patch);
-    $("#settings-status").textContent = "Salvato ✓";
+    setStatus("#settings-status", "Salvato ✓", "ok");
     announce("Impostazioni salvate");
   } catch (err) {
-    $("#settings-status").textContent = "Errore: " + ((err && err.message) || err);
+    setStatus("#settings-status", "Errore: " + ((err && err.message) || err), "err");
   }
 });
 

@@ -71,6 +71,15 @@ class SttEven(unittest.TestCase):
     def test_words_even_empty(self):
         self.assertEqual(stt.words_even("", 5.0), [])
 
+    def test_weighted_by_length_and_punctuation(self):
+        # a long word gets more on-screen time than a short one; a comma adds a hold
+        w = {x.text: (x.end - x.start) for x in stt.words_even("a milleseicentosessantacinque", 4.0)}
+        self.assertLess(w["a"], w["milleseicentosessantacinque"])
+        short = stt.words_even("via via via", 3.0)[0]
+        held = stt.words_even("via, via via", 3.0)[0]              # trailing comma → longer hold
+        self.assertGreater(held.end - held.start, short.end - short.start)
+        self.assertAlmostEqual(stt.words_even("a b c", 3.0)[-1].end, 3.0)   # still fills duration
+
 
 class CaptionsTime(unittest.TestCase):
     def test_ass_time(self):
@@ -205,11 +214,12 @@ class FootageDedup(unittest.TestCase):
         ]
         with mock.patch.object(footage, "nasa_candidates", lambda q, media_type="image", limit=30: cands):
             used = set()
-            first = footage._pick(["mars"], used, ["mars"], "image")
+            first, rel1 = footage._pick(["mars"], used, ["mars"], "image")   # _pick → (candidate, relevance)
             self.assertEqual(first["nasa_id"], "A1")            # best relevance for "mars"
+            self.assertGreater(rel1, 0.0)
             used.add(first["nasa_id"])
             used.add(footage._title_key(first["title"]))         # as _try_nasa does
-            second = footage._pick(["mars"], used, ["mars"], "image")
+            second, _ = footage._pick(["mars"], used, ["mars"], "image")
             # A1 (id used) and A2 (same title) both excluded → must move on to a different photo
             self.assertEqual(second["nasa_id"], "B1")
             self.assertNotEqual(footage._title_key(second["title"]),
@@ -558,6 +568,114 @@ class FootageVerifyDownload(unittest.TestCase):
             bad.write_bytes(b"<html>403</html>")                        # < 1KB
             with self.assertRaises(Exception):
                 footage._verify_download(bad)
+
+
+class NumberNormalization(unittest.TestCase):
+    """speechText: digits → spoken Italian/English so the TTS never reads numbers letter-by-letter."""
+    def test_italian_cardinals_and_units(self):
+        from avp import normalize as nz
+        cases = {
+            "1000": "mille", "2500": "duemilacinquecento", "1665": "milleseicentosessantacinque",
+            "2025": "duemilaventicinque", "21": "ventuno", "28": "ventotto", "23": "ventitré",
+            "85%": "ottantacinque per cento", "3,5%": "tre virgola cinque per cento",
+            "24 km": "ventiquattro chilometri", "1.000.000": "un milione",
+            "€50": "cinquanta euro", "$10": "dieci dollari",
+        }
+        for inp, exp in cases.items():
+            self.assertEqual(nz.to_speech(inp, "it"), exp, inp)
+
+    def test_prompt_example_sentences(self):
+        from avp import normalize as nz
+        self.assertEqual(
+            nz.to_speech("Nel 2025 un wallet ha trasformato 1000 euro in 3,5 milioni.", "it"),
+            "Nel duemilaventicinque un wallet ha trasformato mille euro in tre virgola cinque milioni.")
+        self.assertEqual(
+            nz.to_speech("La sonda si trovava a 24 km dalla superficie.", "it"),
+            "La sonda si trovava a ventiquattro chilometri dalla superficie.")
+
+    def test_spaces_preserved_and_idempotent(self):
+        from avp import normalize as nz
+        once = nz.to_speech("Visto a 24 km nel 1665.", "it")
+        self.assertNotIn("a24", once)                       # leading space never eaten
+        self.assertEqual(nz.to_speech(once, "it"), once)    # already-spoken text is unchanged
+
+    def test_english_and_disable_flag(self):
+        from avp import normalize as nz
+        self.assertEqual(nz.to_speech("1000 km", "en"), "one thousand kilometers")
+        self.assertEqual(nz.segment_speech("85% of it", "it", normalize=False), "85% of it")
+        self.assertNotIn("1665", nz.segment_speech("anno 1665", "it", normalize=True))
+
+
+class MusicMoodClassifier(unittest.TestCase):
+    """The bed mood is classified from the script tone (deterministic, auditable) — never a cheerful
+    bed on an ominous script."""
+    def test_maps_tone_to_mood(self):
+        from avp import music
+        self.assertEqual(music.classify_mood("Una collisione imminente, impatto in pochi minuti.", "it")["mood"], "tense")
+        self.assertEqual(music.classify_mood("Un buco nero oscuro divora ogni cosa nel vuoto.", "it")["mood"], "dark")
+        self.assertEqual(music.classify_mood("Una supernova colossale, miliardi di stelle, esplosione epica.", "it")["mood"], "cinematic")
+        self.assertEqual(music.classify_mood("", "it")["mood"], "documentary")   # neutral fallback
+
+    def test_decision_is_auditable(self):
+        from avp import music
+        d = music.classify_mood("Un buco nero misterioso.", "it")
+        self.assertIn("rationale", d)
+        self.assertIn("params", d)
+        self.assertIn("bpm", d["params"])           # musical params present for logging
+        self.assertIn(d["mood"], music.PROMPTS)      # every mood has a Stable Audio prompt
+
+
+class FootageRelevanceFloor(unittest.TestCase):
+    """Visual↔segment relevance is normalized 0-1 and gated by a floor; a generic filler scores low."""
+    def test_relevance_normalized_and_ranks(self):
+        from avp import footage as F
+        terms = ["jupiter", "storm"]
+        hi = F._relevance({"title": "jupiter great red spot storm", "description": ""}, terms)
+        lo = F._relevance({"title": "deep space nebula", "description": ""}, terms)
+        self.assertTrue(0.0 <= lo <= hi <= 1.0)
+        self.assertGreater(hi, lo)
+        self.assertGreaterEqual(hi, 0.9)                 # both terms in the title
+        self.assertEqual(F._relevance({}, []), 0.5)      # no terms → neutral, never blocks
+
+    def test_diagram_is_capped_below_photo(self):
+        from avp import footage as F
+        terms = ["jupiter", "storm"]
+        diagram = F._relevance({"title": "jupiter storm diagram chart", "description": ""}, terms)
+        photo = F._relevance({"title": "jupiter storm closeup", "description": ""}, terms)
+        self.assertLess(diagram, photo)
+
+
+class AbRecommend(unittest.TestCase):
+    """The A/B harness chooses fp16 only when it's measurably faster AND lighter; otherwise the safe
+    default — readable without looking at the code."""
+    def test_fp16_chosen_when_faster_and_lighter(self):
+        from avp import abtest
+        r = abtest.recommend_fp16([
+            {"variant": "float32", "ok": True, "seconds": 120, "peak_mb": 6000},
+            {"variant": "float16", "ok": True, "seconds": 90, "peak_mb": 3200},
+        ])
+        self.assertEqual(r["choice"], "float16")
+
+    def test_fp32_when_fp16_not_better(self):
+        from avp import abtest
+        r = abtest.recommend_fp16([
+            {"variant": "float32", "ok": True, "seconds": 100, "peak_mb": 6000},
+            {"variant": "float16", "ok": True, "seconds": 130, "peak_mb": 3000},   # lighter but slower
+        ])
+        self.assertEqual(r["choice"], "float32")
+
+    def test_all_failed_keeps_current(self):
+        from avp import abtest
+        self.assertIsNone(abtest.recommend_fp16([{"variant": "float16", "ok": False}])["choice"])
+        self.assertIsNone(abtest.recommend_voice([{"variant": "current", "ok": False}])["choice"])
+
+    def test_voice_picks_fastest_clean_render(self):
+        from avp import abtest
+        r = abtest.recommend_voice([
+            {"variant": "current", "ok": True, "seconds": 9, "audio_seconds": 3.1},
+            {"variant": "slower", "ok": True, "seconds": 12, "audio_seconds": 3.6},
+        ])
+        self.assertEqual(r["choice"], "current")
 
 
 class CliDelete(unittest.TestCase):

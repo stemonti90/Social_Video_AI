@@ -82,6 +82,7 @@
             <p class="field__help" id="topic-help">In inglese il contenuto del canale; qui scrivi pure in italiano o inglese.</p>
           </div>
           <button type="submit" class="btn btn--primary" id="generate-btn">Genera copione</button>
+          <span class="inline-status" id="new-status" role="status" aria-live="polite"></span>
         </form>
       </section>
 
@@ -153,9 +154,13 @@
             <div class="field">
               <label class="field__label" for="set-music-mood">Mood musica</label>
               <select class="field__input" id="set-music-mood">
+                <option value="auto">Auto (dal tono del copione)</option>
                 <option value="ethereal">Eterea</option>
-                <option value="cinematic">Cinematografica</option>
-                <option value="dark">Cupa</option>
+                <option value="cinematic">Cinematografica / epica</option>
+                <option value="dark">Cupa / misteriosa</option>
+                <option value="tense">Tesa / urgente</option>
+                <option value="emotional">Emotiva</option>
+                <option value="documentary">Documentaristica / neutra</option>
               </select>
             </div>
           </div>
@@ -233,7 +238,7 @@
               <p class="buildbar__meta"><span id="build-progress-stage">—</span> · <span id="build-progress-elapsed">0s</span></p>
             </div>
             <h3 class="log__title" id="log-title">Log di build</h3>
-            <pre class="log" id="build-log" role="log" aria-live="polite" aria-labelledby="log-title" tabindex="0"></pre>
+            <pre class="log" id="build-log" role="log" aria-live="polite" aria-labelledby="log-title" tabindex="0" data-seeded="1">Il log apparirà qui all'avvio della build.</pre>
           </div>
 
           <!-- PANEL: PREVIEW -->
@@ -280,7 +285,7 @@
           <span class="wizard-foot__step" id="wizard-step" aria-live="polite">Passo 1 di 4 · Revisione</span>
           <span class="wizard-foot__spacer"></span>
           <button type="button" class="btn btn--primary" id="nav-primary">Salva e monta</button>
-          <button type="button" class="btn" id="nav-next">Avanti →</button>
+          <button type="button" class="btn btn--ghost" id="nav-next">Avanti →</button>
         </div>
       </section>
     </main>

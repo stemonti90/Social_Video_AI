@@ -16,6 +16,7 @@ from . import captions as captions_mod
 from . import ffmpeg
 from . import footage as footage_mod
 from . import llm
+from . import normalize as normalize_mod
 from . import stt as stt_mod
 from . import tts as tts_mod
 from .config import Config
@@ -139,7 +140,10 @@ def stage_voice(project: VideoProject, cfg: Config) -> Script:
                 else:
                     log.info("[%s] segment %d/%d", prov.name, seg.index, len(script.segments))
                     raw = adir / f"{seg.index:02d}.raw.wav"
-                    prov.synthesize(seg.narration, raw)
+                    # speechText: digits → spoken words so the TTS never reads "1665" letter-by-letter
+                    speech = normalize_mod.segment_speech(
+                        seg.narration, cfg.script.language, cfg.script.normalize_numbers)
+                    prov.synthesize(speech, raw)
                     if do_trim:
                         try:
                             ffmpeg.trim_silence(raw, out)   # kill per-segment dead air at the source
@@ -202,14 +206,34 @@ def stage_captions(project: VideoProject, cfg: Config) -> None:
     if not engines:
         raise RuntimeError("No narration audio found; run `voice` first.")
     content_dur = sum(s.duration for s in script.segments if s.kind != "cta" and s.duration) or None
+    # The audio was synthesized from speechText (digits→words), so the even-timing fallback must
+    # split the SAME speechText — otherwise karaoke words wouldn't match what's heard.
+    speech_fallback = " ".join(
+        normalize_mod.segment_speech(s.narration, cfg.script.language, cfg.script.normalize_numbers)
+        for s in script.segments if s.narration.strip() and s.kind != "cta")
     for eng in engines:
         narration = project.audio_dir / eng / "narration.wav"
-        words = stt_mod.transcribe(narration, script.narration, cfg.stt, cfg.script.language,
-                                   duration=content_dur)
+        words, method = stt_mod.transcribe(narration, speech_fallback, cfg.stt, cfg.script.language,
+                                           duration=content_dur)
         captions_mod.write_ass(words, project.root / f"captions.{eng}.ass", cfg.captions, cfg.video)
         (project.root / f"captions.{eng}.json").write_text(
             _json([{"text": w.text, "start": w.start, "end": w.end} for w in words]))
-        log.info("captions[%s]: %d words", eng, len(words))
+        # per-word karaoke debug: word/start/end/duration + whether timing is real-aligned or estimated
+        confidence = "aligned" if method in ("parakeet", "whisperx") else "estimated"
+        debug = {
+            "engine": eng, "method": method, "confidence": confidence,
+            "word_count": len(words),
+            "total_duration": round(words[-1].end, 3) if words else 0.0,
+            "words": [{"text": w.text, "start": round(w.start, 3), "end": round(w.end, 3),
+                       "duration": round(w.end - w.start, 3)} for w in words],
+            "segments": [{"index": s.index, "narration": s.narration,
+                          "speech": normalize_mod.segment_speech(s.narration, cfg.script.language,
+                                                                 cfg.script.normalize_numbers),
+                          "duration": s.duration}
+                         for s in script.segments if s.kind != "cta"],
+        }
+        (project.root / f"captions.{eng}.debug.json").write_text(_json(debug))
+        log.info("captions[%s]: %d words (%s timing)", eng, len(words), confidence)
     sub_lang = cfg.script.subtitle_language
     if sub_lang and sub_lang != cfg.script.language:   # EN audio + translated phrase subtitles
         sub_path = project.root / f"subtitles.{sub_lang}.json"
@@ -235,6 +259,46 @@ def _resolve_music(cfg: Config) -> Path | None:
     return None
 
 
+def _music_mood_decision(project: VideoProject, cfg: Config) -> dict:
+    """Resolve the music mood. With music_mood='auto' classify it from the script tone (deterministic,
+    logged); otherwise honour the configured mood. The effective bed gain follows the mood only when
+    the user left video.music_gain_db at its default 0. Persists music_decision.json so the choice
+    (mood, rationale, scores, params, voice/music gain) is auditable."""
+    from . import music
+    configured = str(getattr(cfg.video, "music_mood", "ethereal") or "ethereal")
+    if configured.lower() == "auto":
+        try:
+            text = load_script(project).narration
+        except Exception:  # noqa: BLE001
+            text = ""
+        d = music.classify_mood(text, cfg.script.language)
+        log.info("Music mood (auto) → %s — %s", d["mood"], d["rationale"])
+    else:
+        d = {"mood": configured, "rationale": "configured by video.music_mood", "scores": {},
+             "params": music.MOOD_PARAMS.get(configured, {})}
+    user_gain = float(getattr(cfg.video, "music_gain_db", 0.0) or 0.0)
+    d["gain_db"] = user_gain if user_gain else float(d.get("params", {}).get("gain_db", 0.0))
+    try:
+        (project.root / "music_decision.json").write_text(_json(d))
+    except Exception:  # noqa: BLE001
+        pass
+    return d
+
+
+def _music_gain_db(project: VideoProject, cfg: Config) -> float:
+    """Effective bed trim: an explicit video.music_gain_db wins; otherwise the auto-mood's suggestion."""
+    user = float(getattr(cfg.video, "music_gain_db", 0.0) or 0.0)
+    if user:
+        return user
+    f = project.root / "music_decision.json"
+    if f.exists():
+        try:
+            return float(json.loads(f.read_text()).get("gain_db", 0.0))
+        except Exception:  # noqa: BLE001
+            return 0.0
+    return 0.0
+
+
 def _resolve_or_generate_music(project: VideoProject, cfg: Config) -> Path | None:
     """Pick the music bed by `video.music_source`: a library track, an ORIGINAL generated
     track (Stable Audio Open, cached once per project), or none. Generation never blocks the
@@ -244,8 +308,9 @@ def _resolve_or_generate_music(project: VideoProject, cfg: Config) -> Path | Non
         return None
     if src == "generate":
         out = project.root / "music.wav"
+        decision = _music_mood_decision(project, cfg)     # logs + persists the mood choice
         if out.exists():
-            log.info("Music: reusing generated %s", out.name)
+            log.info("Music: reusing generated %s (mood=%s)", out.name, decision["mood"])
             return out
         try:
             import hashlib
@@ -253,8 +318,8 @@ def _resolve_or_generate_music(project: VideoProject, cfg: Config) -> Path | Non
             slug = getattr(project, "slug", None) or project.root.name
             seed = int(hashlib.md5(slug.encode()).hexdigest()[:8], 16)   # stable per project
             log.info("Music: generating original track (Stable Audio Open, mood=%s) — "
-                     "first time can take a few minutes…", cfg.video.music_mood)
-            return music.generate_track(out, mood=cfg.video.music_mood,
+                     "first time can take a few minutes…", decision["mood"])
+            return music.generate_track(out, mood=decision["mood"],
                                         seconds=cfg.video.music_seconds, steps=cfg.video.music_steps,
                                         seed=seed, device=cfg.tts.device)
         except Exception as e:  # noqa: BLE001 — never let music generation block the build
@@ -301,8 +366,9 @@ def _assemble_engine(project: VideoProject, cfg: Config, script: Script, eng: st
         ffmpeg.concat_videos(clips, video_silent)
 
     audio_mix = work / "audio.m4a"
-    ffmpeg.mix_audio(adir / "narration.wav", _resolve_or_generate_music(project, cfg),
-                     cfg.video.music_gain_db, audio_mix, cfg.video.loudness_lufs)
+    music_bed = _resolve_or_generate_music(project, cfg)   # also writes music_decision.json (mood/gain)
+    ffmpeg.mix_audio(adir / "narration.wav", music_bed,
+                     _music_gain_db(project, cfg), audio_mix, cfg.video.loudness_lufs)
 
     out = project.output_for(eng)
     ass = project.root / f"captions.{eng}.ass"

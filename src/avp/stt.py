@@ -13,6 +13,7 @@ NOTE: confirm parakeet-mlx CLI flags / JSON schema against the installed version
 from __future__ import annotations
 
 import json
+import re
 import subprocess
 import sys
 import tempfile
@@ -39,12 +40,38 @@ class Word:
     end: float
 
 
+# Extra "hold" after a word ending in punctuation, in the same char-unit scale as word length —
+# a comma/period naturally lengthens the preceding word, so the karaoke highlight lingers there.
+_PUNCT_UNITS = {",": 3, ";": 4, ":": 4, ")": 1, "]": 1, "—": 3, "…": 5, ".": 6, "!": 6, "?": 6}
+
+
 def words_even(text: str, duration: float) -> list[Word]:
+    """Estimate per-word timings when no real aligner is available. Weighted, NOT uniform: each
+    word's on-screen time is proportional to its (alphanumeric) length, plus an extra hold after
+    trailing punctuation (comma/period/…) — so the karaoke highlight follows the spoken rhythm
+    instead of ticking robotically. Words stay contiguous and fill exactly `duration`."""
     tokens = text.split()
-    if not tokens:
+    if not tokens or duration <= 0:
         return []
-    per = duration / len(tokens)
-    return [Word(t, i * per, (i + 1) * per) for i, t in enumerate(tokens)]
+    units: list[float] = []
+    for t in tokens:
+        alnum = len(re.sub(r"[^\w]", "", t, flags=re.UNICODE))
+        u = float(max(2, alnum))                     # floor so 1-char words aren't a flash
+        for ch in reversed(t):                       # trailing punctuation → extra hold
+            if ch in _PUNCT_UNITS:
+                u += _PUNCT_UNITS[ch]
+            elif ch.isalnum():
+                break
+        units.append(u)
+    scale = duration / sum(units)
+    words: list[Word] = []
+    t0 = 0.0
+    for tok, u in zip(tokens, units):
+        t1 = t0 + u * scale
+        words.append(Word(tok, t0, t1))
+        t0 = t1
+    words[-1].end = duration                          # kill float drift on the last word
+    return words
 
 
 def _whisperx(audio: Path, cfg: STTConfig, language: str = "en") -> list[Word]:
@@ -105,16 +132,22 @@ def _safe_duration(audio: Path, text: str) -> float:
 
 
 def transcribe(audio: Path, text_fallback: str, cfg: STTConfig, language: str = "en",
-               duration: float | None = None) -> list[Word]:
+               duration: float | None = None) -> tuple[list[Word], str]:
+    """Return (words, method). method ∈ {"parakeet","whisperx","even"} so callers can record whether
+    the karaoke timing is real-aligned or estimated. Any backend failure falls back to even timing."""
     engine = cfg.engine.lower()
     # even-timing must spread the words over the SPOKEN content only; pass `duration` (content
     # length, excluding the silent endcard) so captions don't drift into the endcard.
     dur = duration if duration is not None else _safe_duration(audio, text_fallback)
     try:
         if engine == "whisperx":
-            return _whisperx(audio, cfg, language) or words_even(text_fallback, dur)
-        if engine == "parakeet":
-            return _parakeet(audio, cfg) or words_even(text_fallback, dur)
+            real = _whisperx(audio, cfg, language)
+            if real:
+                return real, "whisperx"
+        elif engine == "parakeet":
+            real = _parakeet(audio, cfg)
+            if real:
+                return real, "parakeet"
     except Exception as e:  # noqa: BLE001 — any backend issue should not block the build
         log.warning("STT backend %r failed (%s) — using even timing.", engine, e)
-    return words_even(text_fallback, dur)
+    return words_even(text_fallback, dur), "even"
