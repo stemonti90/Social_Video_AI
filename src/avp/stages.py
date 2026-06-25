@@ -386,16 +386,18 @@ def _assemble_engine(project: VideoProject, cfg: Config, script: Script, eng: st
     # captions cover the SPOKEN content only — the silent endcard gets no subtitle
     caption_dur = sum(d for seg, d in zip(segs_used, content_durs) if seg.kind != "cta")
     sub_json = (project.root / f"subtitles.{sub_lang}.json") if sub_lang else None
-    if want_translated and sub_json and sub_json.exists():   # EN audio + translated phrase subtitles
+    if want_translated and sub_json and sub_json.exists():   # EN audio + translated KARAOKE subtitles
         trans = {d["index"]: d["text"] for d in json.loads(sub_json.read_text())}
-        phrases, t0 = [], 0.0
-        for seg, dur in zip(segs_used, content_durs):
-            if seg.kind == "cta":
-                continue                                     # don't subtitle the endcard
-            phrases.append((trans.get(seg.index, seg.narration), t0, t0 + dur))
-            t0 += dur
-        for png, s, e in captions_mod.render_phrase_pngs(
-                phrases, project.root / f"subs_png_{eng}_{sub_lang}", cfg.captions, cfg.video):
+        # The translation has no per-word timestamps, so distribute each segment's translated words
+        # across THAT segment's audio window (length-weighted). The karaoke then tracks the EN voice
+        # segment-by-segment — so the IT subtitles still "pop" word-by-word.
+        words = stt_mod.distribute_words([
+            (trans.get(seg.index) or seg.narration, dur)
+            for seg, dur in zip(segs_used, content_durs) if seg.kind != "cta"
+        ])
+        for png, s, e in captions_mod.render_caption_pngs(
+                words, project.root / f"subs_png_{eng}_{sub_lang}", cfg.captions, cfg.video,
+                total_dur=caption_dur):
             items.append({"path": png, "start": s, "end": e, "x": "(main_w-overlay_w)/2", "y": cap_y})
     elif cap_json.exists():
         from .stt import Word

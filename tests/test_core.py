@@ -71,6 +71,17 @@ class SttEven(unittest.TestCase):
     def test_words_even_empty(self):
         self.assertEqual(stt.words_even("", 5.0), [])
 
+    def test_distribute_words_for_translated_karaoke(self):
+        # translated subtitles get per-word karaoke: each segment's words fill ITS window, contiguous
+        w = stt.distribute_words([("La sonda orbita.", 3.0), ("Scoperti oceani.", 2.0)])
+        self.assertEqual([x.text for x in w], ["La", "sonda", "orbita.", "Scoperti", "oceani."])
+        self.assertAlmostEqual(w[0].start, 0.0)
+        self.assertAlmostEqual(w[2].end, 3.0)          # segment 1 ends at its duration
+        self.assertAlmostEqual(w[3].start, 3.0)        # segment 2 starts right after
+        self.assertAlmostEqual(w[-1].end, 5.0)         # fills the total
+        for a, b in zip(w, w[1:]):
+            self.assertAlmostEqual(a.end, b.start)     # contiguous
+
     def test_weighted_by_length_and_punctuation(self):
         # a long word gets more on-screen time than a short one; a comma adds a hold
         w = {x.text: (x.end - x.start) for x in stt.words_even("a milleseicentosessantacinque", 4.0)}

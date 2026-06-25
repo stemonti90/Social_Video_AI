@@ -26,7 +26,7 @@ class LLMConfig:
 
 @dataclass
 class ScriptConfig:
-    target_seconds: int = 90     # aim above the 60s TikTok Creator-Rewards minimum
+    target_seconds: int = 50     # aim above the 60s TikTok Creator-Rewards minimum
     language: str = "en"         # en | it — language of the spoken narration
     subtitle_language: str | None = None   # if set & != language → translated phrase subtitles (e.g. EN audio, IT subs)
     refine_passes: int = 2       # critique→refine rounds on the ONE script (quality via depth, never regresses)

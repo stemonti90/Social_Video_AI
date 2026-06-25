@@ -74,6 +74,19 @@ def words_even(text: str, duration: float) -> list[Word]:
     return words
 
 
+def distribute_words(segments: list[tuple[str, float]]) -> list[Word]:
+    """Flatten (text, duration) segments into one contiguous Word stream: each segment's words are
+    length-weighted across ITS OWN duration. Gives translated subtitles (which have no real word
+    timestamps) per-word karaoke that tracks the spoken audio segment-by-segment."""
+    out: list[Word] = []
+    t0 = 0.0
+    for text, dur in segments:
+        for w in words_even(text, dur):
+            out.append(Word(w.text, t0 + w.start, t0 + w.end))
+        t0 += float(dur)
+    return out
+
+
 def _whisperx(audio: Path, cfg: STTConfig, language: str = "en") -> list[Word]:
     with tempfile.TemporaryDirectory() as td:
         subprocess.run(

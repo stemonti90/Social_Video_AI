@@ -8,7 +8,7 @@ llm:
   temperature: 0.7
 
 script:
-  target_seconds: 90      # aim above the 60s TikTok Creator-Rewards minimum
+  target_seconds: 50      # aim above the 60s TikTok Creator-Rewards minimum
   language: en            # en | it — language of the spoken narration + captions
 
 funnel:                   # appended as a spoken + on-screen endcard (objective #2: app installs)

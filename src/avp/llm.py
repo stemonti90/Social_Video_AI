@@ -21,7 +21,8 @@ SYSTEM = """You are an elite scriptwriter for a faceless short-form video channe
 astronomy and space (TikTok / Reels / YouTube Shorts). These craft rules separate gripping from mediocre:
 - HOOK: the first 6-8 words must be a concrete, counterintuitive or NUMBER-led statement that stops the scroll. NEVER open with a question, "Imagine", "Have you ever", "Picture this", or "In the vast expanse".
 - Exactly ONE new, specific, verifiable fact per content segment (a named object, a number, a comparison, a scale) — then LAND it: a second sentence that gives the consequence, the scale, or a vivid concrete image. State-and-move-on is too thin.
-- LENGTH: every content segment is TWO full spoken sentences (~20-28 spoken words). HIT the requested total word count and segment count — a script that comes in short of the target is a FAILURE. Do not pad with filler or repetition to get there; reach the length with real, distinct facts richly told.
+- LENGTH: every content segment is TWO full spoken sentences (~18-24 spoken words). HIT the requested total word count and segment count — coming in SHORT or running LONG are both failures. Do not pad with filler or repetition, and do not exceed the target; reach the exact length with real, distinct facts richly told.
+- EXPLAIN, don't list: if the topic is a specific mission/probe/object/person/event, build a clear through-line (what it is → what it did → why it matters), not disconnected trivia.
 - Every segment must make a DISTINCT point. NEVER repeat, restate or paraphrase an earlier line to reach the segment count — if you genuinely run out of distinct facts, broaden the angle (history, mechanism, scale, discovery, what's next) rather than repeating.
 - Open a curiosity loop in the first 1-2 segments and PAY IT OFF before the end.
 - Escalate to a single peak "wow" moment in the penultimate segment.
@@ -50,9 +51,10 @@ REFINE_USER = ("Current draft JSON:\n{script}\n\nEditor critique to apply:\n{cri
                "Return the improved STRICT JSON only.")
 
 USER_TMPL = """Topic: {topic}
-Target: ~{seconds}s of spoken narration — about {words} words TOTAL (this is a floor, not a ceiling: get close to it), split into {nseg}-{nseg2} segments.
+Target: ~{seconds}s of spoken narration — about {words} words TOTAL (stay within ±10%; do NOT run long), in EXACTLY {nseg}-{nseg2} segments. Going over the length is as wrong as coming in short.
+If the topic is a specific MISSION, PROBE, OBJECT, PERSON, or EVENT, EXPLAIN it with a clear through-line — what it is, what it did / what happened, and why it matters — not a list of disconnected trivia.
 For each segment provide:
-- "narration": TWO full spoken sentences (~20-28 words) — the fact, then its consequence/scale/image,
+- "narration": TWO full spoken sentences (~18-24 words) — the point, then its consequence/scale/image,
 - "visual": a short cue for the ideal NASA/Hubble footage or image (e.g. "Jupiter's Great Red Spot, close-up"),
 - "keywords": 2-4 ENGLISH search keywords for space archives (they are English-indexed).
 Also provide a punchy "title".
@@ -289,8 +291,11 @@ def _judge_best(client: "OllamaClient", drafts: list[dict], topic: str, language
 def generate_script(cfg: LLMConfig, topic: str, seconds: int = 60, language: str = "en",
                     refine_passes: int = 1, best_of: int = 1) -> Script:
     words = _words_for(seconds)
-    nseg = max(4, seconds // 9)
-    user = USER_TMPL.format(topic=topic, seconds=seconds, words=words, nseg=nseg, nseg2=nseg + 2)
+    # ~10s of speech per 2-sentence segment, so segment count tracks the target length. A tight upper
+    # bound (nseg+1) keeps the model from padding to twice the length.
+    nseg = max(4, round(seconds / 10))
+    nseg2 = nseg + 1
+    user = USER_TMPL.format(topic=topic, seconds=seconds, words=words, nseg=nseg, nseg2=nseg2)
     name = LANG_NAME.get(language, "English")
     system = SYSTEM + f"\n- Write ALL narration in {name}."
     client = OllamaClient(cfg)
