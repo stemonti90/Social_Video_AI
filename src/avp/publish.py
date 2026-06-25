@@ -1,15 +1,26 @@
 """Publish a finished video to socials via Postiz (open-source scheduler, AGPL-3.0).
 
-Postiz covers TikTok, Instagram, YouTube + ~18 other networks. Real posting needs a
-running Postiz with the channels connected (and their platform app approvals — e.g. the
-TikTok content-posting audit, Meta app review). By DEFAULT this is a dry run: it builds
-the per-platform plan (caption/hashtags from metadata.json + the video) and writes
-publish_plan.json. Pass go=True (CLI --go) with Postiz configured to actually post.
+Postiz covers TikTok, Instagram, YouTube + ~18 other networks. Real posting needs a running Postiz with
+the channels connected (and their platform app approvals — e.g. the TikTok content-posting audit, Meta
+app review). By DEFAULT this is a dry run: it builds the per-platform plan (caption + the exact Postiz
+`settings` object that would be sent) and writes publish_plan.json. Pass go=True (CLI --go) with Postiz
+configured to actually post.
+
+API contract (verified against https://docs.postiz.com/public-api, 2026-06):
+  - Auth header: ``Authorization: {apiKey}`` (raw key, NOT ``Bearer``).
+  - Base URL: ``{postiz_url}/public/v1`` (self-host) — postiz_url is NEXT_PUBLIC_BACKEND_URL.
+  - GET  /public/v1/integrations          → the connected channels: [{id, name, identifier}, ...].
+  - POST /public/v1/upload  (-F file=@…)  → {"id": "...", "path": "https://…"}.
+  - POST /public/v1/posts                 → {type, date, shortLink, tags, posts:[{integration:{id},
+        value:[{content, image:[media]}], settings:{__type, …}}]}. Each provider REQUIRES its own
+        settings object (YouTube: title+type; TikTok: privacy_level + toggles; Instagram: post_type) —
+        omitting it is why a naive post is rejected.
 """
 from __future__ import annotations
 
 import json
 import os
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
 import requests
@@ -21,21 +32,75 @@ from .manifest import VideoProject
 
 log = get_logger("avp.publish")
 
+# Map a platform name (and its aliases) to the canonical key used for captions/settings/discovery.
+_ALIASES = {
+    "youtube": "youtube", "yt": "youtube", "shorts": "youtube",
+    "tiktok": "tiktok", "tt": "tiktok",
+    "instagram": "instagram", "ig": "instagram", "reels": "instagram",
+}
+
+
+def _canon(platform: str) -> str:
+    return _ALIASES.get(platform.lower().strip(), platform.lower().strip())
+
+
+def _now_iso(plus_seconds: int = 60) -> str:
+    """A near-future UTC timestamp. Postiz expects a `date` even for immediate posts; a small lead
+    avoids 'scheduled in the past' rejections when the request takes a moment to arrive."""
+    return (datetime.now(timezone.utc) + timedelta(seconds=plus_seconds)).strftime("%Y-%m-%dT%H:%M:%S.000Z")
+
 
 def _caption_for(platform: str, meta: dict) -> str:
-    p = platform.lower()
-    if p in ("youtube", "yt", "shorts"):
+    p = _canon(platform)
+    if p == "youtube":
         yt = meta.get("youtube", {})
         return f"{yt.get('title', '')}\n\n{yt.get('description', '')}".strip()
-    if p in ("tiktok", "tt"):
+    if p == "tiktok":
         return meta.get("tiktok", {}).get("caption", "")
-    if p in ("instagram", "ig", "reels"):
+    if p == "instagram":
         return meta.get("instagram", {}).get("caption", "")
     return meta.get("tiktok", {}).get("caption", "")
 
 
+def _title_for(platform: str, meta: dict) -> str:
+    """A short title for platforms that need one (YouTube required 2-100, TikTok optional ≤90)."""
+    yt_title = (meta.get("youtube", {}).get("title") or "").strip()
+    if yt_title:
+        return yt_title
+    # fall back to the first line / sentence of any caption
+    cap = _caption_for(platform, meta) or _caption_for("tiktok", meta)
+    first = (cap.splitlines() or [""])[0].strip()
+    return first or "Untitled"
+
+
+def _settings_for(platform: str, meta: dict, pub: PublishConfig, disclose_ai: bool) -> dict:
+    """Build the provider-specific Postiz `settings` object. These required fields are why the previous
+    client (which sent no settings) could never post — each provider validates its own schema."""
+    p = _canon(platform)
+    if p == "youtube":
+        yt = meta.get("youtube", {})
+        vis = pub.privacy if pub.privacy in ("public", "unlisted", "private") else "public"
+        tags = [{"value": t, "label": t} for t in (yt.get("tags") or [])][:15]
+        title = (_title_for("youtube", meta))[:100] or "Untitled"
+        if len(title) < 2:
+            title = "Untitled"
+        return {"__type": "youtube", "title": title, "type": vis,
+                "selfDeclaredMadeForKids": "yes" if pub.made_for_kids else "no",
+                "thumbnail": None, "tags": tags}
+    if p == "tiktok":
+        privacy = {"public": "PUBLIC_TO_EVERYONE", "unlisted": "FOLLOWER_OF_CREATOR",
+                   "private": "SELF_ONLY"}.get(pub.privacy, "PUBLIC_TO_EVERYONE")
+        return {"__type": "tiktok", "title": _title_for("tiktok", meta)[:90],
+                "privacy_level": privacy, "duet": False, "stitch": False, "comment": True,
+                "autoAddMusic": "no", "brand_content_toggle": False, "brand_organic_toggle": False,
+                "video_made_with_ai": bool(disclose_ai), "content_posting_method": "DIRECT_POST"}
+    if p == "instagram":
+        return {"__type": "instagram", "post_type": "post"}   # "post" + a single video = a Reel
+    return {"__type": p}
+
+
 class PostizClient:
-    """Minimal Postiz public-API client. Verify endpoints/schema for your Postiz version."""
+    """Minimal Postiz public-API client (verified against docs.postiz.com/public-api, 2026-06)."""
 
     def __init__(self, cfg: PublishConfig):
         self.base = cfg.postiz_url.rstrip("/")
@@ -44,6 +109,12 @@ class PostizClient:
     def _headers(self) -> dict:
         return {"Authorization": self.token}
 
+    def list_integrations(self) -> list[dict]:
+        r = requests.get(f"{self.base}/public/v1/integrations", headers=self._headers(), timeout=30)
+        r.raise_for_status()
+        data = r.json()
+        return data if isinstance(data, list) else data.get("integrations", data.get("data", []))
+
     def upload(self, video: Path) -> dict:
         with open(video, "rb") as f:
             r = requests.post(f"{self.base}/public/v1/upload", headers=self._headers(),
@@ -51,18 +122,50 @@ class PostizClient:
         r.raise_for_status()
         return r.json()
 
-    def post(self, integration_id: str, caption: str, media: dict) -> dict:
-        body = {"type": "now",
-                "posts": [{"integration": {"id": integration_id},
-                           "value": [{"content": caption, "image": [media]}]}]}
+    def create_post(self, integration_id: str, caption: str, media: dict, settings: dict,
+                    when_iso: str | None, short_link: bool = False) -> dict:
+        body = {
+            "type": "schedule" if when_iso else "now",
+            "date": when_iso or _now_iso(),
+            "shortLink": bool(short_link),
+            "tags": [],
+            "posts": [{"integration": {"id": integration_id},
+                       "value": [{"content": caption, "image": [media]}],
+                       "settings": settings}],
+        }
         r = requests.post(f"{self.base}/public/v1/posts", headers=self._headers(),
                           json=body, timeout=120)
         r.raise_for_status()
         return r.json()
 
 
+def _integration_id(platform: str, configured: dict, discovered: dict[str, str]) -> str | None:
+    """Resolve the Postiz integration id for a platform: an explicit config mapping wins, else the
+    channel auto-discovered from GET /integrations by matching its `identifier`."""
+    p = _canon(platform)
+    for key in (platform, p):                       # honor whatever key the user wrote in config
+        if key in configured and configured[key]:
+            return configured[key]
+    return discovered.get(p)
+
+
+def _discover(client: PostizClient) -> dict[str, str]:
+    """platform -> integration id, from the connected channels. Best-effort; never raises."""
+    out: dict[str, str] = {}
+    try:
+        for it in client.list_integrations():
+            ident = str(it.get("identifier") or it.get("provider") or it.get("platform") or "").lower()
+            iid = it.get("id") or it.get("integrationId")
+            p = _canon(ident)
+            if iid and p and p not in out:
+                out[p] = iid
+    except Exception as e:  # noqa: BLE001 — discovery is a convenience; missing ids are reported later
+        log.warning("Could not list Postiz integrations (%s) — relying on config.integrations.", e)
+    return out
+
+
 def stage_publish(project: VideoProject, cfg: Config, go: bool = False,
-                  platforms: list[str] | None = None) -> list[dict]:
+                  platforms: list[str] | None = None, when: str | None = None) -> list[dict]:
     meta_path = project.root / "metadata.json"
     meta = json.loads(meta_path.read_text()) if meta_path.exists() else {}
 
@@ -73,12 +176,18 @@ def stage_publish(project: VideoProject, cfg: Config, go: bool = False,
     if not video.exists():
         raise RuntimeError("No rendered video found — run `build` first.")
 
+    # The pipeline's footage is real; disclose AI only if the user opted in (covers the AI voice/script)
+    # or the script itself flagged realistic AI visuals.
+    disclose_ai = bool(cfg.publish.disclose_ai or meta.get("disclosure_ai", False))
     plats = platforms or cfg.publish.platforms
+
     plan = [{
-        "platform": p,
+        "platform": _canon(p),
         "video": str(video),
         "caption": _caption_for(p, meta),
-        "disclosure_ai": bool(meta.get("disclosure_ai", False)),
+        "schedule": when or "now",
+        "disclose_ai": disclose_ai,
+        "settings": _settings_for(p, meta, cfg.publish, disclose_ai),
     } for p in plats]
     (project.root / "publish_plan.json").write_text(json.dumps(plan, indent=2, ensure_ascii=False))
 
@@ -92,22 +201,29 @@ def stage_publish(project: VideoProject, cfg: Config, go: bool = False,
     client = PostizClient(cfg.publish)
     if not client.token:
         raise RuntimeError("No Postiz token (set publish.postiz_token or env AVP_POSTIZ_TOKEN).")
-    log.warning("Live publish via Postiz at %s — confirm integration IDs for your setup.",
-                cfg.publish.postiz_url)
+    log.warning("Live publish via Postiz at %s%s", cfg.publish.postiz_url,
+                f" — scheduled {when}" if when else " — posting now")
+    discovered = _discover(client)
     try:
         media = client.upload(video)
     except Exception as e:  # noqa: BLE001
-        raise RuntimeError(f"Postiz upload failed ({e}). Is Postiz running and reachable?") from e
+        raise RuntimeError(f"Postiz upload failed ({e}). Is Postiz running and reachable at "
+                           f"{cfg.publish.postiz_url}?") from e
 
     for it in plan:
-        integ = cfg.publish.integrations.get(it["platform"])
+        integ = _integration_id(it["platform"], cfg.publish.integrations, discovered)
         if not integ:
-            log.warning("No Postiz integration id for %r (set publish.integrations) — skipping.",
-                        it["platform"])
+            log.warning("No Postiz channel for %r (connect it in Postiz, or set publish.integrations) "
+                        "— skipping.", it["platform"])
+            it["posted"] = False
             continue
         try:
-            client.post(integ, it["caption"], media)
-            log.info("Posted to %s", it["platform"])
+            res = client.create_post(integ, it["caption"], media, it["settings"], when,
+                                     cfg.publish.short_link)
+            it["posted"] = True
+            log.info("Posted to %s (%s)", it["platform"], "scheduled" if when else "now")
         except Exception as e:  # noqa: BLE001
+            it["posted"] = False
             log.error("Post to %s failed: %s", it["platform"], e)
+    (project.root / "publish_plan.json").write_text(json.dumps(plan, indent=2, ensure_ascii=False))
     return plan

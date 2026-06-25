@@ -104,8 +104,14 @@ class PublishConfig:
     postiz_url: str = "http://localhost:5000"
     postiz_token: str = ""        # or set env AVP_POSTIZ_TOKEN
     platforms: list[str] = field(default_factory=lambda: ["youtube", "tiktok", "instagram"])
-    integrations: dict = field(default_factory=dict)  # platform -> Postiz channel id
+    integrations: dict = field(default_factory=dict)  # platform -> Postiz integration (channel) id; {} = auto-discover
     voice: str = "kokoro"         # which engine's video to publish
+    privacy: str = "public"       # public | unlisted | private (mapped per platform)
+    made_for_kids: bool = False   # YouTube selfDeclaredMadeForKids
+    # TikTok's video_made_with_ai flag. The pipeline's footage is REAL (NASA/Wikimedia), but the voice
+    # and script are AI-generated — set this true if you want to disclose AI on TikTok (your call).
+    disclose_ai: bool = False
+    short_link: bool = False      # let Postiz shorten links in the caption
 
 
 @dataclass

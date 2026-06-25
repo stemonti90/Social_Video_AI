@@ -75,6 +75,8 @@ def _build_parser() -> argparse.ArgumentParser:
     pub.add_argument("slug")
     pub.add_argument("--go", action="store_true", help="actually post (needs Postiz configured)")
     pub.add_argument("--platforms", nargs="*", default=None, help="override platforms")
+    pub.add_argument("--at", default=None,
+                     help="ISO 8601 time to schedule (e.g. 2026-07-01T18:00:00Z); omit = post now")
 
     sub.add_parser("list", parents=[common], help="list projects and stage status")
 
@@ -231,7 +233,7 @@ def main(argv: list[str] | None = None) -> int:
             print(f"📋 {project.root / 'metadata.md'}")
         elif args.cmd == "publish":
             from . import publish as publish_mod
-            publish_mod.stage_publish(project, cfg, go=args.go, platforms=args.platforms)
+            publish_mod.stage_publish(project, cfg, go=args.go, platforms=args.platforms, when=args.at)
             print(f"📤 {project.root / 'publish_plan.json'}")
         elif args.cmd == "build":
             out = pipeline.build(project, cfg, force=args.force,

@@ -924,5 +924,116 @@ class DedupeSegments(unittest.TestCase):
         self.assertEqual(len(dedupe_segments(segs)), 2)            # different → both kept
 
 
+class PublishPostiz(unittest.TestCase):
+    """The Postiz client must send each provider's required `settings` (verified vs docs.postiz.com)
+    and the documented post body — sending no settings is why the old client could never post."""
+
+    def _meta(self):
+        return {"youtube": {"title": "Cassini", "description": "desc", "tags": ["space", "nasa"]},
+                "tiktok": {"caption": "tok #space"}, "instagram": {"caption": "ig caption"}}
+
+    def test_canon_aliases(self):
+        from avp import publish
+        self.assertEqual(publish._canon("YT"), "youtube")
+        self.assertEqual(publish._canon("reels"), "instagram")
+        self.assertEqual(publish._canon("tt"), "tiktok")
+
+    def test_settings_have_required_fields_per_platform(self):
+        from avp import publish
+        from avp.config import PublishConfig
+        pub = PublishConfig()
+        yt = publish._settings_for("youtube", self._meta(), pub, False)
+        self.assertEqual(yt["__type"], "youtube")
+        self.assertEqual(yt["type"], "public")
+        self.assertGreaterEqual(len(yt["title"]), 2)
+        self.assertEqual(yt["tags"][0], {"value": "space", "label": "space"})   # YouTube tag shape
+        tk = publish._settings_for("tiktok", self._meta(), pub, False)
+        for k in ("__type", "privacy_level", "duet", "stitch", "comment", "autoAddMusic",
+                  "brand_content_toggle", "brand_organic_toggle", "content_posting_method"):
+            self.assertIn(k, tk)
+        self.assertEqual(tk["privacy_level"], "PUBLIC_TO_EVERYONE")
+        ig = publish._settings_for("instagram", self._meta(), pub, False)
+        self.assertEqual(ig, {"__type": "instagram", "post_type": "post"})
+
+    def test_disclose_ai_flows_to_tiktok_flag(self):
+        from avp import publish
+        from avp.config import PublishConfig
+        self.assertFalse(publish._settings_for("tiktok", self._meta(), PublishConfig(), False)["video_made_with_ai"])
+        self.assertTrue(publish._settings_for("tiktok", self._meta(), PublishConfig(), True)["video_made_with_ai"])
+
+    def test_privacy_maps_per_platform(self):
+        from avp import publish
+        from avp.config import PublishConfig
+        pub = PublishConfig(privacy="private")
+        self.assertEqual(publish._settings_for("tiktok", self._meta(), pub, False)["privacy_level"], "SELF_ONLY")
+        self.assertEqual(publish._settings_for("youtube", self._meta(), pub, False)["type"], "private")
+
+    def test_integration_id_config_wins_then_discovery(self):
+        from avp import publish
+        self.assertEqual(publish._integration_id("youtube", {"youtube": "cfg1"}, {"youtube": "disc"}), "cfg1")
+        self.assertEqual(publish._integration_id("youtube", {}, {"youtube": "disc"}), "disc")
+        self.assertIsNone(publish._integration_id("tiktok", {}, {"youtube": "disc"}))
+
+    def test_create_post_body_matches_documented_schema(self):
+        from avp import publish
+        from avp.config import PublishConfig
+        captured = {}
+        class _Resp:
+            def raise_for_status(self): pass
+            def json(self): return {"id": "post1"}
+        def fake_post(url, headers=None, json=None, timeout=None):
+            captured["url"], captured["headers"], captured["body"] = url, headers, json
+            return _Resp()
+        orig, publish.requests.post = publish.requests.post, fake_post
+        try:
+            c = publish.PostizClient(PublishConfig(postiz_token="k"))
+            settings = {"__type": "tiktok", "privacy_level": "PUBLIC_TO_EVERYONE"}
+            c.create_post("intg1", "hello", {"id": "m1", "path": "http://x/m.mp4"}, settings, None)
+        finally:
+            publish.requests.post = orig
+        self.assertEqual(captured["headers"]["Authorization"], "k")          # raw key, no Bearer
+        self.assertTrue(captured["url"].endswith("/public/v1/posts"))
+        b = captured["body"]
+        self.assertEqual(b["type"], "now")
+        self.assertIn("date", b)                                             # date sent even for "now"
+        post = b["posts"][0]
+        self.assertEqual(post["integration"]["id"], "intg1")
+        self.assertEqual(post["value"][0]["content"], "hello")
+        self.assertEqual(post["value"][0]["image"], [{"id": "m1", "path": "http://x/m.mp4"}])
+        self.assertEqual(post["settings"], settings)
+
+    def test_create_post_schedule_sets_type_and_date(self):
+        from avp import publish
+        from avp.config import PublishConfig
+        captured = {}
+        class _Resp:
+            def raise_for_status(self): pass
+            def json(self): return {}
+        def fake_post(url, headers=None, json=None, timeout=None):
+            captured["body"] = json; return _Resp()
+        orig, publish.requests.post = publish.requests.post, fake_post
+        try:
+            c = publish.PostizClient(PublishConfig(postiz_token="k"))
+            c.create_post("i", "c", {"id": "m"}, {"__type": "youtube"}, "2026-07-01T18:00:00.000Z")
+        finally:
+            publish.requests.post = orig
+        self.assertEqual(captured["body"]["type"], "schedule")
+        self.assertEqual(captured["body"]["date"], "2026-07-01T18:00:00.000Z")
+
+    def test_discover_maps_identifier_to_id(self):
+        from avp import publish
+        from avp.config import PublishConfig
+        class _Resp:
+            def raise_for_status(self): pass
+            def json(self): return [{"id": "a", "identifier": "youtube"},
+                                    {"id": "b", "identifier": "tiktok"}]
+        orig, publish.requests.get = publish.requests.get, lambda *a, **k: _Resp()
+        try:
+            disc = publish._discover(publish.PostizClient(PublishConfig(postiz_token="k")))
+        finally:
+            publish.requests.get = orig
+        self.assertEqual(disc, {"youtube": "a", "tiktok": "b"})
+
+
 if __name__ == "__main__":
     unittest.main()
