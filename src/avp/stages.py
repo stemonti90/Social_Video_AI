@@ -212,6 +212,19 @@ def stage_captions(project: VideoProject, cfg: Config) -> None:
     speech_fallback = " ".join(
         normalize_mod.segment_speech(s.narration, cfg.script.language, cfg.script.normalize_numbers)
         for s in script.segments if s.narration.strip() and s.kind != "cta")
+    # Translate FIRST — the Ollama model is still warm from the metadata stage — THEN evict it. The STT
+    # aligner (parakeet/MLX) and the ~7GB model both want RAM; running them together on a memory-tight
+    # Mac makes the aligner's subprocess produce no output and silently fall back to even timing. Freeing
+    # the model here gives it headroom. The translated subs feed assemble, not STT, so order is safe.
+    sub_lang = cfg.script.subtitle_language
+    if sub_lang and sub_lang != cfg.script.language:   # EN audio + translated subtitles (karaoke)
+        sub_path = project.root / f"subtitles.{sub_lang}.json"
+        if not sub_path.exists():
+            trans = llm.translate_segments(cfg.llm, [s.narration for s in script.segments], sub_lang)
+            sub_path.write_text(_json([{"index": s.index, "text": t}
+                                       for s, t in zip(script.segments, trans)]))
+            log.info("Translated %d segments → %s subtitles", len(trans), sub_lang)
+    _free_memory(cfg)   # evict the Ollama model so the STT aligner has RAM headroom (see note above)
     for eng in engines:
         narration = project.audio_dir / eng / "narration.wav"
         words, method = stt_mod.transcribe(narration, speech_fallback, cfg.stt, cfg.script.language,
@@ -235,14 +248,6 @@ def stage_captions(project: VideoProject, cfg: Config) -> None:
         }
         (project.root / f"captions.{eng}.debug.json").write_text(_json(debug))
         log.info("captions[%s]: %d words (%s timing)", eng, len(words), confidence)
-    sub_lang = cfg.script.subtitle_language
-    if sub_lang and sub_lang != cfg.script.language:   # EN audio + translated phrase subtitles
-        sub_path = project.root / f"subtitles.{sub_lang}.json"
-        if not sub_path.exists():
-            trans = llm.translate_segments(cfg.llm, [s.narration for s in script.segments], sub_lang)
-            sub_path.write_text(_json([{"index": s.index, "text": t}
-                                       for s, t in zip(script.segments, trans)]))
-            log.info("Translated %d segments → %s subtitles", len(trans), sub_lang)
     project.manifest.mark("captions", "done", method=cfg.stt.engine, engines=engines)
 
 

@@ -12,11 +12,13 @@ from .manifest import VideoProject
 
 log = get_logger("avp.pipeline")
 
-# metadata runs BEFORE assemble on purpose: assemble's _free_memory/unload_all evicts the 16GB LLM,
-# so generating metadata afterwards forces a ~7-8min cold reload. Before assemble the model is still
-# warm (the script just used it, within keep_alive), so metadata is near-free and assemble's unload
-# becomes the final RAM reclaim. metadata only needs script.json — no dependency on the rendered mp4.
-BUILD_STAGES = ["voice", "footage", "captions", "metadata", "assemble"]
+# Stage order is RAM-choreographed for a 24GB Mac. metadata runs BEFORE captions so the Ollama model
+# (~7GB, still warm from the script stage) serves BOTH metadata and captions' subtitle translation
+# with no cold reload. captions THEN evicts that model before its STT aligner (parakeet/MLX) runs —
+# the aligner needs the RAM, and if the model is still resident the aligner's subprocess fails under
+# memory pressure and silently falls back to even timing. assemble runs last with the model already
+# gone, giving ffmpeg headroom (it SIGSEGVs under memory pressure). metadata only needs script.json.
+BUILD_STAGES = ["voice", "footage", "metadata", "captions", "assemble"]
 
 
 def _run_stage_subprocess(name: str, slug: str, config_path: str, verbose: bool) -> int:

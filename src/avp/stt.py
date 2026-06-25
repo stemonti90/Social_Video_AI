@@ -13,13 +13,16 @@ NOTE: confirm parakeet-mlx CLI flags / JSON schema against the installed version
 from __future__ import annotations
 
 import json
+import os
 import re
 import subprocess
 import sys
 import tempfile
+import time
 from dataclasses import dataclass
 from pathlib import Path
 
+from . import ffmpeg as ffmpeg_mod
 from .config import STTConfig
 from .ffmpeg import ffprobe_duration
 from .log import get_logger
@@ -31,6 +34,18 @@ def _venv_exe(name: str) -> str:
     """Resolve a console script installed next to the running interpreter (.venv/bin)."""
     cand = Path(sys.executable).parent / name
     return str(cand) if cand.exists() else name
+
+
+def _exec_env() -> dict:
+    """parakeet-mlx and whisperx shell out to `ffmpeg` BY BARE NAME to decode the audio. When avp is
+    launched from a GUI app (Electron), child processes inherit a minimal PATH with no ffmpeg, so the
+    aligner exits 0 but writes NOTHING (a silent failure → even-timing fallback). Put the resolved
+    ffmpeg directory on PATH so the aligner decodes regardless of how avp was started."""
+    env = dict(os.environ)
+    ff_dir = str(Path(ffmpeg_mod._bin("ffmpeg")).resolve().parent)
+    if os.path.isdir(ff_dir) and ff_dir not in env.get("PATH", "").split(os.pathsep):
+        env["PATH"] = os.pathsep.join([ff_dir, env.get("PATH", "")]).strip(os.pathsep)
+    return env
 
 
 @dataclass
@@ -94,8 +109,12 @@ def _whisperx(audio: Path, cfg: STTConfig, language: str = "en") -> list[Word]:
              "--device", "cpu", "--compute_type", "int8",
              "--output_format", "json", "--output_dir", td],
             check=True, capture_output=True, text=True,   # capture noisy torchcodec/progress output
+            env=_exec_env(),                              # ensure ffmpeg is on PATH (GUI-spawned = minimal)
         )
-        data = json.loads(next(Path(td).glob("*.json")).read_text())
+        files = sorted(Path(td).glob("*.json"))
+        if not files:
+            raise RuntimeError("whisperx produced no JSON output")
+        data = json.loads(files[0].read_text())
     words: list[Word] = []
     for seg in data.get("segments", []):
         for w in seg.get("words", []):
@@ -110,8 +129,12 @@ def _parakeet(audio: Path, cfg: STTConfig) -> list[Word]:
             [_venv_exe("parakeet-mlx"), str(audio), "--model", cfg.parakeet_model,
              "--output-format", "json", "--output-dir", td],
             check=True, capture_output=True, text=True,
+            env=_exec_env(),                              # ensure ffmpeg is on PATH (GUI-spawned = minimal)
         )
-        data = json.loads(next(Path(td).glob("*.json")).read_text())
+        files = sorted(Path(td).glob("*.json"))
+        if not files:                    # exited 0 but wrote nothing (e.g. OOM-killed mid-write) — was a bare StopIteration
+            raise RuntimeError("parakeet-mlx produced no JSON output")
+        data = json.loads(files[0].read_text())
     # Parakeet emits sub-word TOKENS; rebuild whole words (a new word begins with a leading space).
     words: list[Word] = []
     cur = None
@@ -152,15 +175,21 @@ def transcribe(audio: Path, text_fallback: str, cfg: STTConfig, language: str = 
     # even-timing must spread the words over the SPOKEN content only; pass `duration` (content
     # length, excluding the silent endcard) so captions don't drift into the endcard.
     dur = duration if duration is not None else _safe_duration(audio, text_fallback)
-    try:
-        if engine == "whisperx":
-            real = _whisperx(audio, cfg, language)
-            if real:
-                return real, "whisperx"
-        elif engine == "parakeet":
-            real = _parakeet(audio, cfg)
-            if real:
-                return real, "parakeet"
-    except Exception as e:  # noqa: BLE001 — any backend issue should not block the build
-        log.warning("STT backend %r failed (%s) — using even timing.", engine, e)
+    for attempt in range(2):                      # one retry: MLX/Metal can transiently fail to allocate
+        try:
+            if engine == "whisperx":
+                real = _whisperx(audio, cfg, language)
+                if real:
+                    return real, "whisperx"
+            elif engine == "parakeet":
+                real = _parakeet(audio, cfg)
+                if real:
+                    return real, "parakeet"
+            break                                 # engine is "even", or the backend returned no words
+        except Exception as e:  # noqa: BLE001 — any backend issue should not block the build
+            if attempt == 0:
+                log.warning("STT backend %r failed (%s) — retrying once.", engine, e)
+                time.sleep(2)                     # let memory settle before the retry
+            else:
+                log.warning("STT backend %r failed (%s) — using even timing.", engine, e)
     return words_even(text_fallback, dur), "even"

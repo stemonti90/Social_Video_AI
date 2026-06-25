@@ -91,6 +91,25 @@ class SttEven(unittest.TestCase):
         self.assertGreater(held.end - held.start, short.end - short.start)
         self.assertAlmostEqual(stt.words_even("a b c", 3.0)[-1].end, 3.0)   # still fills duration
 
+    def test_transcribe_retries_then_falls_back_to_even(self):
+        # a flaky aligner (e.g. parakeet OOM under memory pressure) must be retried ONCE, then the
+        # build must not block — it falls back to even timing so karaoke still renders.
+        from avp.config import STTConfig
+        calls = {"n": 0}
+        def boom(*a, **k):
+            calls["n"] += 1
+            raise RuntimeError("parakeet-mlx produced no JSON output")
+        orig, stt._parakeet = stt._parakeet, boom
+        orig_sleep, stt.time.sleep = stt.time.sleep, lambda *_: None   # don't actually wait in tests
+        try:
+            cfg = STTConfig(engine="parakeet")
+            words, method = stt.transcribe(Path("x.wav"), "una due tre", cfg, "it", duration=3.0)
+        finally:
+            stt._parakeet, stt.time.sleep = orig, orig_sleep
+        self.assertEqual(calls["n"], 2)                       # tried once, retried once
+        self.assertEqual(method, "even")                      # then fell back
+        self.assertEqual([w.text for w in words], ["una", "due", "tre"])
+
 
 class CaptionsTime(unittest.TestCase):
     def test_ass_time(self):
@@ -516,14 +535,22 @@ class ReadTimeoutByModel(unittest.TestCase):
 
 
 class BuildStagesOrder(unittest.TestCase):
-    """Optimization 2026-06-24: metadata MUST run before assemble so the 16GB LLM is still warm
-    (assemble's unload_all evicts it) — avoids a ~7-8min cold reload."""
+    """RAM choreography: metadata runs before assemble (keep the LLM warm; assemble's unload_all evicts
+    it) AND before captions, so the warm model serves captions' translation with no cold reload, then
+    captions evicts it before the STT aligner — which needs the RAM or it falls back to even timing."""
     def test_metadata_before_assemble(self):
         from avp import pipeline
         s = pipeline.BUILD_STAGES
         self.assertIn("metadata", s)
         self.assertIn("assemble", s)
         self.assertLess(s.index("metadata"), s.index("assemble"))
+
+    def test_metadata_before_captions(self):
+        from avp import pipeline
+        s = pipeline.BUILD_STAGES
+        # translation (in captions) reuses the warm model metadata loaded → no extra cold reload
+        self.assertLess(s.index("metadata"), s.index("captions"))
+        self.assertLess(s.index("captions"), s.index("assemble"))
 
 
 class ManifestAtomicResilient(unittest.TestCase):
