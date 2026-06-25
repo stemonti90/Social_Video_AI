@@ -19,14 +19,14 @@ log = get_logger("avp.config")
 @dataclass
 class LLMConfig:
     host: str = "http://localhost:11434"
-    model: str = "gemma4:26b-mlx"   # the ONE script model (Gemma 4, Apache-2.0, native Apple MLX)
+    model: str = "gemma4:12b-mlx"   # the ONE script model (Gemma 4, Apache-2.0, native Apple MLX)
     temperature: float = 0.7
     best_of: int = 1             # 1 = quality-via-depth (one script, refined); >1 generates N drafts (off by default)
 
 
 @dataclass
 class ScriptConfig:
-    target_seconds: int = 75     # aim above the 60s TikTok Creator-Rewards minimum
+    target_seconds: int = 90     # aim above the 60s TikTok Creator-Rewards minimum
     language: str = "en"         # en | it — language of the spoken narration
     subtitle_language: str | None = None   # if set & != language → translated phrase subtitles (e.g. EN audio, IT subs)
     refine_passes: int = 2       # critique→refine rounds on the ONE script (quality via depth, never regresses)

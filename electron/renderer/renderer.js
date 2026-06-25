@@ -614,7 +614,7 @@ function makeMock() {
     videoUrl: async () => "",
     publish: async (slug, platforms, go) => ({ plan: platforms.map((p) => ({ platform: p, caption: "…", dry_run: !go })) }),
     getConfig: async () => ({
-      llm: { model: "gemma4:26b-mlx" },
+      llm: { model: "gemma4:12b-mlx" },
       script: { language: "en", target_seconds: 75 },
       tts: { engine: "kokoro", primary: "kokoro" },
       stt: { engine: "parakeet" },

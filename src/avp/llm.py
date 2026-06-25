@@ -20,11 +20,12 @@ log = get_logger("avp.llm")
 SYSTEM = """You are an elite scriptwriter for a faceless short-form video channel about \
 astronomy and space (TikTok / Reels / YouTube Shorts). These craft rules separate gripping from mediocre:
 - HOOK: the first 6-8 words must be a concrete, counterintuitive or NUMBER-led statement that stops the scroll. NEVER open with a question, "Imagine", "Have you ever", "Picture this", or "In the vast expanse".
-- Exactly ONE new, specific, verifiable fact per content segment (a named object, a number, a comparison, a scale). No filler beats, no empty awe.
-- Every segment must make a DISTINCT point. NEVER repeat, restate or paraphrase an earlier line to reach the segment count — if you run out of distinct facts, return FEWER segments instead.
+- Exactly ONE new, specific, verifiable fact per content segment (a named object, a number, a comparison, a scale) — then LAND it: a second sentence that gives the consequence, the scale, or a vivid concrete image. State-and-move-on is too thin.
+- LENGTH: every content segment is TWO full spoken sentences (~20-28 spoken words). HIT the requested total word count and segment count — a script that comes in short of the target is a FAILURE. Do not pad with filler or repetition to get there; reach the length with real, distinct facts richly told.
+- Every segment must make a DISTINCT point. NEVER repeat, restate or paraphrase an earlier line to reach the segment count — if you genuinely run out of distinct facts, broaden the angle (history, mechanism, scale, discovery, what's next) rather than repeating.
 - Open a curiosity loop in the first 1-2 segments and PAY IT OFF before the end.
 - Escalate to a single peak "wow" moment in the penultimate segment.
-- Concrete nouns over adjectives; tight spoken cadence. BANNED words/phrases: mind-blowing, incredible, literally, breathtaking, journey, unlock, delve, "did you know". No markdown, no emojis, no stage directions.
+- Concrete nouns over adjectives; a confident, flowing spoken cadence (not terse, not padded). BANNED words/phrases: mind-blowing, incredible, literally, breathtaking, journey, unlock, delve, "did you know". No markdown, no emojis, no stage directions.
 - Every fact must be real and checkable; if unsure, stay qualitative — never invent numbers.
 - Vary structure between videos; never sound template-stamped.
 - "keywords": 2-4 ENGLISH, archive-catalogable PROPER NOUNS (e.g. "Cassini Saturn", "Carina Nebula JWST", "Curiosity rover Mars") — concrete subjects a NASA/Hubble search will find, matching that segment's visual.
@@ -49,9 +50,9 @@ REFINE_USER = ("Current draft JSON:\n{script}\n\nEditor critique to apply:\n{cri
                "Return the improved STRICT JSON only.")
 
 USER_TMPL = """Topic: {topic}
-Target: ~{seconds}s of spoken narration (about {words} words total), split into {nseg}-{nseg2} segments.
+Target: ~{seconds}s of spoken narration — about {words} words TOTAL (this is a floor, not a ceiling: get close to it), split into {nseg}-{nseg2} segments.
 For each segment provide:
-- "narration": one or two spoken sentences,
+- "narration": TWO full spoken sentences (~20-28 words) — the fact, then its consequence/scale/image,
 - "visual": a short cue for the ideal NASA/Hubble footage or image (e.g. "Jupiter's Great Red Spot, close-up"),
 - "keywords": 2-4 ENGLISH search keywords for space archives (they are English-indexed).
 Also provide a punchy "title".
@@ -108,6 +109,11 @@ class OllamaClient:
             "stream": False,
             "options": options,
         }
+        if self.cfg.model.lower().lstrip().startswith("gemma"):
+            # Gemma 4 (e.g. gemma4:12b-mlx) is a "thinking" model: left on, it spends most of its time
+            # emitting reasoning we throw away (a draft call took 329s vs 51s with it off — 6.4× slower).
+            # We only want the JSON answer, so disable it. Non-thinking models ignore this flag.
+            payload["think"] = False
         if fmt and _supports_constrained_json(self.cfg.model):
             payload["format"] = fmt
         try:
@@ -321,6 +327,29 @@ def generate_script(cfg: LLMConfig, topic: str, seconds: int = 60, language: str
         except Exception as e:  # noqa: BLE001 — refinement must never break a usable draft
             log.warning("Script refine pass %d failed (%s) — keeping current draft.", n + 1, e)
             break
+
+    # Length guard: the model tends to write terse, so a script can land well under the target length
+    # (a 75-90s target coming in at ~40s). If so, run ONE expand pass that lengthens it with richer
+    # narration + more DISTINCT facts. Never regresses (kept only if it parses and is genuinely longer).
+    def _nwords(d: dict) -> int:
+        return sum(len(str(s.get("narration", "")).split()) for s in _segment_dicts(d))
+    if _nwords(data) < words * 0.8:
+        cur = _nwords(data)
+        try:
+            expand_user = (
+                f"This script is TOO SHORT: ~{cur} spoken words, but the target is ~{words} words across "
+                f"{nseg}-{nseg2} segments. Lengthen it to hit the target: extend each narration to two full "
+                f"sentences (the fact + its consequence/scale/image) and/or add segments with NEW distinct "
+                f"real facts (history, mechanism, scale, discovery, what's next). Keep the same hook, zero "
+                f"repetition, zero filler. Return the longer STRICT JSON only.\n\nCurrent draft:\n"
+                f"{json.dumps(data, ensure_ascii=False)}")
+            expanded = _extract_json(client.chat(system, expand_user, temperature=0.6, num_predict=script_cap))
+            if _segment_dicts(expanded) and _nwords(expanded) > cur:
+                log.info("Length guard: expanded script %d → %d words (target ~%d).",
+                         cur, _nwords(expanded), words)
+                data = expanded
+        except Exception as e:  # noqa: BLE001 — must never break a usable script
+            log.warning("Length expand failed (%s) — keeping current.", e)
 
     segments = [
         Segment(
