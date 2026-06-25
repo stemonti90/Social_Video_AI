@@ -101,7 +101,8 @@ def stage_script(project: VideoProject, cfg: Config, topic: str | None) -> Scrip
         raise ValueError("No topic given and no existing one. Pass --topic.")
 
     script = llm.generate_script(cfg.llm, topic, cfg.script.target_seconds,
-                                 language=cfg.script.language, refine_passes=cfg.script.refine_passes)
+                                 language=cfg.script.language, refine_passes=cfg.script.refine_passes,
+                                 best_of=getattr(cfg.llm, "best_of", 1))
     if cfg.funnel.enabled:
         script.segments.append(Segment(
             index=len(script.segments) + 1,

@@ -19,8 +19,9 @@ log = get_logger("avp.config")
 @dataclass
 class LLMConfig:
     host: str = "http://localhost:11434"
-    model: str = "qwen3:14b"     # general writer (Apache-2.0). Any installed Ollama model works.
+    model: str = "gemma4:26b-mlx"   # the ONE script model (Gemma 4, Apache-2.0, native Apple MLX)
     temperature: float = 0.7
+    best_of: int = 2             # generate N drafts and keep the LLM-judged best (1 = off); quality lever
 
 
 @dataclass

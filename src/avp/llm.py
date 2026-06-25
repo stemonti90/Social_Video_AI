@@ -247,8 +247,41 @@ def _draft_script_json(client: "OllamaClient", system: str, user: str,
         "Try re-running or a different model.")
 
 
+JUDGE_SYSTEM = (
+    "You are the editor-in-chief of a top astronomy/space Shorts channel. You receive several candidate "
+    "scripts for the SAME video and must pick the SINGLE best one to publish, judging in this order: "
+    "(1) HOOK — the first line stops the scroll with a concrete, number-led or counterintuitive fact "
+    "(NOT a question, NOT 'imagine'); (2) exactly one DISTINCT verifiable fact per segment, zero "
+    "repetition or filler; (3) a curiosity loop opened early and paid off; (4) escalation to a single "
+    "peak 'wow'; (5) concrete nouns over adjectives and ZERO cliche; (6) factual plausibility — penalise "
+    "invented numbers. Be decisive. Return STRICT JSON only: "
+    '{"best": <1-based draft number>, "why": "one short sentence"}.'
+)
+
+
+def _judge_best(client: "OllamaClient", drafts: list[dict], topic: str, language: str) -> dict:
+    """Pick the single best of several drafts by the channel rubric. Falls back to the first draft on
+    any failure — judging must never lose a usable script."""
+    if len(drafts) <= 1:
+        return drafts[0]
+    listing = "\n\n".join(f"DRAFT {i + 1}:\n{json.dumps(d, ensure_ascii=False)}"
+                          for i, d in enumerate(drafts))
+    user = (f"Topic: {topic}\nLanguage: {LANG_NAME.get(language, 'English')}\n"
+            f"Choose the single best draft to publish.\n\n{listing}")
+    try:
+        verdict = _extract_json(client.chat(JUDGE_SYSTEM, user, temperature=0.2, num_predict=256))
+        idx = int(verdict.get("best", 1)) - 1
+        if 0 <= idx < len(drafts):
+            log.info("Best-of-%d: judge picked draft %d — %s",
+                     len(drafts), idx + 1, str(verdict.get("why", ""))[:90])
+            return drafts[idx]
+    except Exception as e:  # noqa: BLE001 — a bad judge must never lose a usable draft
+        log.warning("Draft judge failed (%s) — keeping draft 1.", e)
+    return drafts[0]
+
+
 def generate_script(cfg: LLMConfig, topic: str, seconds: int = 60, language: str = "en",
-                    refine_passes: int = 1) -> Script:
+                    refine_passes: int = 1, best_of: int = 1) -> Script:
     words = _words_for(seconds)
     nseg = max(4, seconds // 9)
     user = USER_TMPL.format(topic=topic, seconds=seconds, words=words, nseg=nseg, nseg2=nseg + 2)
@@ -259,9 +292,20 @@ def generate_script(cfg: LLMConfig, topic: str, seconds: int = 60, language: str
     # (gemma free-text can append prose past the JSON) can't burn minutes. The JSON output (narration
     # + visual + keywords + syntax) is a few× the narration words → words*8 with a 1536 floor.
     script_cap = max(1536, words * 8)
-    log.info("Generating %s script for %r with %s ...", name, topic, cfg.model)
-    data = _draft_script_json(client, system, user, temperature=0.85,   # creative first draft (retried)
-                              num_predict=script_cap)
+    n_draft = max(1, best_of)
+    log.info("Generating %s script for %r with %s (best-of-%d) ...", name, topic, cfg.model, n_draft)
+    # Generate N diverse drafts (temperature spread for variety), then keep the LLM-judged best — the
+    # single biggest quality lever for the one model we run. Each draft is independently retried.
+    drafts: list[dict] = []
+    for i in range(n_draft):
+        temp = 0.85 if n_draft == 1 else round(0.8 + 0.12 * i, 2)
+        try:
+            drafts.append(_draft_script_json(client, system, user, temperature=temp, num_predict=script_cap))
+        except RuntimeError as e:
+            log.warning("Draft %d/%d unusable (%s).", i + 1, n_draft, e)
+    if not drafts:
+        raise RuntimeError("Model returned no usable script. Try re-running or a different model.")
+    data = _judge_best(client, drafts, topic, language)
 
     for n in range(max(0, refine_passes)):     # critique → refine; never regress a usable draft
         try:

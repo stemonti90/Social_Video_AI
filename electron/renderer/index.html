@@ -99,10 +99,18 @@
               </select>
             </div>
             <div class="field">
-              <label class="field__label" for="set-model">Modello copione (qualità / velocità)</label>
-              <select class="field__input" id="set-model">
-                <option value="gemma4:26b-mlx">Gemma 4 26B · MLX — qualità (~13 min)</option>
-                <option value="qwen3:14b">Qwen3 14B — veloce (~9 min)</option>
+              <label class="field__label" for="set-model">Modello copione</label>
+              <select class="field__input" id="set-model" disabled aria-describedby="model-note">
+                <option value="gemma4:26b-mlx">Gemma 4 26B · MLX</option>
+              </select>
+              <p class="field__note" id="model-note">Unico modello, ottimizzato per la massima qualità.</p>
+            </div>
+            <div class="field">
+              <label class="field__label" for="set-best-of">Qualità copione (best-of)</label>
+              <select class="field__input" id="set-best-of">
+                <option value="1">1 — bozza singola (più veloce)</option>
+                <option value="2">2 — sceglie la migliore (consigliato)</option>
+                <option value="3">3 — massima qualità (più lento)</option>
               </select>
             </div>
             <div class="field">

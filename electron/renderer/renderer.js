@@ -469,6 +469,7 @@ async function loadSettings() {
   const set = (id, v) => { const el = $("#" + id); if (el && v != null) el.value = v; };
   set("set-language", (c.script || {}).language);
   set("set-model", (c.llm || {}).model);
+  set("set-best-of", String((c.llm || {}).best_of ?? 2));
   set("set-engine", (c.tts || {}).engine);
   set("set-primary", (c.tts || {}).primary);
   set("set-seconds", (c.script || {}).target_seconds);
@@ -492,7 +493,7 @@ $("#settings-form").addEventListener("submit", async (e) => {
   e.preventDefault();
   const plats = ["youtube", "tiktok", "instagram"].filter((p) => $("#set-pf-" + p).checked);
   const patch = {
-    llm: { model: $("#set-model").value },
+    llm: { model: $("#set-model").value, best_of: Number($("#set-best-of").value) || 1 },
     script: { language: $("#set-language").value, target_seconds: Number($("#set-seconds").value) || 75,
               subtitle_language: $("#set-subtitle-language").value || null,
               refine_passes: Number($("#set-refine").value) || 0 },
@@ -558,7 +559,7 @@ function makeMock() {
     videoUrl: async () => "",
     publish: async (slug, platforms, go) => ({ plan: platforms.map((p) => ({ platform: p, caption: "…", dry_run: !go })) }),
     getConfig: async () => ({
-      llm: { model: "gemma4:26b-mlx" },
+      llm: { model: "gemma4:26b-mlx", best_of: 2 },
       script: { language: "en", target_seconds: 75 },
       tts: { engine: "kokoro", primary: "kokoro" },
       stt: { engine: "parakeet" },

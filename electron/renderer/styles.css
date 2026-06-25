@@ -464,6 +464,9 @@ dialog.modal::backdrop { background: rgba(4, 7, 14, .72); }
 .inline-status--ok  { color: var(--good); }
 .inline-status--err { color: var(--fail); }
 
+/* small helper note under a settings field */
+.field__note { margin: 6px 2px 0; font-size: 12px; color: var(--faint); }
+
 /* stage rail: give weight to the active/done stage so the pipeline position reads at a glance */
 .stages li { border: 1px solid transparent; }
 .stages li:has(.stat--active) {

@@ -3,7 +3,8 @@
 
 llm:
   host: http://localhost:11434
-  model: gemma4:26b-mlx   # any installed Ollama model. Lighter/faster default: "qwen3:14b".
+  model: gemma4:26b-mlx   # the ONE script model (Gemma 4, native Apple MLX) — optimized for quality
+  best_of: 2              # generate N drafts and keep the LLM-judged best (1 = off, 3 = max quality)
   temperature: 0.7
 
 script:

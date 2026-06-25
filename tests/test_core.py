@@ -408,10 +408,14 @@ class OllamaClientPayload(unittest.TestCase):
             return _Resp()
 
         with mock.patch("avp.llm.requests.post", _fake_post):
-            out = llm.OllamaClient(LLMConfig()).chat("sys", "usr")
+            out = llm.OllamaClient(LLMConfig()).chat("sys", "usr")          # default model = gemma4:26b-mlx
         self.assertEqual(out, "{}")
         self.assertEqual(captured["json"]["options"]["num_ctx"], 8192)
-        self.assertEqual(captured["timeout"], (10, 300))      # (connect, read) — no 10-min hang
+        self.assertEqual(captured["timeout"], (10, 600))      # bounded read; gemma gets 600s for cold load
+        # a non-gemma model keeps the tighter 5-min bound
+        with mock.patch("avp.llm.requests.post", _fake_post):
+            llm.OllamaClient(LLMConfig(model="qwen3:14b")).chat("s", "u")
+        self.assertEqual(captured["timeout"], (10, 300))
 
 
 class OllamaConstrainedJsonByModel(unittest.TestCase):
@@ -643,6 +647,27 @@ class FootageRelevanceFloor(unittest.TestCase):
         diagram = F._relevance({"title": "jupiter storm diagram chart", "description": ""}, terms)
         photo = F._relevance({"title": "jupiter storm closeup", "description": ""}, terms)
         self.assertLess(diagram, photo)
+
+
+class JudgeBest(unittest.TestCase):
+    """best-of-N: the model picks the strongest draft; judging must never lose a usable script."""
+    _DRAFTS = [{"title": "A", "segments": [{"narration": "a"}]},
+               {"title": "B", "segments": [{"narration": "b"}]}]
+
+    def test_picks_judged_draft(self):
+        class _C:
+            def chat(self, system, user, fmt="json", temperature=None, num_predict=None):
+                return '{"best": 2, "why": "B has a stronger hook"}'
+        self.assertEqual(llm._judge_best(_C(), self._DRAFTS, "topic", "it")["title"], "B")
+
+    def test_single_draft_passthrough(self):
+        self.assertEqual(llm._judge_best(None, [{"title": "only"}], "t", "it")["title"], "only")
+
+    def test_falls_back_to_first_on_bad_verdict(self):
+        class _C:
+            def chat(self, *a, **k):
+                return "not json at all"
+        self.assertEqual(llm._judge_best(_C(), self._DRAFTS, "t", "it")["title"], "A")
 
 
 class AbRecommend(unittest.TestCase):
