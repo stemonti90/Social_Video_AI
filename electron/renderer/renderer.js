@@ -187,31 +187,38 @@ function setStatus(sel, text, kind) {
 // Script-gen progress: time-based creep (always moving → shows it's NOT stuck) lifted to real floors
 // when the streamed log hits a milestone. The model job is opaque/multi-minute, so the percentage
 // (2 decimals, as requested) reassures the user while the draft+critique phases have no log line.
-const NEW_EXPECT_S = 480;     // ~8 min for one script with refine×2 on gemma MLX (creep target)
-let _newTimer = null, _newStart = 0, _newFloor = 0;
+// Per-phase progress bands. Within a band the bar approaches `ceil` ASYMPTOTICALLY (never reaches it
+// from the clock alone), so the 6-decimal % keeps ticking every frame and never sits frozen, even if a
+// phase runs long. A real log milestone jumps to the next band. tau ≈ that phase's typical seconds.
+const NEW_BANDS = [
+  { anchor: 0,  ceil: 55, tau: 170, label: "Scrivo la prima bozza…" },
+  { anchor: 55, ceil: 80, tau: 110, label: "Rifinitura 1 di 2…" },
+  { anchor: 80, ceil: 97, tau: 90,  label: "Rifinitura 2 di 2…" },
+];
+let _newTimer = null, _newAnchorT = 0, _newBand = 0;
 function _setNewBar(pct) {
   pct = Math.max(0, Math.min(100, pct));
   const fill = $("#new-progress-fill"), track = $("#new-progress-track"), lbl = $("#new-progress-pct");
-  if (fill) fill.style.width = pct.toFixed(2) + "%";
+  if (fill) fill.style.width = pct.toFixed(2) + "%";          // CSS width: 2 dp is plenty (sub-pixel)
   if (track) track.setAttribute("aria-valuenow", pct.toFixed(2));
-  if (lbl) lbl.textContent = pct.toFixed(2) + "%";
+  // 6 decimals on the visible % so it ticks every frame on a multi-minute job → clearly not stuck
+  if (lbl) lbl.textContent = pct.toFixed(6) + "%";
 }
 function _newStage(t) { const el = $("#new-progress-stage"); if (el) el.textContent = t; }
 function _stopNewTimer() { if (_newTimer) { clearInterval(_newTimer); _newTimer = null; } }
+function _newSetBand(i) { _newBand = i; _newAnchorT = Date.now(); _newStage(NEW_BANDS[i].label); }
 function startNewProgress() {
-  _stopNewTimer(); _newFloor = 0; _newStart = Date.now();
+  _stopNewTimer();
   const box = $("#new-progress"); if (box) box.hidden = false;
-  _setNewBar(0); _newStage("Scrivo la prima bozza…");
+  _newSetBand(0); _setNewBar(0);
   _newTimer = setInterval(() => {
-    const elapsed = (Date.now() - _newStart) / 1000;
-    const timePct = Math.min(95, (elapsed / NEW_EXPECT_S) * 95);   // never reach 100 from the clock alone
-    _setNewBar(Math.max(timePct, _newFloor));
+    const b = NEW_BANDS[_newBand], t = (Date.now() - _newAnchorT) / 1000;
+    _setNewBar(b.ceil - (b.ceil - b.anchor) * Math.exp(-t / b.tau));   // asymptotic → always ticking
   }, 150);
 }
 function onNewLog(line) {
-  if (/refine pass\s*1\s*\//i.test(line)) { _newFloor = Math.max(_newFloor, 55); _newStage("Rifinitura 1 di 2…"); }
-  else if (/refine pass\s*2\s*\//i.test(line)) { _newFloor = Math.max(_newFloor, 80); _newStage("Rifinitura 2 di 2…"); }
-  else if (/script ready|Removed \d+ duplicate/i.test(line)) { _newFloor = 100; }
+  if (/refine pass\s*1\s*\//i.test(line)) _newSetBand(1);
+  else if (/refine pass\s*2\s*\//i.test(line)) _newSetBand(2);
 }
 function finishNewProgress(ok) {
   _stopNewTimer();
