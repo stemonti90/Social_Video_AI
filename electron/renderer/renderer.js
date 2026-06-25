@@ -184,24 +184,63 @@ function setStatus(sel, text, kind) {
   }, 3000);
 }
 
+// Script-gen progress: time-based creep (always moving → shows it's NOT stuck) lifted to real floors
+// when the streamed log hits a milestone. The model job is opaque/multi-minute, so the percentage
+// (2 decimals, as requested) reassures the user while the draft+critique phases have no log line.
+const NEW_EXPECT_S = 480;     // ~8 min for one script with refine×2 on gemma MLX (creep target)
+let _newTimer = null, _newStart = 0, _newFloor = 0;
+function _setNewBar(pct) {
+  pct = Math.max(0, Math.min(100, pct));
+  const fill = $("#new-progress-fill"), track = $("#new-progress-track"), lbl = $("#new-progress-pct");
+  if (fill) fill.style.width = pct.toFixed(2) + "%";
+  if (track) track.setAttribute("aria-valuenow", pct.toFixed(2));
+  if (lbl) lbl.textContent = pct.toFixed(2) + "%";
+}
+function _newStage(t) { const el = $("#new-progress-stage"); if (el) el.textContent = t; }
+function _stopNewTimer() { if (_newTimer) { clearInterval(_newTimer); _newTimer = null; } }
+function startNewProgress() {
+  _stopNewTimer(); _newFloor = 0; _newStart = Date.now();
+  const box = $("#new-progress"); if (box) box.hidden = false;
+  _setNewBar(0); _newStage("Scrivo la prima bozza…");
+  _newTimer = setInterval(() => {
+    const elapsed = (Date.now() - _newStart) / 1000;
+    const timePct = Math.min(95, (elapsed / NEW_EXPECT_S) * 95);   // never reach 100 from the clock alone
+    _setNewBar(Math.max(timePct, _newFloor));
+  }, 150);
+}
+function onNewLog(line) {
+  if (/refine pass\s*1\s*\//i.test(line)) { _newFloor = Math.max(_newFloor, 55); _newStage("Rifinitura 1 di 2…"); }
+  else if (/refine pass\s*2\s*\//i.test(line)) { _newFloor = Math.max(_newFloor, 80); _newStage("Rifinitura 2 di 2…"); }
+  else if (/script ready|Removed \d+ duplicate/i.test(line)) { _newFloor = 100; }
+}
+function finishNewProgress(ok) {
+  _stopNewTimer();
+  if (ok) { _setNewBar(100); _newStage("Pronto ✓"); setTimeout(() => { const b = $("#new-progress"); if (b) b.hidden = true; }, 1500); }
+  else { _newStage("Errore"); }
+}
+
 $("#new-form").addEventListener("submit", async (e) => {
   e.preventDefault();
   const topic = $("#topic").value.trim();
   if (!topic) return;
   const btn = $("#generate-btn");
   btn.disabled = true; btn.setAttribute("aria-busy", "true"); btn.textContent = "Genero…";
-  setStatus("#new-status", "Scrivo il copione… può richiedere qualche minuto", null);
+  setStatus("#new-status", "", null);
   announce("Generazione del copione in corso");
+  const unsub = API.onNewEvent ? API.onNewEvent((ev) => { if (ev.type === "log") onNewLog(ev.line); }) : null;
+  startNewProgress();
   try {
     const res = await API.newProject(topic);
+    finishNewProgress(true);
     await openProject(res.slug, res.title);
-    setStatus("#new-status", "", null);
     selectTab("tab-review");
     announce("Copione pronto per la revisione");
   } catch (err) {
+    finishNewProgress(false);
     setStatus("#new-status", "Errore nella generazione: " + ((err && err.message) || err), "err");
     announce("Errore nella generazione");
   } finally {
+    if (unsub) unsub();
     btn.disabled = false; btn.removeAttribute("aria-busy"); btn.textContent = "Genera copione";
   }
 });
@@ -469,7 +508,6 @@ async function loadSettings() {
   const set = (id, v) => { const el = $("#" + id); if (el && v != null) el.value = v; };
   set("set-language", (c.script || {}).language);
   set("set-model", (c.llm || {}).model);
-  set("set-best-of", String((c.llm || {}).best_of ?? 2));
   set("set-engine", (c.tts || {}).engine);
   set("set-primary", (c.tts || {}).primary);
   set("set-seconds", (c.script || {}).target_seconds);
@@ -493,7 +531,7 @@ $("#settings-form").addEventListener("submit", async (e) => {
   e.preventDefault();
   const plats = ["youtube", "tiktok", "instagram"].filter((p) => $("#set-pf-" + p).checked);
   const patch = {
-    llm: { model: $("#set-model").value, best_of: Number($("#set-best-of").value) || 1 },
+    llm: { model: $("#set-model").value },
     script: { language: $("#set-language").value, target_seconds: Number($("#set-seconds").value) || 75,
               subtitle_language: $("#set-subtitle-language").value || null,
               refine_passes: Number($("#set-refine").value) || 0 },
@@ -531,10 +569,20 @@ function makeMock() {
     { slug: "saturn-rings-pro", title: "Saturn's Rings Are Vanishing", stages: { script: "done", voice: "done", footage: "done", captions: "done", assemble: "done", metadata: "done" } },
     { slug: "andromeda-collision", title: "When Andromeda Hits Us", stages: { script: "done", voice: "done", footage: "partial", captions: "pending", assemble: "pending", metadata: "pending" } },
   ];
-  let buildCb = null;
+  let buildCb = null, newCb = null;
   return {
     listProjects: async () => projects,
-    newProject: async (topic) => { const slug = topic.toLowerCase().replace(/[^a-z0-9]+/g, "-").slice(0, 28).replace(/^-|-$/g, ""); projects.unshift({ slug, title: topic, stages: { script: "done" } }); return { slug, title: topic }; },
+    onNewEvent: (cb) => { newCb = cb; return () => { newCb = null; }; },
+    newProject: async (topic) => {
+      const slug = topic.toLowerCase().replace(/[^a-z0-9]+/g, "-").slice(0, 28).replace(/^-|-$/g, "");
+      const log = (line) => newCb && newCb({ type: "log", line });
+      await new Promise((r) => setTimeout(r, 1500)); log("Generating Italian script…");
+      await new Promise((r) => setTimeout(r, 1800)); log("Script refine pass 1/2 applied.");
+      await new Promise((r) => setTimeout(r, 1800)); log("Script refine pass 2/2 applied.");
+      await new Promise((r) => setTimeout(r, 900));  log("Script ready: (8 segments)");
+      projects.unshift({ slug, title: topic, stages: { script: "done" } });
+      return { slug, title: topic };
+    },
     deleteProject: async (slug) => { const i = projects.findIndex((x) => x.slug === slug); if (i >= 0) projects.splice(i, 1); return true; },
     readScript: async () => "# Saturn's Rings Are Vanishing — Here's Why\n\n## 1\nNARRATION: Saturn's iconic rings aren't eternal — they're slowly disappearing.\nVISUAL: Cassini wide view of Saturn\nKEYWORDS: Saturn rings, Cassini\n\n## 2\nNARRATION: NASA calls it \"ring rain\".\nVISUAL: ice falling into Saturn\nKEYWORDS: ring rain\n\n## 9\nNARRATION: Want to capture the cosmos yourself? Get AstroStackerPro — link in the bio.\nVISUAL: App endcard\nKEYWORDS:\n",
     saveScript: async () => {},
@@ -559,7 +607,7 @@ function makeMock() {
     videoUrl: async () => "",
     publish: async (slug, platforms, go) => ({ plan: platforms.map((p) => ({ platform: p, caption: "…", dry_run: !go })) }),
     getConfig: async () => ({
-      llm: { model: "gemma4:26b-mlx", best_of: 2 },
+      llm: { model: "gemma4:26b-mlx" },
       script: { language: "en", target_seconds: 75 },
       tts: { engine: "kokoro", primary: "kokoro" },
       stt: { engine: "parakeet" },

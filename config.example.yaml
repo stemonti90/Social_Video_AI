@@ -4,7 +4,7 @@
 llm:
   host: http://localhost:11434
   model: gemma4:26b-mlx   # the ONE script model (Gemma 4, native Apple MLX) — optimized for quality
-  best_of: 2              # generate N drafts and keep the LLM-judged best (1 = off, 3 = max quality)
+  best_of: 1              # 1 = one script refined in depth (quality); >1 generates N drafts (off by default)
   temperature: 0.7
 
 script:

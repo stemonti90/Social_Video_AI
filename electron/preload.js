@@ -18,4 +18,9 @@ contextBridge.exposeInMainWorld("avp", {
     ipcRenderer.on("avp:build-event", listener);
     return () => ipcRenderer.removeListener("avp:build-event", listener);
   },
+  onNewEvent: (cb) => {
+    const listener = (_e, ev) => cb(ev);
+    ipcRenderer.on("avp:new-event", listener);
+    return () => ipcRenderer.removeListener("avp:new-event", listener);
+  },
 });

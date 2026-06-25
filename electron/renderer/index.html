@@ -83,6 +83,13 @@
           </div>
           <button type="submit" class="btn btn--primary" id="generate-btn">Genera copione</button>
           <span class="inline-status" id="new-status" role="status" aria-live="polite"></span>
+          <div class="buildbar" id="new-progress" hidden>
+            <div class="buildbar__track" role="progressbar" aria-labelledby="new-progress-stage"
+                 aria-valuemin="0" aria-valuemax="100" aria-valuenow="0" id="new-progress-track">
+              <div class="buildbar__fill" id="new-progress-fill"></div>
+            </div>
+            <p class="buildbar__meta"><span id="new-progress-stage">Scrivo il copione…</span> · <span id="new-progress-pct">0.00%</span></p>
+          </div>
         </form>
       </section>
 
@@ -104,14 +111,6 @@
                 <option value="gemma4:26b-mlx">Gemma 4 26B · MLX</option>
               </select>
               <p class="field__note" id="model-note">Unico modello, ottimizzato per la massima qualità.</p>
-            </div>
-            <div class="field">
-              <label class="field__label" for="set-best-of">Qualità copione (best-of)</label>
-              <select class="field__input" id="set-best-of">
-                <option value="1">1 — bozza singola (più veloce)</option>
-                <option value="2">2 — sceglie la migliore (consigliato)</option>
-                <option value="3">3 — massima qualità (più lento)</option>
-              </select>
             </div>
             <div class="field">
               <label class="field__label" for="set-engine">Voce</label>
@@ -146,9 +145,9 @@
             <div class="field">
               <label class="field__label" for="set-refine">Rifiniture copione (qualità)</label>
               <select class="field__input" id="set-refine">
-                <option value="0">0 — bozza singola</option>
-                <option value="1">1 — consigliato</option>
-                <option value="2">2 — massima</option>
+                <option value="0">0 — bozza singola (veloce)</option>
+                <option value="1">1 — rifinita</option>
+                <option value="2">2 — massima qualità (consigliato)</option>
               </select>
             </div>
             <div class="field">

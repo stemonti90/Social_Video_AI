@@ -82,11 +82,30 @@ ipcMain.handle("avp:config-set", async (_e, patch) => {
   return true;
 });
 
-ipcMain.handle("avp:new", async (_e, topic) => {
-  const slug = slugify(topic);
-  await runAvp(["new", slug, "--topic", topic]);
-  const m = readManifest(slug) || {};
-  return { slug, title: m.title || topic };
+ipcMain.handle("avp:new", (e, topic) => {
+  // Stream the script-gen logs so the renderer can show real progress (it's a multi-minute LLM job).
+  return new Promise((resolve, reject) => {
+    const slug = slugify(topic);
+    const send = (ev) => { if (!e.sender.isDestroyed()) e.sender.send("avp:new-event", ev); };
+    const p = spawn(AVP, ["new", slug, "--topic", topic, "-v"], { cwd: ROOT, env: ENV });
+    let err = "";
+    const emit = (buf) => buf.toString().split(/\r?\n/).forEach((line) => {
+      if (line.trim()) send({ type: "log", line });
+    });
+    p.stdout.on("data", emit);
+    p.stderr.on("data", (d) => { err += d; emit(d); });   // avp logs go to stderr
+    p.on("close", (code) => {
+      if (code === 0) {
+        const m = readManifest(slug) || {};
+        send({ type: "done" });
+        resolve({ slug, title: m.title || topic });
+      } else {
+        send({ type: "error", line: `exit ${code}` });
+        reject(new Error(err || `exit ${code}`));
+      }
+    });
+    p.on("error", (e2) => { send({ type: "error", line: String(e2) }); reject(e2); });
+  });
 });
 
 ipcMain.handle("avp:readScript", (_e, slug) => {
