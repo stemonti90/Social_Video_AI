@@ -1035,5 +1035,37 @@ class PublishPostiz(unittest.TestCase):
         self.assertEqual(disc, {"youtube": "a", "tiktok": "b"})
 
 
+class MetadataClean(unittest.TestCase):
+    """gemma occasionally splits a word with a stray apostrophe ("Earth'ally" for "Earthly"). We can't
+    guess the intended word, so generate_metadata DETECTS it and re-rolls; standard contractions pass."""
+
+    def test_flags_stray_apostrophe_word(self):
+        from avp import llm
+        bad = {"youtube": {"title": "ok", "description": "from Earth'ally microbes."},
+               "tiktok": {"caption": "x"}, "instagram": {"caption": "y"}}
+        self.assertFalse(llm._meta_looks_clean(bad))
+
+    def test_accepts_standard_contractions(self):
+        from avp import llm
+        good = {"youtube": {"title": "Saturn's rings",
+                            "description": "It's a probe; don't miss what we're showing — you'll love it. I've seen it."},
+                "tiktok": {"caption": "hook #space"}, "instagram": {"caption": "clean caption"}}
+        self.assertTrue(llm._meta_looks_clean(good))
+
+    def test_clean_text_collapses_whitespace_only(self):
+        from avp import llm
+        self.assertEqual(llm._clean_text("a   b\t\tc  "), "a b c")
+        self.assertEqual(llm._clean_text("Earth's story"), "Earth's story")   # wording untouched
+
+    def test_clean_metadata_applies_to_nested_fields(self):
+        from avp import llm
+        d = llm._clean_metadata({"youtube": {"title": "a  b", "description": "c   d"},
+                                 "tiktok": {"caption": "e   f"}, "instagram": {"caption": "g  h"}})
+        self.assertEqual(d["youtube"]["title"], "a b")
+        self.assertEqual(d["youtube"]["description"], "c d")
+        self.assertEqual(d["tiktok"]["caption"], "e f")
+        self.assertEqual(d["instagram"]["caption"], "g h")
+
+
 if __name__ == "__main__":
     unittest.main()

@@ -397,7 +397,9 @@ def translate_segments(cfg: LLMConfig, texts: list[str], target_lang: str) -> li
 
 META_SYSTEM = (
     "You write platform-optimized metadata for a faceless astronomy/space short-form video. "
-    "Be accurate and non-clickbait. Return STRICT JSON only."
+    "Be accurate and non-clickbait. Use fluent, correctly spelled prose with standard apostrophes "
+    "(Earth's, don't) — never invent a word or split one with a stray apostrophe. "
+    "Return STRICT JSON only."
 )
 
 META_USER = """Title: {title}
@@ -412,6 +414,45 @@ Return JSON exactly:
 }}"""
 
 
+# A stray apostrophe INSIDE a word that isn't a real English contraction (gemma once wrote "Earth'ally"
+# for "Earthly") is a glitched generation. We can't guess the intended word, so we DETECT it and re-roll
+# the (stochastic) generation rather than ship broken text. Valid contraction suffixes are whitelisted.
+_CONTRACTIONS = {"s", "t", "d", "m", "re", "ve", "ll"}
+_APOSTROPHE_WORD = re.compile(r"[A-Za-z]+['’]([A-Za-z]+)")
+
+
+def _clean_text(s):
+    """Safe, deterministic tidy-ups only (collapse runs of spaces, trim) — never alter wording."""
+    return re.sub(r"[ \t]{2,}", " ", s).strip() if isinstance(s, str) else s
+
+
+def _meta_texts(data: dict) -> list[str]:
+    yt = data.get("youtube") or {}
+    return [yt.get("title", ""), yt.get("description", ""),
+            (data.get("tiktok") or {}).get("caption", ""),
+            (data.get("instagram") or {}).get("caption", "")]
+
+
+def _meta_looks_clean(data: dict) -> bool:
+    """False if any text field has a stray-apostrophe word (e.g. "Earth'ally") → caller re-rolls."""
+    return all(suffix.lower() in _CONTRACTIONS
+               for txt in _meta_texts(data)
+               for suffix in _APOSTROPHE_WORD.findall(txt or ""))
+
+
+def _clean_metadata(data: dict) -> dict:
+    yt = data.get("youtube")
+    if isinstance(yt, dict):
+        for k in ("title", "description"):
+            if k in yt:
+                yt[k] = _clean_text(yt[k])
+    for plat in ("tiktok", "instagram"):
+        d = data.get(plat)
+        if isinstance(d, dict) and "caption" in d:
+            d["caption"] = _clean_text(d["caption"])
+    return data
+
+
 def generate_metadata(cfg: LLMConfig, script: Script, funnel: FunnelConfig, language: str = "en") -> dict:
     name = LANG_NAME.get(language, "English")
     user = META_USER.format(title=script.title, narration=script.narration,
@@ -420,17 +461,24 @@ def generate_metadata(cfg: LLMConfig, script: Script, funnel: FunnelConfig, lang
     client = OllamaClient(cfg)
     log.info("Generating %s metadata with %s ...", name, cfg.model)
     last = "no attempts"                       # same gemma free-text flakiness as the script draft;
+    fallback = None                            # last structurally-valid dict, used if all re-rolls glitch
     for i in range(4):                          # the metadata stage also COLD-RELOADS a 16GB model
         try:                                    # (assemble evicted it) → first call may time out, so
             raw = client.chat(system, user, num_predict=1024)   # catch it & retry warm (see _read_timeout)
             if raw and raw.strip():
                 data = _extract_json(raw)
-                if isinstance(data, dict) and data:
-                    return data
-                last = "empty/non-object JSON"
+                if not (isinstance(data, dict) and data):
+                    last = "empty/non-object JSON"
+                elif not _meta_looks_clean(data):
+                    fallback, last = data, "malformed text (stray apostrophe)"   # re-roll for clean prose
+                else:
+                    return _clean_metadata(data)
             else:
                 last = "empty reply"
         except Exception as e:  # noqa: BLE001 — incl. a request timeout on the cold reload
             last = f"call/parse failed ({e})"
         log.warning("Metadata attempt %d/4 unusable (%s) — retrying.", i + 1, last)
+    if fallback is not None:                    # don't fail the build over a typo — ship the best we got
+        log.warning("Using last metadata despite %s.", last)
+        return _clean_metadata(fallback)
     raise RuntimeError(f"Model returned no usable metadata after 4 attempts ({last}).")
