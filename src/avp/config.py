@@ -101,7 +101,7 @@ class CaptionStyle:
 @dataclass
 class PublishConfig:
     """Publishing to socials via Postiz (open-source scheduler; covers TikTok/IG/YouTube + more)."""
-    postiz_url: str = "http://localhost:5000"
+    postiz_url: str = "http://localhost:4007/api"   # self-host public API base = NEXT_PUBLIC_BACKEND_URL
     postiz_token: str = ""        # or set env AVP_POSTIZ_TOKEN
     platforms: list[str] = field(default_factory=lambda: ["youtube", "tiktok", "instagram"])
     integrations: dict = field(default_factory=dict)  # platform -> Postiz integration (channel) id; {} = auto-discover

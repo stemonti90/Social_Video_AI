@@ -1,0 +1,5 @@
+# the cloned upstream compose (pulled by setup.sh — not vendored, stays current)
+upstream/
+# generated, sensitive
+.jwt_secret
+docker-compose.override.yaml

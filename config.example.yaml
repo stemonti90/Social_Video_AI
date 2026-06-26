@@ -56,12 +56,12 @@ captions:
   group: 3                # words shown per caption line
 
 publish:                  # share to socials via Postiz (open-source scheduler; TikTok/IG/YouTube + more)
-  # Setup: 1) run Postiz (self-host via Docker), 2) connect your TikTok/IG/YouTube channels in it,
-  # 3) create an API key at <postiz>/settings and put it in postiz_token (or env AVP_POSTIZ_TOKEN).
-  # `avp publish <slug>` is a DRY RUN (writes publish_plan.json); add --go to actually post,
-  # --at "2026-07-01T18:00:00Z" to schedule. Channel ids are auto-discovered from the connected
-  # channels, so `integrations` can stay empty unless you want to pin a specific one.
-  postiz_url: http://localhost:5000
+  # Setup: run `deploy/postiz/setup.sh` (brings up Postiz via Docker), then in the UI at
+  # http://localhost:4007 connect your TikTok/IG/YouTube channels and create an API key at Settings →
+  # put it in postiz_token (or env AVP_POSTIZ_TOKEN). `avp publish <slug>` is a DRY RUN (writes
+  # publish_plan.json); add --go to post, --at "2026-07-01T18:00:00Z" to schedule. Channel ids are
+  # auto-discovered, so `integrations` can stay empty unless you want to pin a specific one.
+  postiz_url: http://localhost:4007/api   # self-host public API base (NEXT_PUBLIC_BACKEND_URL)
   postiz_token: ""        # or set env AVP_POSTIZ_TOKEN
   platforms: [youtube, tiktok, instagram]
   voice: kokoro
