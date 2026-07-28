@@ -453,6 +453,64 @@ def _clean_metadata(data: dict) -> dict:
     return data
 
 
+BRAINSTORM_SYSTEM = (
+    "You are a content strategist for a faceless {theme} short-form video channel. Propose fresh, "
+    "SPECIFIC topics — a concrete object, mission, event, person, or phenomenon, each standing on its "
+    "own as a 45-60s explainer, NOT vague themes. Never repeat anything in the AVOID list. "
+    "Return STRICT JSON only: a flat array of short topic strings."
+)
+
+
+def _norm_topic(s: str) -> str:
+    """Normalize a topic for dedup: lowercase, alphanumerics only, collapsed spaces."""
+    return re.sub(r"[^a-z0-9]+", " ", (s or "").lower()).strip()
+
+
+def _extract_list(text: str) -> list:
+    """Array-aware JSON extraction (brainstorm returns a top-level array, which _extract_json's
+    object-only fallback would miss when the model wraps it in prose)."""
+    try:
+        data = _extract_json(text)
+        if isinstance(data, list):
+            return data
+        if isinstance(data, dict):
+            for v in data.values():
+                if isinstance(v, list):
+                    return v
+    except Exception:  # noqa: BLE001 — fall through to the array regex
+        pass
+    m = re.search(r"\[.*\]", text, flags=re.S)
+    return json.loads(m.group(0)) if m else []
+
+
+def brainstorm_topics(cfg: LLMConfig, avoid, n: int, theme: str = "space and astronomy",
+                      language: str = "en") -> list[str]:
+    """Ask the LLM for `n` fresh, specific topics not in `avoid` (topics already queued or produced).
+    Deduped against `avoid` AND within the batch. Returns up to `n` (fewer if the model repeats)."""
+    name = LANG_NAME.get(language, "English")
+    system = BRAINSTORM_SYSTEM.format(theme=theme) + f" Write the topics in {name}."
+    avoid_list = "\n".join(f"- {a}" for a in list(avoid)[:200]) or "(none yet)"
+    user = (f"Propose {n} NEW topics for the channel.\nAVOID (already covered or queued):\n{avoid_list}\n"
+            f'Return JSON only: ["topic one", "topic two", …] — up to {n} items, each ≤ 8 words.')
+    client = OllamaClient(cfg)
+    seen = {_norm_topic(a) for a in avoid}
+    out: list[str] = []
+    for i in range(3):
+        try:
+            raw = client.chat(system, user, num_predict=512)
+            for t in _extract_list(raw or ""):
+                t = str(t).strip().strip('"').strip()
+                key = _norm_topic(t)
+                if t and key and key not in seen:
+                    seen.add(key)
+                    out.append(t)
+                    if len(out) >= n:
+                        return out
+        except Exception as e:  # noqa: BLE001 — a bad batch shouldn't crash the daily run
+            log.warning("brainstorm attempt %d/3 failed (%s) — retrying.", i + 1, e)
+    return out
+
+
 def generate_metadata(cfg: LLMConfig, script: Script, funnel: FunnelConfig, language: str = "en") -> dict:
     name = LANG_NAME.get(language, "English")
     user = META_USER.format(title=script.title, narration=script.narration,

@@ -1067,5 +1067,144 @@ class MetadataClean(unittest.TestCase):
         self.assertEqual(d["instagram"]["caption"], "g h")
 
 
+class AutoPipeline(unittest.TestCase):
+    """The daily automation: topic queue + LLM refill, best-time slotting, and a batch runner that
+    builds every video but only posts to platforms with a connected Postiz channel."""
+
+    def test_slugify(self):
+        from avp import auto
+        self.assertEqual(auto.slugify("Perché gli anelli di Saturno?!"), "perche-gli-anelli-di-saturno")
+        self.assertEqual(auto.slugify("  Cassini   probe  "), "cassini-probe")
+        self.assertEqual(auto.slugify("!!!"), "video")
+
+    def test_post_slots_future_only_and_rolls_over(self):
+        from avp import auto
+        from datetime import datetime
+        from zoneinfo import ZoneInfo
+        now = datetime(2026, 6, 29, 19, 30, tzinfo=ZoneInfo("Europe/Rome"))   # past 18:00, before 21:00
+        slots = auto.post_slots(now, ["12:00", "18:00", "21:00"], "Europe/Rome", 3)
+        self.assertTrue(all(s > now for s in slots))
+        self.assertEqual([(s.hour, s.day) for s in slots], [(21, 29), (12, 30), (18, 30)])
+        self.assertTrue(auto._iso_utc(slots[0]).endswith("Z"))
+
+    def test_extract_list_handles_array_and_wrapped(self):
+        from avp import llm
+        self.assertEqual(llm._extract_list('["a","b"]'), ["a", "b"])
+        self.assertEqual(llm._extract_list('Here:\n["x", "y"]\ndone'), ["x", "y"])
+        self.assertEqual(llm._extract_list('{"topics":["p","q"]}'), ["p", "q"])
+
+    def test_queue_roundtrip_ignores_comments(self):
+        from avp import auto
+        with tempfile.TemporaryDirectory() as td:
+            p = Path(td) / "q.txt"
+            auto.save_queue(p, ["Alpha", "Beta"])
+            (p).write_text("# a comment\nAlpha\n\n  Beta \n# another\n")
+            self.assertEqual(auto.load_queue(p), ["Alpha", "Beta"])
+
+    def test_next_topics_refills_when_low_and_consumes(self):
+        from avp import auto
+        cfg = Config.load(None)
+        with tempfile.TemporaryDirectory() as td:
+            cfg.paths.projects_dir = td
+            cfg.auto.queue_path = "q.txt"
+            cfg.auto.refill_threshold = 5
+            auto.save_queue(auto._queue_path(cfg), ["Existing One"])
+            orig = auto.llm.brainstorm_topics
+            auto.llm.brainstorm_topics = lambda lc, avoid, n, theme, language: \
+                ["New A", "New B", "New C", "New D", "New E", "New F"]
+            try:
+                got = auto.next_topics(cfg, 2, consume=True)
+            finally:
+                auto.llm.brainstorm_topics = orig
+            self.assertEqual(got, ["Existing One", "New A"])                    # popped from the top
+            remaining = auto.load_queue(auto._queue_path(cfg))
+            self.assertEqual(remaining[0], "New B")                             # rest persisted
+            self.assertNotIn("Existing One", remaining)
+
+    def test_peek_does_not_mutate_or_call_llm(self):
+        from avp import auto
+        cfg = Config.load(None)
+        with tempfile.TemporaryDirectory() as td:
+            cfg.paths.projects_dir = td
+            cfg.auto.queue_path = "q.txt"
+            auto.save_queue(auto._queue_path(cfg), ["A", "B", "C"])
+            called = {"n": 0}
+            orig = auto.llm.brainstorm_topics
+            auto.llm.brainstorm_topics = lambda *a, **k: called.__setitem__("n", called["n"] + 1) or []
+            try:
+                got = auto.next_topics(cfg, 2, consume=False)
+            finally:
+                auto.llm.brainstorm_topics = orig
+            self.assertEqual(got, ["A", "B"])
+            self.assertEqual(called["n"], 0)                                    # no LLM call on peek
+            self.assertEqual(auto.load_queue(auto._queue_path(cfg)), ["A", "B", "C"])   # unchanged
+
+    def test_run_daily_builds_all_but_posts_only_connected(self):
+        import avp.pipeline as pipeline_mod
+        import avp.publish as publish_mod
+        import avp.stages as stages_mod
+        from avp import auto
+        cfg = Config.load(None)
+        cfg.auto.platforms = ["tiktok", "instagram"]
+        published, orig = [], {}
+
+        class FakeProj:
+            @classmethod
+            def create(cls, slug, cfg):
+                return object()
+
+        def patch(mod, name, val):
+            orig[(mod, name)] = getattr(mod, name)
+            setattr(mod, name, val)
+        try:
+            patch(auto, "next_topics", lambda c, n, consume=True: ["Topic A", "Topic B"])
+            patch(auto, "connected_platforms", lambda c: {"tiktok"})           # instagram NOT connected
+            patch(auto, "VideoProject", FakeProj)
+            patch(stages_mod, "stage_script", lambda p, c, t: None)
+            patch(pipeline_mod, "build", lambda p, c, config_path=None: None)
+            patch(publish_mod, "stage_publish",
+                  lambda p, c, go=False, platforms=None, when=None: published.append((platforms, when)))
+            report = auto.run_daily(cfg, count=2, dry_run=False, publish=True)
+        finally:
+            for (mod, name), val in orig.items():
+                setattr(mod, name, val)
+        self.assertEqual(len(report), 2)
+        self.assertTrue(all(e.get("built") for e in report))
+        self.assertEqual([e["published_to"] for e in report], [["tiktok"], ["tiktok"]])  # IG skipped
+        self.assertEqual(len(published), 2)
+        self.assertTrue(all(w and w.endswith("Z") for _, w in published))      # scheduled at a UTC time
+
+    def test_run_daily_generate_only_when_no_channel(self):
+        import avp.pipeline as pipeline_mod
+        import avp.publish as publish_mod
+        import avp.stages as stages_mod
+        from avp import auto
+        cfg = Config.load(None)
+        posted, orig = [], {}
+
+        class FakeProj:
+            @classmethod
+            def create(cls, slug, cfg):
+                return object()
+
+        def patch(mod, name, val):
+            orig[(mod, name)] = getattr(mod, name)
+            setattr(mod, name, val)
+        try:
+            patch(auto, "next_topics", lambda c, n, consume=True: ["Only One"])
+            patch(auto, "connected_platforms", lambda c: set())                # nothing connected
+            patch(auto, "VideoProject", FakeProj)
+            patch(stages_mod, "stage_script", lambda p, c, t: None)
+            patch(pipeline_mod, "build", lambda p, c, config_path=None: None)
+            patch(publish_mod, "stage_publish", lambda *a, **k: posted.append(1))
+            report = auto.run_daily(cfg, count=1, dry_run=False, publish=True)
+        finally:
+            for (mod, name), val in orig.items():
+                setattr(mod, name, val)
+        self.assertTrue(report[0]["built"])
+        self.assertEqual(report[0]["published_to"], [])                        # built, not posted
+        self.assertEqual(posted, [])                                           # publish never called
+
+
 if __name__ == "__main__":
     unittest.main()

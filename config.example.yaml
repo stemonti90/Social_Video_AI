@@ -75,3 +75,13 @@ paths:
   projects_dir: projects
   footage_dir: assets/footage
   music_dir: assets/music
+
+auto:                     # unattended daily pipeline: `avp auto` generates count videos + schedules them
+  count: 3                # videos per run
+  platforms: [tiktok, instagram]   # only those with a connected Postiz channel actually get posted
+  post_times: ["12:00", "18:00", "21:00"]   # local HH:MM slots; tune to YOUR audience's best times
+  timezone: Europe/Rome   # IANA tz the post_times are in
+  queue_path: topics.txt  # topic queue (one per line); relative → under projects_dir
+  refill_threshold: 6     # refill the queue when it holds fewer than this
+  refill_batch: 12        # how many topics the LLM proposes per refill
+  theme: space and astronomy   # editorial theme for LLM topic brainstorming

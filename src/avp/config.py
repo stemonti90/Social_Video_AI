@@ -125,6 +125,22 @@ class PathsConfig:
 
 
 @dataclass
+class AutoConfig:
+    """Unattended daily pipeline: generate N videos and schedule them to Postiz at set local times.
+    Topics come from a queue file (one per line); when it runs low the LLM proposes fresh, deduped
+    ones. Publishing only happens for platforms whose channel is actually connected in Postiz —
+    otherwise the videos are still built and left ready. Runs on Apple Silicon (the models are MLX)."""
+    count: int = 3                       # videos generated per run
+    platforms: list[str] = field(default_factory=lambda: ["tiktok", "instagram"])
+    post_times: list[str] = field(default_factory=lambda: ["12:00", "18:00", "21:00"])  # local HH:MM
+    timezone: str = "Europe/Rome"        # IANA tz the post_times are expressed in
+    queue_path: str = "topics.txt"       # topic queue (one per line); relative paths → projects_dir
+    refill_threshold: int = 6            # refill the queue when it holds fewer than this many topics
+    refill_batch: int = 12               # how many topics the LLM proposes per refill
+    theme: str = "space and astronomy"   # editorial theme the LLM brainstorms topics within
+
+
+@dataclass
 class Config:
     llm: LLMConfig = field(default_factory=LLMConfig)
     script: ScriptConfig = field(default_factory=ScriptConfig)
@@ -135,6 +151,7 @@ class Config:
     captions: CaptionStyle = field(default_factory=CaptionStyle)
     publish: PublishConfig = field(default_factory=PublishConfig)
     paths: PathsConfig = field(default_factory=PathsConfig)
+    auto: AutoConfig = field(default_factory=AutoConfig)
 
     @classmethod
     def load(cls, path: str | Path | None = None) -> "Config":
@@ -178,6 +195,7 @@ class Config:
             captions=_section("captions", CaptionStyle),
             publish=_section("publish", PublishConfig),
             paths=_section("paths", PathsConfig),
+            auto=_section("auto", AutoConfig),
         )
 
         # Environment overrides win over the file (but an empty/unset env var must NOT blank a

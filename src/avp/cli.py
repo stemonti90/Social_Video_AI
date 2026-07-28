@@ -91,6 +91,18 @@ def _build_parser() -> argparse.ArgumentParser:
     ab = sub.add_parser("ab", parents=[common], help="A/B compare fp16 vs fp32 and voice variants")
     ab.add_argument("--kinds", nargs="*", default=["fp16", "voice"], help="which comparisons to run")
     ab.add_argument("--text", default=None, help="sample line to synthesize for the voice A/B")
+
+    au = sub.add_parser("auto", parents=[common],
+                        help="generate N videos and schedule them to Postiz (daily automation)")
+    au.add_argument("--count", type=int, default=None, help="override auto.count for this run")
+    au.add_argument("--dry-run", action="store_true",
+                    help="pick topics + show the plan; do NOT generate or post")
+    au.add_argument("--no-publish", action="store_true",
+                    help="generate the videos but do not schedule them to Postiz")
+
+    tp = sub.add_parser("topics", parents=[common], help="show, add to, or refill the topic queue")
+    tp.add_argument("--refill", action="store_true", help="top the queue up via the LLM now")
+    tp.add_argument("--add", nargs="*", default=None, help="append one or more topics to the queue")
     return p
 
 
@@ -201,6 +213,30 @@ def main(argv: list[str] | None = None) -> int:
         setup_logging(level, out_dir / "ab.log")
         text = args.text or "Otto pianeti orbitano il Sole a velocità molto diverse."
         report = abtest.run_ab(out_dir, cfg, text=text, kinds=tuple(args.kinds))
+        print(json.dumps(report, indent=2, ensure_ascii=False))
+        return 0
+
+    if args.cmd == "topics":
+        from . import auto as auto_mod
+        path = auto_mod._queue_path(cfg)
+        if args.add:
+            q = auto_mod.load_queue(path)
+            q += [t.strip() for t in args.add if t.strip()]
+            auto_mod.save_queue(path, q)
+        if args.refill:
+            auto_mod.next_topics(cfg, 0, consume=True)     # refill to threshold without popping
+        q = auto_mod.load_queue(path)
+        print(f"# {path}  ({len(q)} topics)")
+        for t in q:
+            print(t)
+        return 0
+
+    if args.cmd == "auto":
+        from pathlib import Path
+        from . import auto as auto_mod
+        setup_logging(level, Path(cfg.paths.projects_dir).expanduser() / "_auto" / "auto.log")
+        report = auto_mod.run_daily(cfg, count=args.count, dry_run=args.dry_run,
+                                    publish=not args.no_publish, config_path=args.config)
         print(json.dumps(report, indent=2, ensure_ascii=False))
         return 0
 
