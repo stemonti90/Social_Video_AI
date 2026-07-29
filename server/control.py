@@ -229,8 +229,9 @@ class Store:
         for r in self._conn.execute("SELECT status, COUNT(*) c FROM jobs GROUP BY status"):
             counts[r["status"]] = r["c"]
         recent = [dict(r) for r in self._conn.execute(
-            "SELECT id, topic, slot_utc, status, posted_to, error FROM jobs ORDER BY created_at DESC LIMIT 20")]
-        return {"queue": len(self.topics()), "jobs": counts, "recent": recent,
+            "SELECT id, topic, slot_utc, status, posted_to, error, worker FROM jobs ORDER BY created_at DESC LIMIT 30")]
+        topics = self.topics()
+        return {"queue": len(topics), "topics": topics, "jobs": counts, "recent": recent,
                 "config": {k: CFG[k] for k in ("count", "platforms", "post_times", "timezone", "generate_hour")}}
 
     def meta_get(self, k):
@@ -339,20 +340,68 @@ class Handler(BaseHTTPRequestHandler):
 
 
 def _ui_html():
-    return """<!doctype html><meta charset=utf-8><title>Social Video AI — Control</title>
-<style>body{font:14px system-ui;margin:2rem;max-width:900px}h1{font-size:1.3rem}
-table{border-collapse:collapse;width:100%}td,th{border-bottom:1px solid #ccc;padding:.4rem;text-align:left}
-.k{color:#666}code{background:#f2f2f2;padding:.1rem .3rem;border-radius:3px}</style>
-<h1>🛰️ Social Video AI — Control</h1><div id=s>loading…</div>
+    return """<!doctype html><html lang=it><meta charset=utf-8>
+<meta name=viewport content="width=device-width,initial-scale=1"><title>Social Video AI — Control</title>
+<style>
+:root{--bg:#fff;--fg:#1a1a2e;--mut:#667;--line:#e3e3ee;--card:#f7f7fb;--accent:#5b5bd6}
+@media(prefers-color-scheme:dark){:root{--bg:#14141c;--fg:#e8e8f0;--mut:#9a9ab0;--line:#2a2a3a;--card:#1d1d28;--accent:#8f8ff0}}
+*{box-sizing:border-box}body{font:14px/1.5 system-ui,sans-serif;margin:0;background:var(--bg);color:var(--fg)}
+.wrap{max-width:980px;margin:0 auto;padding:1.5rem}h1{font-size:1.25rem;margin:.2rem 0 1rem}
+.row{display:flex;gap:1rem;flex-wrap:wrap}.card{background:var(--card);border:1px solid var(--line);border-radius:10px;padding:1rem;flex:1;min-width:220px}
+.mut{color:var(--mut)}.big{font-size:1.6rem;font-weight:700}
+table{border-collapse:collapse;width:100%;margin-top:.5rem}td,th{border-bottom:1px solid var(--line);padding:.45rem .5rem;text-align:left;font-size:13px}
+th{color:var(--mut);font-weight:600}
+.pill{display:inline-block;padding:.05rem .5rem;border-radius:99px;font-size:12px;font-weight:600}
+.s-pending{background:#8883}.s-in_progress{background:#e9a23b33;color:#c8791a}.s-done{background:#2ecc7133;color:#1a9e54}
+.s-uploaded{background:#5b5bd633;color:var(--accent)}.s-failed{background:#e5484d33;color:#e5484d}
+input,textarea,button{font:inherit;color:var(--fg);background:var(--bg);border:1px solid var(--line);border-radius:8px;padding:.5rem}
+button{background:var(--accent);color:#fff;border:0;cursor:pointer;font-weight:600}button.ghost{background:transparent;color:var(--fg);border:1px solid var(--line)}
+textarea{width:100%;min-height:70px;resize:vertical}.tok{width:100%;font-family:monospace}#msg{min-height:1.2em}.warn{color:#e5484d}
+</style><div class=wrap>
+<h1>🛰️ Social Video AI — Control</h1>
+<div class=row id=stats></div>
+<p class=mut id=cfg></p>
+<div class=row style="align-items:flex-start">
+  <div class=card style="flex:1.3">
+    <b>Coda topic</b> <span class=mut id=qn></span>
+    <ol id=queue class=mut style="margin:.4rem 0 .8rem;padding-left:1.2rem"></ol>
+    <textarea id=add placeholder="Aggiungi topic (uno per riga)…"></textarea>
+    <div style="display:flex;gap:.5rem;margin-top:.5rem"><button onclick=addTopics()>Aggiungi alla coda</button>
+    <button class=ghost onclick=planNow()>Genera i job di oggi ora</button></div>
+  </div>
+  <div class=card style="flex:.7">
+    <b>Accesso</b><p class=mut style=margin:.3rem>Incolla il CONTROL_TOKEN per gestire coda e job (resta solo nel browser).</p>
+    <input class=tok id=tok placeholder="CONTROL_TOKEN" oninput="localStorage.svai_tok=this.value">
+    <p id=msg class=mut></p>
+  </div>
+</div>
+<div class=card style=margin-top:1rem><b>Job recenti</b>
+<table><thead><tr><th>topic</th><th>quando (UTC)</th><th>stato</th><th>postato</th><th>note</th></tr></thead>
+<tbody id=jobs></tbody></table></div>
+<p class=mut style=margin-top:1rem>aggiornamento automatico ogni 5s</p></div>
 <script>
-async function r(){const d=await (await fetch('/api/status')).json();
-let h=`<p class=k>coda topic: <b>${d.queue}</b> · config: ${d.config.count}/giorno → ${d.config.platforms.join(', ')} @ ${d.config.post_times.join(' / ')} (${d.config.timezone}), genera alle ${d.config.generate_hour}:00</p>`;
-h+=`<p>job: `+Object.entries(d.jobs).map(([k,v])=>`${k}=<b>${v}</b>`).join(' · ')+`</p>`;
-h+='<table><tr><th>topic</th><th>quando</th><th>stato</th><th>postato</th></tr>'+
-d.recent.map(j=>`<tr><td>${j.topic||''}</td><td>${(j.slot_utc||'').replace('T',' ').replace('.000Z','')}</td><td>${j.status}</td><td>${j.posted_to||''}${j.error?' ⚠️':''}</td></tr>`).join('')+'</table>';
-document.getElementById('s').innerHTML=h;}
-r();setInterval(r,5000);
-</script>"""
+const $=s=>document.querySelector(s);
+$('#tok').value=localStorage.svai_tok||'';
+function tok(){return localStorage.svai_tok||''}
+async function api(path,body){const r=await fetch(path,{method:'POST',headers:{'Authorization':tok(),'Content-Type':'application/json'},body:JSON.stringify(body||{})});
+ if(r.status===401){$('#msg').innerHTML='<span class=warn>token mancante o errato</span>';return null}
+ $('#msg').textContent='ok';return r.json()}
+async function addTopics(){const t=$('#add').value.split('\\n').map(s=>s.trim()).filter(Boolean);if(!t.length)return;
+ const r=await api('/api/topics',{topics:t});if(r){$('#add').value='';load()}}
+async function planNow(){const r=await api('/api/jobs/plan',{});if(r){load()}}
+function esc(s){return (s||'').replace(/[&<>]/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;'}[c]))}
+async function load(){const d=await(await fetch('/api/status')).json();
+ $('#stats').innerHTML=[['coda',d.queue],['in coda job',d.jobs.pending],['in corso',d.jobs.in_progress],['fatti',d.jobs.done],['caricati',d.jobs.uploaded],['falliti',d.jobs.failed]]
+   .map(([k,v])=>`<div class=card style=min-width:120px><div class=mut>${k}</div><div class=big>${v}</div></div>`).join('');
+ $('#cfg').textContent=`${d.config.count} video/giorno → ${d.config.platforms.join(', ')} @ ${d.config.post_times.join(' / ')} (${d.config.timezone}) · genera alle ${d.config.generate_hour}:00`;
+ $('#qn').textContent=`(${d.queue})`;
+ $('#queue').innerHTML=d.topics.map(t=>`<li>${esc(t)}</li>`).join('')||'<li class=mut>vuota</li>';
+ $('#jobs').innerHTML=d.recent.map(j=>`<tr><td>${esc(j.topic)}</td><td>${(j.slot_utc||'').replace('T',' ').replace('.000Z','')}</td>
+   <td><span class="pill s-${j.status}">${j.status}</span></td><td>${esc(j.posted_to)||'—'}</td>
+   <td class=warn>${esc(j.error)||''}</td></tr>`).join('')||'<tr><td colspan=5 class=mut>nessun job</td></tr>';
+}
+load();setInterval(load,5000);
+</script></html>"""
 
 
 # --------------------------------------------------------------------------- scheduler
