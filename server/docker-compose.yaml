@@ -1,0 +1,37 @@
+# Control plane for Social Video AI — runs on the always-on server next to Postiz.
+# Reaches Postiz over the host LAN IP (no shared docker network needed). Bound LAN-only.
+# Secrets (CONTROL_TOKEN, POSTIZ_TOKEN) live in ./.env (gitignored) — see .env.example.
+services:
+  svai-control:
+    build: .
+    image: svai-control:latest
+    container_name: svai-control
+    restart: unless-stopped
+    env_file:
+      - ./.env
+    environment:
+      POSTIZ_URL: "http://192.168.1.184:4007/api"
+      SVAI_COUNT: "3"
+      SVAI_PLATFORMS: "tiktok,instagram"
+      SVAI_POST_TIMES: "12:00,18:00,21:00"
+      SVAI_TIMEZONE: "Europe/Rome"
+      SVAI_GENERATE_HOUR: "6"
+      SVAI_PRIVACY: "public"
+      SVAI_DISCLOSE_AI: "0"
+      SVAI_DB: "/data/control.db"
+      SVAI_VIDEO_DIR: "/data/videos"
+      SVAI_HOST: "0.0.0.0"
+      SVAI_PORT: "8770"
+    ports:
+      - "192.168.1.184:8770:8770"   # LAN-only, for the Mac worker + UI (public UI later via Cloudflare)
+    volumes:
+      - svai-data:/data
+    deploy:
+      resources:
+        limits:
+          cpus: "0.5"
+          memory: 256M
+
+volumes:
+  svai-data:
+    external: false
