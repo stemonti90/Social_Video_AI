@@ -215,7 +215,6 @@ def main(argv: list[str] | None = None) -> int:
         return 0
 
     if args.cmd == "ab":
-        from pathlib import Path
         from . import abtest
         out_dir = Path(cfg.paths.projects_dir).expanduser() / "_ab"
         setup_logging(level, out_dir / "ab.log")
@@ -240,7 +239,6 @@ def main(argv: list[str] | None = None) -> int:
         return 0
 
     if args.cmd == "auto":
-        from pathlib import Path
         from . import auto as auto_mod
         setup_logging(level, Path(cfg.paths.projects_dir).expanduser() / "_auto" / "auto.log")
         report = auto_mod.run_daily(cfg, count=args.count, dry_run=args.dry_run,
