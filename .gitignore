@@ -42,3 +42,4 @@ Social AstroStacker App.app/
 # keep the Electron app icon (build resource) even though build/ is ignored
 !electron/build/
 !electron/build/icon.icns
+vendor/

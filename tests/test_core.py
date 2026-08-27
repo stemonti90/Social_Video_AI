@@ -1302,5 +1302,109 @@ class WorkerLoop(unittest.TestCase):
         self.assertFalse(any(u.endswith("/jobs/J2/video") for u in urls))
 
 
+class ImageGen(unittest.TestCase):
+    """Local AI visuals: prompts stay in the channel's photographic style, generation degrades safely
+    when mflux isn't installed, and CLIP picks the best candidate (falling back to the first)."""
+
+    def _seg(self, visual="Saturn rings from orbit", kw=("saturn", "rings")):
+        from avp.models import Segment
+        return Segment(index=1, narration="n", visual=visual, keywords=list(kw))
+
+    def _script(self):
+        from avp.models import Script
+        return Script(title="t", topic="Cassini probe", segments=[])
+
+    def test_prompt_has_subject_style_and_negatives(self):
+        from avp import imagegen
+        p = imagegen.build_prompt(self._seg(), self._script())
+        self.assertTrue(p.startswith("Saturn rings from orbit."))
+        self.assertIn("photorealistic astrophotography", p)
+        self.assertIn("no text", p)
+        self.assertIn("Avoid:", p)
+        self.assertIn("illustration", p)          # never illustration/CGI for space
+
+    def test_prompt_bucket_selection(self):
+        from avp import imagegen
+        self.assertEqual(imagegen._bucket("the Cassini probe approaching"), "spacecraft")
+        self.assertEqual(imagegen._bucket("a nebula in deep space"), "deep_sky")
+        self.assertEqual(imagegen._bucket("lunar surface craters"), "surface")
+        self.assertEqual(imagegen._bucket("something unrelated"), "default")
+
+    def test_prompt_falls_back_to_keywords_then_topic(self):
+        from avp import imagegen
+        p = imagegen.build_prompt(self._seg(visual="", kw=("enceladus", "geysers")), self._script())
+        self.assertTrue(p.startswith("enceladus geysers."))
+        bare = imagegen.build_prompt(self._seg(visual="", kw=()), self._script())
+        self.assertTrue(bare.startswith("Cassini probe."))
+
+    def test_available_requires_binary_and_model(self):
+        from avp import imagegen
+        cfg = Config.load(None)
+        with tempfile.TemporaryDirectory() as td:
+            cfg.video.image_venv = str(Path(td) / "venv")
+            cfg.video.image_model = str(Path(td) / "model")
+            self.assertFalse(imagegen.available(cfg))          # neither present
+            (Path(td) / "venv" / "bin").mkdir(parents=True)
+            (Path(td) / "venv" / "bin" / "mflux-generate-z-image-turbo").write_text("#!/bin/sh\n")
+            self.assertFalse(imagegen.available(cfg))          # binary only → still not usable
+            (Path(td) / "model").mkdir()
+            self.assertTrue(imagegen.available(cfg))           # both → good
+
+    def test_generate_returns_none_when_unavailable(self):
+        from avp import imagegen
+        cfg = Config.load(None)
+        cfg.video.image_venv = "/nonexistent-venv-xyz"
+        with tempfile.TemporaryDirectory() as td:
+            self.assertIsNone(
+                imagegen.generate_for_segment(self._seg(), self._script(), cfg, Path(td) / "o.png"))
+
+    def test_generate_picks_clip_best_candidate(self):
+        from avp import imagegen
+        cfg = Config.load(None)
+        cfg.video.image_candidates = 3
+        orig_avail, orig_run, orig_scores = imagegen.available, imagegen._run_mflux, imagegen.clip_scores
+        try:
+            imagegen.available = lambda c: True
+            imagegen._run_mflux = lambda p, out, seed, c: (out.write_bytes(b"PNG" + bytes([seed % 251])), True)[1]
+            imagegen.clip_scores = lambda imgs, text: [0.1, 0.9, 0.4]        # middle candidate wins
+            with tempfile.TemporaryDirectory() as td:
+                dest = Path(td) / "01.png"
+                rep = imagegen.generate_for_segment(self._seg(), self._script(), cfg, dest)
+            self.assertEqual(rep["candidates"], 3)
+            self.assertEqual(rep["selection"], "clip")
+            self.assertEqual(rep["chosen"], 1)
+        finally:
+            imagegen.available, imagegen._run_mflux, imagegen.clip_scores = orig_avail, orig_run, orig_scores
+
+    def test_generate_falls_back_to_first_without_clip(self):
+        from avp import imagegen
+        cfg = Config.load(None)
+        cfg.video.image_candidates = 2
+        orig_avail, orig_run, orig_scores = imagegen.available, imagegen._run_mflux, imagegen.clip_scores
+        try:
+            imagegen.available = lambda c: True
+            imagegen._run_mflux = lambda p, out, seed, c: (out.write_bytes(b"PNG"), True)[1]
+            imagegen.clip_scores = lambda imgs, text: []                     # CLIP unavailable
+            with tempfile.TemporaryDirectory() as td:
+                rep = imagegen.generate_for_segment(self._seg(), self._script(), cfg, Path(td) / "o.png")
+            self.assertEqual(rep["selection"], "first")
+            self.assertEqual(rep["chosen"], 0)
+        finally:
+            imagegen.available, imagegen._run_mflux, imagegen.clip_scores = orig_avail, orig_run, orig_scores
+
+    def test_generate_returns_none_when_every_candidate_fails(self):
+        from avp import imagegen
+        cfg = Config.load(None)
+        orig_avail, orig_run = imagegen.available, imagegen._run_mflux
+        try:
+            imagegen.available = lambda c: True
+            imagegen._run_mflux = lambda p, out, seed, c: False               # generator broken
+            with tempfile.TemporaryDirectory() as td:
+                self.assertIsNone(
+                    imagegen.generate_for_segment(self._seg(), self._script(), cfg, Path(td) / "o.png"))
+        finally:
+            imagegen.available, imagegen._run_mflux = orig_avail, orig_run
+
+
 if __name__ == "__main__":
     unittest.main()

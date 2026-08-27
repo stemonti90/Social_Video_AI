@@ -85,6 +85,19 @@ class VideoConfig:
     show_credits: bool = True    # burn a small source credit per clip
     footage_relevance_floor: float = 0.35   # min normalized relevance (0-1) of a visual to its segment; below → re-search then fallback
     footage_strict: bool = False            # strict: refuse a below-floor visual outright (generated backdrop) vs best-effort
+    # Visuals: archive = NASA/Wikimedia only (real, public-domain) · generate = local AI images
+    # (mflux z-image-turbo, CLIP-picked) with the archives as fallback. NOTE: with `generate` the
+    # visuals are synthetic — set publish.disclose_ai true so TikTok gets video_made_with_ai.
+    footage_source: str = "archive"         # archive | generate
+    image_venv: str = "vendor/mflux-venv"   # venv holding mflux-generate-z-image-turbo
+    image_model: str = "vendor/zimage-q4"   # PRE-QUANTIZED model dir (mflux-save -q 4); on-the-fly
+    #                                         quantizing peaks ~28GB and takes ~12min/image on 24GB
+    image_candidates: int = 2               # candidates per segment; CLIP keeps the best
+    image_steps: int = 8                    # z-image-turbo is a turbo model: 8 is its sweet spot
+    image_width: int = 720                  # 720x1280 ≈ 74s/image; 512x896 ≈ 25s (upscaled at render)
+    image_height: int = 1280
+    image_seed: int = 100
+    image_timeout: int = 900                # per-image cap, so a hung generator can't stall a build
 
 
 @dataclass

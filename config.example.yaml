@@ -45,6 +45,23 @@ video:
   prefer_video: true      # use NASA video clips when available, else stills + Ken Burns
   video_seek: 3.0         # skip N seconds into video clips (avoids NASA title cards)
   show_credits: true      # small source credit burned per clip
+  # Visuals: archive = real NASA/Wikimedia footage (public domain / free licenses) ·
+  # generate = local AI images (mflux z-image-turbo on MLX, best of N picked by CLIP), archives as
+  # fallback. Setup for `generate`:
+  #   python3.11 -m venv vendor/mflux-venv && vendor/mflux-venv/bin/pip install mflux
+  #   vendor/mflux-venv/bin/mflux-save --model z-image-turbo -q 4 --path vendor/zimage-q4
+  # ALWAYS pre-quantize: quantizing on the fly peaks ~28GB / ~12min per image on a 24GB Mac,
+  # versus ~9.8GB / ~74s from the saved model. With `generate` the visuals are synthetic —
+  # set publish.disclose_ai true (TikTok video_made_with_ai).
+  footage_source: archive     # archive | generate
+  image_venv: vendor/mflux-venv
+  image_model: vendor/zimage-q4    # pre-quantized model dir
+  image_candidates: 2         # per segment; CLIP keeps the best
+  image_steps: 8              # z-image-turbo sweet spot
+  image_width: 720            # 720x1280 ≈ 74s/image · 512x896 ≈ 25s
+  image_height: 1280
+  image_seed: 100
+  image_timeout: 900
 
 captions:
   font: Arial

@@ -350,6 +350,26 @@ def resolve_footage(project: VideoProject, script: Script, cfg, allow_download: 
         terms = _key_terms(seg, script)
         queries = [q for q in (" ".join(seg.keywords), seg.visual, script.topic) if q]
         floor = float(getattr(cfg.video, "footage_relevance_floor", 0.35) or 0.0)
+
+        # 0) Locally generated visual (mflux + CLIP), when configured AND actually installed. It runs
+        # before the archives so every segment gets an image made FOR it; if generation is off or the
+        # model isn't on disk, we fall straight through to the real-footage chain below.
+        if str(getattr(cfg.video, "footage_source", "archive")).lower() == "generate":
+            try:
+                from . import imagegen
+                dest = fdir / f"{seg.index:02d}.png"
+                gen = imagegen.generate_for_segment(seg, script, cfg, dest)
+                if gen:
+                    seg.footage = dest.name
+                    seg.credit = ""                      # our own pixels: nothing to attribute
+                    report.append(_report_entry(seg, {"title": "AI-generated"}, 1.0, floor,
+                                                "generated", f"mflux/{gen['selection']}"))
+                    used_ids.add(f"gen:{seg.index}")
+                    continue
+                log.warning("Segment %d: image generation unavailable — using archive footage", seg.index)
+            except Exception as e:  # noqa: BLE001 — generation must never sink the stage
+                log.warning("Segment %d: image generation failed (%s) — using archive footage",
+                            seg.index, e)
         # Fallback chain — never leave a segment black, never let one segment abort the stage:
         try:
             if _try_nasa(project, seg, queries, terms, used_ids, cfg, report):  # 1) NASA (PD) — also reports
