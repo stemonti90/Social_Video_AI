@@ -135,6 +135,12 @@ def _clip():
     return _CLIP["state"]
 
 
+def clip_available() -> bool:
+    """True if CLIP can actually score (model loadable). Used by the archive path to decide whether
+    to rerank on the pixels; never raises."""
+    return _clip() is not None
+
+
 def clip_scores(images: list[Path], text: str) -> list[float]:
     """Cosine similarity of each image to `text` (0-1-ish, comparable within one call). Empty list if
     CLIP isn't available."""

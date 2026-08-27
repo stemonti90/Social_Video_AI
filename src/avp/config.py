@@ -88,6 +88,13 @@ class VideoConfig:
     # Visuals: archive = NASA/Wikimedia only (real, public-domain) · generate = local AI images
     # (mflux z-image-turbo, CLIP-picked) with the archives as fallback. NOTE: with `generate` the
     # visuals are synthetic — set publish.disclose_ai true so TikTok gets video_made_with_ai.
+    # Archive matching: rank a shortlist by text, then let CLIP choose on the actual pixels — NASA
+    # titles rarely contain a segment's keywords, so text alone picks filler surprisingly often.
+    footage_clip: bool = True               # CLIP-rerank archive candidates (falls back to text)
+    footage_clip_candidates: int = 3        # shortlist size downloaded for the rerank
+    # CLIP cosine similarity lives on its OWN scale (ViT-B/32: ~0.30+ good, ~0.25 usable, <0.22 poor)
+    # — do NOT rescale it into the text-relevance scale, or a mediocre match reads as a great one.
+    footage_clip_floor: float = 0.25        # below this the winner is still wrong → next source
     footage_source: str = "archive"         # archive | generate
     image_venv: str = "vendor/mflux-venv"   # venv holding mflux-generate-z-image-turbo
     image_model: str = "vendor/zimage-q4"   # PRE-QUANTIZED model dir (mflux-save -q 4); on-the-fly

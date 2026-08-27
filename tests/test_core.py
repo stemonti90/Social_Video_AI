@@ -1406,5 +1406,94 @@ class ImageGen(unittest.TestCase):
             imagegen.available, imagegen._run_mflux = orig_avail, orig_run
 
 
+class FootageMatching(unittest.TestCase):
+    """Archive matching (A): richer query variants for the search, and a CLIP rerank on the pixels so
+    a good photo with an unhelpful NASA title stops losing to keyword-matching filler."""
+
+    def _seg(self, visual="Venus phases through a telescope", kw=("venus", "phases", "orbit")):
+        from avp.models import Segment
+        return Segment(index=2, narration="n", visual=visual, keywords=list(kw))
+
+    def _script(self):
+        from avp.models import Script
+        return Script(title="t", topic="Galileo Galilei", segments=[])
+
+    def test_expand_queries_specific_to_broad_and_deduped(self):
+        qs = footage._expand_queries(self._seg(), self._script())
+        self.assertEqual(qs[0], "Venus phases through a telescope")     # visual cue first
+        self.assertIn("venus phases orbit", qs)                          # the joined blob
+        self.assertIn("venus phases", qs)                                # adjacent pair
+        self.assertIn("venus", qs)                                       # single keyword
+        self.assertIn("Galileo Galilei", qs)                             # topic last
+        self.assertEqual(len(qs), len(set(q.lower() for q in qs)))       # deduped
+
+    def test_expand_queries_survives_empty_segment(self):
+        from avp.models import Script, Segment
+        qs = footage._expand_queries(Segment(index=1, narration="n"), Script(title="t", topic="Mars", segments=[]))
+        self.assertEqual(qs, ["Mars"])
+
+    def test_segment_meaning_prefers_visual_and_keywords(self):
+        m = footage._segment_meaning(self._seg(), self._script())
+        self.assertIn("Venus phases through a telescope", m)
+        self.assertIn("venus", m)
+        from avp.models import Script, Segment
+        bare = footage._segment_meaning(Segment(index=1, narration="spoken words"),
+                                        Script(title="t", topic="Mars", segments=[]))
+        self.assertEqual(bare, "Mars")                                   # never the narration
+
+    def test_pick_top_returns_ranked_shortlist(self):
+        cands = [{"nasa_id": "a", "title": "Venus transit", "description": "", "collection": "c1", "center": "JPL"},
+                 {"nasa_id": "b", "title": "Random nebula", "description": "", "collection": "c2", "center": "GSFC"},
+                 {"nasa_id": "c", "title": "Venus phases sequence", "description": "venus", "collection": "c3", "center": "JPL"}]
+        orig = footage.nasa_candidates
+        footage.nasa_candidates = lambda q, media_type="image", limit=30: cands
+        try:
+            top = footage._pick_top(["venus"], set(), ["venus", "phases"], "image", k=2)
+        finally:
+            footage.nasa_candidates = orig
+        self.assertEqual(len(top), 2)
+        self.assertEqual(top[0][0]["nasa_id"], "c")                      # best text match first
+        self.assertGreaterEqual(top[0][1], top[1][1])                    # relevance sorted
+
+    def test_pick_top_skips_used_and_dedups_titles(self):
+        cands = [{"nasa_id": "a", "title": "Mars portrait", "description": "", "collection": "c1", "center": "JPL"},
+                 {"nasa_id": "b", "title": "Mars Portrait", "description": "", "collection": "c2", "center": "JPL"},
+                 {"nasa_id": "c", "title": "Mars dunes", "description": "", "collection": "c3", "center": "JPL"}]
+        orig = footage.nasa_candidates
+        footage.nasa_candidates = lambda q, media_type="image", limit=30: cands
+        try:
+            # used_ids holds BOTH the id and the title key — that's what _try_nasa records after a
+            # pick, and it's the title key that blocks the same photo under a different nasa_id.
+            used = {"a", footage._title_key("Mars portrait")}
+            top = footage._pick_top(["mars"], used, ["mars"], "image", k=5)
+        finally:
+            footage.nasa_candidates = orig
+        ids = [c["nasa_id"] for c, _ in top]
+        self.assertNotIn("a", ids)                                       # already used elsewhere
+        self.assertNotIn("b", ids)                                       # same title, different id
+        self.assertEqual(ids, ["c"])
+
+    def test_clip_score_is_not_rescaled_into_text_relevance(self):
+        """Regression: a mediocre CLIP match (0.29) must NOT be reported as ~0.92 by rescaling —
+        that inflation let a plainly wrong photo pass a gate the text floor would have failed."""
+        from avp.config import Config as C
+        cfg = C.load(None)
+        self.assertEqual(cfg.video.footage_clip_floor, 0.25)          # CLIP has its own scale/floor
+        src = Path("src/avp/footage.py").read_text()
+        self.assertNotIn("/ 0.32", src)                                # the old rescale is gone
+        self.assertIn("footage_clip_floor", src)
+
+    def test_clip_rerank_picks_highest_and_degrades(self):
+        import avp.imagegen as ig
+        orig = ig.clip_scores
+        try:
+            ig.clip_scores = lambda paths, text: [0.2, 0.7, 0.3]
+            self.assertEqual(footage._clip_rerank([Path("a"), Path("b"), Path("c")], "venus"), (1, 0.7))
+            ig.clip_scores = lambda paths, text: []                      # CLIP unavailable
+            self.assertIsNone(footage._clip_rerank([Path("a")], "venus"))
+        finally:
+            ig.clip_scores = orig
+
+
 if __name__ == "__main__":
     unittest.main()

@@ -185,6 +185,28 @@ def _pick(queries: list[str], used_ids: set, terms: list[str], media_type: str) 
     return best, _relevance(best, terms)
 
 
+def _pick_top(queries: list[str], used_ids: set, terms: list[str], media_type: str,
+              k: int = 3) -> list[tuple[dict, float]]:
+    """The k best candidates by TEXT score, each with its text relevance — the shortlist CLIP then
+    reranks on the actual pixels. Same searches as _pick; we just keep the runners-up."""
+    pool: dict[str, dict] = {}
+    seen_titles: set[str] = set()
+    for q in queries:
+        try:
+            for c in nasa_candidates(q, media_type=media_type):
+                cid, tk = c["nasa_id"], _title_key(c["title"])
+                if not cid or cid in used_ids or tk in used_ids or cid in pool or tk in seen_titles:
+                    continue
+                pool[cid] = c
+                seen_titles.add(tk)
+        except Exception as e:  # noqa: BLE001 — network issues shouldn't crash the run
+            log.warning("NASA %s search failed for %r (%s)", media_type, q, e)
+        if len(pool) >= 12:
+            break
+    ranked = sorted(pool.values(), key=lambda c: _score(c, terms), reverse=True)[:max(1, k)]
+    return [(c, _relevance(c, terms)) for c in ranked]
+
+
 WIKI_API = "https://commons.wikimedia.org/w/api.php"
 GENERIC_QUERIES = ["nebula", "galaxy", "deep space", "star field astronomy", "cosmos"]
 
@@ -240,6 +262,54 @@ def wikimedia_pick(queries: list[str], used_ids: set) -> dict | None:
     return None
 
 
+def _expand_queries(seg, script) -> list[str]:
+    """Query variants for the FIRST search, ordered specific → broad.
+
+    The old single joined-keywords blob ("Venus Phases Planetary Motion") often matches nothing in
+    NASA's catalogue, so the pool ended up full of generic filler. Searching the visual cue, then
+    keyword pairs, then single keywords, then the topic gives the pool real alternatives to rank —
+    the same total round-trips, because _pick stops once it has enough candidates."""
+    kws = [str(k).strip() for k in (seg.keywords or []) if str(k).strip()]
+    out: list[str] = []
+    if seg.visual:
+        out.append(seg.visual)
+    if kws:
+        out.append(" ".join(kws))                                  # the original joined blob
+        out += [f"{a} {b}" for a, b in zip(kws, kws[1:])][:2]       # adjacent pairs: still specific
+        out += kws[:3]                                             # single keywords: broadest hits
+    if script.topic:
+        out.append(script.topic)
+    seen, uniq = set(), []
+    for q in out:
+        k = q.lower().strip()
+        if k and k not in seen:
+            seen.add(k)
+            uniq.append(q)
+    return uniq
+
+
+def _segment_meaning(seg, script) -> str:
+    """What the segment is actually ABOUT, for CLIP scoring: the writer's visual intent plus keywords
+    (not the narration, which is spoken prose and scores poorly against images)."""
+    kws = " ".join(str(k) for k in (seg.keywords or []) if k)
+    return " ".join(x for x in (seg.visual or "", kws) if x).strip() or (script.topic or "deep space")
+
+
+def _clip_rerank(paths: list[Path], meaning: str) -> tuple[int, float] | None:
+    """(index, score) of the image that best matches `meaning` on the PIXELS. None if CLIP is
+    unavailable — callers then keep the text-based ranking."""
+    try:
+        from . import imagegen
+        scores = imagegen.clip_scores(paths, meaning)
+    except Exception as e:  # noqa: BLE001 — reranking is a refinement, never a requirement
+        log.warning("CLIP rerank unavailable (%s)", e)
+        return None
+    if not scores:
+        return None
+    best = max(range(len(scores)), key=lambda i: scores[i])
+    return best, scores[best]
+
+
 def _refined_queries(seg) -> list[str]:
     """Tighter, more segment-specific queries to retry with when the first pick is below the floor:
     each keyword on its own (more targeted than the joined blob) plus the visual cue."""
@@ -255,7 +325,44 @@ def _report_entry(seg, chosen, rel, floor, outcome, rationale) -> dict:
             "outcome": outcome, "rationale": rationale}
 
 
-def _try_nasa(project: VideoProject, seg, queries, terms, used_ids, cfg, report: list) -> bool:
+def _clip_pick_image(project, seg, queries, terms, used_ids, cfg, meaning):
+    """Download the text-ranked shortlist and let CLIP choose on the pixels.
+
+    Text matching alone is brittle: NASA titles rarely contain a segment's keywords, so a perfectly
+    good photo scores 0.2 and loses to filler (the 'Venus phases' → 'Earth and Moon from Mars' case).
+    Scoring the actual image against the segment's meaning fixes exactly that. Returns
+    (candidate, asset_url, tmp_path, clip_score) or None; the caller keeps the text path on None."""
+    k = int(getattr(cfg.video, "footage_clip_candidates", 3) or 3)
+    shortlist = _pick_top(queries, used_ids, terms, "image", k=k)
+    if not shortlist:
+        return None
+    tmp_dir = project.footage_dir / "_cand"
+    tmp_dir.mkdir(parents=True, exist_ok=True)
+    got: list[tuple[dict, str, Path]] = []
+    for i, (c, _rel) in enumerate(shortlist):
+        try:
+            asset = _best_media(c["collection"], video=False)
+            if not asset:
+                continue
+            p = tmp_dir / f"{seg.index:02d}_{i}.jpg"
+            _download(asset, p)
+            got.append((c, asset, p))
+        except Exception as e:  # noqa: BLE001 — a bad candidate just drops out of the shortlist
+            log.warning("Segment %d: candidate %d fetch failed (%s)", seg.index, i, e)
+    if not got:
+        return None
+    if len(got) == 1:
+        return got[0][0], got[0][1], got[0][2], None
+    pick = _clip_rerank([p for _, _, p in got], meaning)
+    if pick is None:
+        return got[0][0], got[0][1], got[0][2], None      # CLIP unavailable → keep text ranking
+    idx, score = pick
+    log.info("Segment %d: CLIP reranked %d candidates → #%d (%.3f)", seg.index, len(got), idx, score)
+    return got[idx][0], got[idx][1], got[idx][2], score
+
+
+def _try_nasa(project: VideoProject, seg, queries, terms, used_ids, cfg, report: list,
+              meaning: str = "") -> bool:
     floor = float(getattr(cfg.video, "footage_relevance_floor", 0.35) or 0.0)
     strict = bool(getattr(cfg.video, "footage_strict", False))
     chosen, is_video, rel = None, False, 0.0
@@ -263,6 +370,38 @@ def _try_nasa(project: VideoProject, seg, queries, terms, used_ids, cfg, report:
         v, vr = _pick(queries, used_ids, terms, "video")
         if v and _score(v, terms) >= 2:
             chosen, is_video, rel = v, True, vr
+    if chosen is None and bool(getattr(cfg.video, "footage_clip", True)) and meaning:
+        hit = _clip_pick_image(project, seg, queries, terms, used_ids, cfg, meaning)
+        if hit:
+            c, asset, tmp, score = hit
+            # Gate on CLIP's OWN scale. Rescaling it into the text-relevance range made a mediocre
+            # 0.29 look like 0.92 and let a plainly wrong photo through — worse than the text floor
+            # it replaced. Below its floor we drop the whole shortlist and fall through.
+            clip_floor = float(getattr(cfg.video, "footage_clip_floor", 0.25) or 0.0)
+            if score is not None and score < clip_floor:
+                report.append(_report_entry(seg, c, score, clip_floor, "fallback",
+                                            f"CLIP best {score:.3f} < floor {clip_floor:.2f}"))
+                log.info("Segment %d: best archive candidate too weak (CLIP %.3f) — next source",
+                         seg.index, score)
+                return False
+            dest = project.footage_dir / f"{seg.index:02d}.jpg"
+            shutil.move(str(tmp), dest)                      # already downloaded — don't fetch twice
+            rel = round(float(score), 3) if score is not None else _relevance(c, terms)
+            used_ids.add(c["nasa_id"])
+            used_ids.add(_title_key(c["title"]))
+            seg.footage = dest.name
+            seg.credit = c["center"] or "NASA"
+            project.manifest.add_attribution(Attribution(
+                source=c["center"] or "NASA",
+                credit=f"{c['title']} — {c['center'] or 'NASA'}".strip(" —"),
+                license="Public Domain (NASA)", url=asset, asset_id=c["nasa_id"]))
+            # Report against the scale actually used, so the audit isn't misleading.
+            report.append(_report_entry(seg, c, rel, clip_floor if score is not None else floor,
+                                        "accepted",
+                                        f"CLIP rerank, best of shortlist ({score:.3f})"
+                                        if score is not None else "single candidate (text pick)"))
+            log.info("Segment %d ← NASA image %r (CLIP %.3f)", seg.index, c["title"], rel)
+            return True
     if chosen is None:
         chosen, rel = _pick(queries, used_ids, terms, "image")
 
@@ -348,7 +487,8 @@ def resolve_footage(project: VideoProject, script: Script, cfg, allow_download: 
             continue
 
         terms = _key_terms(seg, script)
-        queries = [q for q in (" ".join(seg.keywords), seg.visual, script.topic) if q]
+        queries = _expand_queries(seg, script)
+        meaning = _segment_meaning(seg, script)
         floor = float(getattr(cfg.video, "footage_relevance_floor", 0.35) or 0.0)
 
         # 0) Locally generated visual (mflux + CLIP), when configured AND actually installed. It runs
@@ -372,7 +512,7 @@ def resolve_footage(project: VideoProject, script: Script, cfg, allow_download: 
                             seg.index, e)
         # Fallback chain — never leave a segment black, never let one segment abort the stage:
         try:
-            if _try_nasa(project, seg, queries, terms, used_ids, cfg, report):  # 1) NASA (PD) — also reports
+            if _try_nasa(project, seg, queries, terms, used_ids, cfg, report, meaning):  # 1) NASA (PD)
                 continue
             if _try_wikimedia(project, seg, queries + GENERIC_QUERIES, used_ids):  # 2) Wikimedia Commons
                 report.append(_report_entry(seg, {"title": seg.credit}, 0.0, floor, "fallback",
