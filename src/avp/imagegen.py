@@ -22,12 +22,21 @@ log = get_logger("avp.imagegen")
 # Visual registry per segment intent — the space equivalent of the article pipeline's REGISTRO.
 # Keeps different subjects looking like one channel instead of a stock-image grab bag.
 REGISTRO = {
-    "planet": "a planet or moon filling much of the frame, seen from orbit, hard sunlight and deep shadow",
-    "deep_sky": "a nebula or galaxy field, long-exposure astrophotography, faint gas structure",
-    "surface": "a planetary or lunar surface up close, raking low light across terrain",
-    "spacecraft": "a spacecraft or probe silhouetted against a planet, sunlit metal and antennas",
-    "star": "the Sun in natural visible light, pale yellow-white photosphere with dark sunspots, realistic granulation, no lens flare clichés",
-    "default": "a deep space scene, stars and cosmic structure, documentary framing",
+    # Each entry states the LIGHTING AND PALETTE, not just the subject. Without that the model filled
+    # every scene with a warm orange glow — "sunlit metal", "the Sun with its corona" — so a Voyager
+    # video came out the same colour as a sunspot video and the whole channel looked monotone.
+    "planet": ("a planet or moon filling much of the frame, seen from orbit, in its own true colours, "
+               "hard white sunlight and deep black shadow, pure black space behind it"),
+    "deep_sky": ("a nebula or galaxy field on a pure black sky, cool blue and violet hydrogen glow with "
+                 "white starlight, long-exposure astrophotography, no orange cast"),
+    "surface": ("a planetary or lunar surface up close, grey and tan regolith in its natural colour, "
+                "raking white low light, black airless sky above the horizon"),
+    "spacecraft": ("a spacecraft or probe in the black void of deep space, cold white sunlight glinting "
+                   "on grey metal and gold foil, distant pinpoint stars, no glowing background"),
+    "star": ("the Sun in natural visible light, pale yellow-white photosphere with dark sunspots, "
+             "realistic granulation, black sky, no lens flare clichés"),
+    "default": ("a deep space scene on a black sky, white and blue starlight, cosmic structure, "
+                "documentary framing, neutral colour"),
 }
 
 # Style constants: what keeps segment-to-segment images coherent. Photographic, never illustration —
