@@ -1518,5 +1518,109 @@ class ScriptLengthBudget(unittest.TestCase):
         self.assertIn("words * 1.12", src)
 
 
+class SocialPolishFixes(unittest.TestCase):
+    """The six issues from the user's review: green-canvas backdrop, glued-on CTA, false-color look,
+    hybrid finale, music quality, slow one-image pacing."""
+
+    def test_backdrop_is_space_not_green_canvas(self):
+        # old bug: ImageChops.add(scale=1.7) DIVIDED the image into a muddy teal 'book canvas'
+        from avp.captions import render_cosmic_backdrop
+        from avp.config import VideoConfig
+        from PIL import Image
+        with tempfile.TemporaryDirectory() as td:
+            out = Path(td) / "b.png"
+            render_cosmic_backdrop(out, VideoConfig(width=270, height=480), seed=3)
+            im = Image.open(out).convert("RGB")
+            px = list(im.getdata())
+            n = len(px)
+            avg = [sum(c[i] for c in px) / n for i in range(3)]
+            self.assertLess(max(avg), 90)                          # overall dark (it's space)
+            self.assertGreater(avg[2], avg[0])                     # blue-dominant…
+            self.assertGreater(avg[2], avg[1])                     # …and NEVER green-dominant
+            bright = sum(1 for c in px if max(c) > 160)
+            self.assertGreater(bright, n * 0.001)                  # real stars are visible
+
+    def test_cta_narration_uses_topic_bridge_with_fallback(self):
+        from avp import stages
+        from avp.models import Script
+        cfg = Config.load(None)
+        bridged = Script(title="t", segments=[], cta_bridge="Want to capture Saturn's rings yourself?")
+        self.assertEqual(stages._cta_narration(bridged, cfg),
+                         "Want to capture Saturn's rings yourself? Get AstroStackerPro — link in bio.")
+        plain = Script(title="t", segments=[])
+        self.assertEqual(stages._cta_narration(plain, cfg),
+                         cfg.funnel.cta_line.format(app=cfg.funnel.app_name))
+
+    def test_script_dataclass_accepts_old_json_without_bridge(self):
+        from avp.models import Script
+        old = Script.from_dict({"title": "t", "segments": [], "topic": "x"})
+        self.assertEqual(old.cta_bridge, "")
+
+    def test_prompt_asks_for_cta_bridge(self):
+        self.assertIn("cta_bridge", llm.USER_TMPL)
+        self.assertIn("Do NOT name any app", llm.USER_TMPL)
+
+    def test_imagegen_style_is_natural_color(self):
+        from avp import imagegen
+        self.assertIn("natural true-color", imagegen.STILE)
+        self.assertNotIn("telescope and probe imagery look", imagegen.STILE)
+        for term in ("false color", "infrared look", "monochrome orange"):
+            self.assertIn(term, imagegen.NEGATIVI)
+
+    def test_music_prompts_carry_production_quality(self):
+        from avp import music
+        for mood, prompt in music.PROMPTS.items():
+            self.assertIn("high fidelity", prompt, mood)
+        self.assertIn("muddy", music.NEGATIVE)
+        self.assertIn("sudden cuts", music.NEGATIVE)
+
+    def test_imagegen_keeps_ranked_runner_up(self):
+        from avp import imagegen
+        from avp.models import Script, Segment
+        cfg = Config.load(None)
+        cfg.video.image_candidates = 3
+        cfg.video.images_per_segment = 2
+        seg = Segment(index=4, narration="n", visual="Saturn", keywords=["saturn"])
+        script = Script(title="t", topic="Saturn", segments=[])
+        orig = (imagegen.available, imagegen._run_mflux, imagegen.clip_scores)
+        try:
+            imagegen.available = lambda c: True
+            imagegen._run_mflux = lambda p, out, seed, c: (out.write_bytes(b"P" + str(seed).encode()), True)[1]
+            imagegen.clip_scores = lambda imgs, text: [0.10, 0.90, 0.40]
+            with tempfile.TemporaryDirectory() as td:
+                dest = Path(td) / "04.png"
+                rep = imagegen.generate_for_segment(seg, script, cfg, dest)
+                self.assertEqual(rep["kept"], 2)
+                self.assertEqual(rep["chosen"], 1)                 # best candidate first
+                self.assertTrue(dest.exists())
+                second = Path(td) / "04_2.png"
+                self.assertTrue(second.exists())                   # runner-up on screen too
+                # ranked order: dest holds candidate #1 (0.90), second holds #2 (0.40)
+                self.assertNotEqual(dest.read_bytes(), second.read_bytes())
+        finally:
+            imagegen.available, imagegen._run_mflux, imagegen.clip_scores = orig
+
+    def test_segment_sources_splits_stills_not_cta(self):
+        from avp import stages
+        from avp.models import Segment
+        with tempfile.TemporaryDirectory() as td:
+            fdir = Path(td) / "footage"
+            fdir.mkdir()
+            (fdir / "02.png").write_bytes(b"a")
+            (fdir / "02_2.png").write_bytes(b"b")
+            (fdir / "02_3.png").write_bytes(b"c")
+            (fdir / "06.png").write_bytes(b"e")
+
+            class P:
+                footage_dir = fdir
+            seg = Segment(index=2, narration="n", footage="02.png")
+            self.assertEqual([p.name for p in stages._segment_sources(P, seg)],
+                             ["02.png", "02_2.png", "02_3.png"])
+            cta = Segment(index=6, narration="n", footage="06.png", kind="cta")
+            self.assertEqual([p.name for p in stages._segment_sources(P, cta)], ["06.png"])
+            vid = Segment(index=2, narration="n", footage="02.mp4")
+            self.assertEqual([p.name for p in stages._segment_sources(P, vid)], ["02.mp4"])
+
+
 if __name__ == "__main__":
     unittest.main()

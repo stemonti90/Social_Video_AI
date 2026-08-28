@@ -58,9 +58,11 @@ For each segment provide:
 - "narration": TWO full spoken sentences (~18-24 words) — the point, then its consequence/scale/image,
 - "visual": a short cue for the ideal footage or image OF THIS TOPIC (describe the shot, e.g. "the object filling the frame, seen from orbit" / "the probe silhouetted against the planet"),
 - "keywords": 2-4 ENGLISH search keywords for space archives (they are English-indexed).
-Also provide a punchy "title".
+Also provide a punchy "title", and a "cta_bridge": ONE short spoken sentence (max 14 words) that
+bridges from THIS topic to the viewer capturing the night sky themselves — a question works well
+(e.g. for a Saturn video: "Want to capture Saturn's rings with your own phone?"). Do NOT name any app.
 Return JSON exactly like:
-{{"title": "...", "segments": [{{"narration": "...", "visual": "...", "keywords": ["...", "..."]}}]}}"""
+{{"title": "...", "cta_bridge": "...", "segments": [{{"narration": "...", "visual": "...", "keywords": ["...", "..."]}}]}}"""
 
 
 # Measured speaking rate of the Kokoro voices, words per second, from real builds:
@@ -402,8 +404,9 @@ def generate_script(cfg: LLMConfig, topic: str, seconds: int = 60, language: str
     if not segments:
         raise RuntimeError("Model returned no usable segments. Try re-running or a different model.")
     title = data.get("title") if isinstance(data.get("title"), (str, int, float)) else topic
+    bridge = data.get("cta_bridge") if isinstance(data.get("cta_bridge"), str) else ""
     return Script(title=str(title or topic).strip(), segments=segments,
-                  target_seconds=seconds, topic=topic)
+                  target_seconds=seconds, topic=topic, cta_bridge=bridge.strip())
 
 
 def translate_segments(cfg: LLMConfig, texts: list[str], target_lang: str) -> list[str]:

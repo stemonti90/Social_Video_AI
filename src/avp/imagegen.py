@@ -32,13 +32,16 @@ REGISTRO = {
 
 # Style constants: what keeps segment-to-segment images coherent. Photographic, never illustration —
 # for space, an "artist's impression" look reads as fake and undercuts the channel's credibility.
+# "real telescope imagery look" invited SDO-style FALSE-COLOR renders (deep orange suns, neon nebulae):
+# striking for astrophotographers, but average viewers read them as a cheap render. Natural color wins.
 STILE = (
-    "photorealistic astrophotography, cinematic wide shot, real telescope and probe imagery look, "
-    "natural light and true-to-life color, fine detail and film grain, "
+    "photorealistic astrophotography, cinematic wide shot, natural true-color palette exactly as the "
+    "human eye would see it, realistic dynamic range, fine detail and subtle film grain, "
     "no text, no watermark, no captions, no logos"
 )
 NEGATIVI = ("illustration, 3d render, cgi, digital art, cartoon, anime, painting, oversaturated neon, "
-            "fantasy, people, faces, text, watermark, ui elements")
+            "false color, infrared look, x-ray palette, monochrome orange, fantasy, people, faces, "
+            "text, watermark, ui elements")
 
 # Keyword → registry bucket. First match wins; order matters (surface before planet).
 _BUCKETS = (
@@ -168,16 +171,19 @@ def clip_scores(images: list[Path], text: str) -> list[float]:
 # --------------------------------------------------------------------------- public API
 def generate_for_segment(seg: Segment, script: Script, cfg, dest: Path,
                          work_dir: Path | None = None) -> dict | None:
-    """Generate the segment's visual: N candidates → CLIP picks the one closest to the segment's
-    meaning → copied to `dest`. Returns a report dict, or None if nothing could be generated (the
-    caller then falls back to the archive chain)."""
+    """Generate the segment's visuals: N candidates → CLIP ranks them against the segment's meaning →
+    the top `images_per_segment` go on screen (best first at `dest`, runners-up as NN_2.png, …), each
+    taking a slice of the segment's duration. Returns a report dict, or None if nothing generated."""
     if not available(cfg):
         return None
-    n = max(1, int(getattr(cfg.video, "image_candidates", 2)))
+    keep = max(1, int(getattr(cfg.video, "images_per_segment", 1) or 1))
+    n = max(keep, int(getattr(cfg.video, "image_candidates", 2)))
     base_seed = int(getattr(cfg.video, "image_seed", 100))
     prompt = build_prompt(seg, script)
     work = work_dir or (dest.parent / "_gen")
     work.mkdir(parents=True, exist_ok=True)
+    for stale in dest.parent.glob(f"{seg.index:02d}_*.png"):
+        stale.unlink(missing_ok=True)            # old runners-up must not leak into this build
 
     cands: list[Path] = []
     for i in range(n):
@@ -193,13 +199,16 @@ def generate_for_segment(seg: Segment, script: Script, cfg, dest: Path,
     meaning = (seg.visual or "") + " " + " ".join(str(k) for k in (seg.keywords or []) if k)
     scores = clip_scores(cands, meaning.strip() or script.topic or "deep space")
     if scores:
-        best_i = max(range(len(cands)), key=lambda i: scores[i])
+        order = sorted(range(len(cands)), key=lambda i: scores[i], reverse=True)
         method = "clip"
     else:
-        best_i, method = 0, "first"
-    shutil.copyfile(cands[best_i], dest)
-    log.info("Segment %d ← generated image (%d candidate%s, %s pick%s)",
-             seg.index, len(cands), "" if len(cands) == 1 else "s", method,
-             f", score {scores[best_i]:.3f}" if scores else "")
-    return {"prompt": prompt, "candidates": len(cands), "selection": method,
-            "scores": scores, "chosen": best_i}
+        order, method = list(range(len(cands))), "first"
+    kept = order[:min(keep, len(cands))]
+    shutil.copyfile(cands[kept[0]], dest)
+    for pos, idx in enumerate(kept[1:], start=2):
+        shutil.copyfile(cands[idx], dest.parent / f"{seg.index:02d}_{pos}.png")
+    log.info("Segment %d ← %d generated image%s of %d candidates (%s rank%s)",
+             seg.index, len(kept), "" if len(kept) == 1 else "s", len(cands), method,
+             f", best {scores[kept[0]]:.3f}" if scores else "")
+    return {"prompt": prompt, "candidates": len(cands), "kept": len(kept),
+            "selection": method, "scores": scores, "chosen": kept[0]}

@@ -99,7 +99,11 @@ class VideoConfig:
     image_venv: str = "vendor/mflux-venv"   # venv holding mflux-generate-z-image-turbo
     image_model: str = "vendor/zimage-q4"   # PRE-QUANTIZED model dir (mflux-save -q 4); on-the-fly
     #                                         quantizing peaks ~28GB and takes ~12min/image on 24GB
-    image_candidates: int = 2               # candidates per segment; CLIP keeps the best
+    image_candidates: int = 2               # candidates per segment; CLIP ranks them
+    # How many of those candidates end up ON SCREEN, splitting the segment's duration with hard cuts.
+    # 1 image per ~10s segment read as slow; 2 halves the shot length at zero extra generation cost
+    # (the runner-up was already generated and thrown away).
+    images_per_segment: int = 2
     image_steps: int = 8                    # z-image-turbo is a turbo model: 8 is its sweet spot
     image_width: int = 720                  # 720x1280 ≈ 74s/image; 512x896 ≈ 25s (upscaled at render)
     image_height: int = 1280

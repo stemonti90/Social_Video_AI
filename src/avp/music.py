@@ -20,23 +20,23 @@ MODEL = "stabilityai/stable-audio-open-1.0"
 PROMPTS = {
     "ethereal": ("Ethereal ambient space music, warm analog synth pads, slow evolving drones, "
                  "deep soft sub bass, gentle twinkling celestial bells, vast peaceful cosmic "
-                 "atmosphere, cinematic, smooth, no drums, no percussion, no vocals"),
+                 "atmosphere, cinematic, smooth, no drums, no percussion, no vocals, warm and clean studio production, high fidelity, seamless slow evolution"),
     "cinematic": ("Cinematic orchestral space ambient, soaring string and choir pads, deep "
                   "cinematic drones, slow majestic build, awe and wonder, film score, lush, "
-                  "no percussion, no drums, no vocals"),
+                  "no percussion, no drums, no vocals, polished film-score production, wide stereo image, high fidelity"),
     "dark": ("Dark mysterious deep-space drone, ominous low synth bass, slow shifting nebula "
-             "textures, distant echoes, suspenseful and vast, ambient, no drums, no vocals"),
+             "textures, distant echoes, suspenseful and vast, ambient, no drums, no vocals, clean deep low end, controlled and polished, high fidelity"),
     "tense": ("Tense suspenseful ambient, urgent pulsing low synth bass, subtle ticking heartbeat "
               "pulse, rising dread, dark cinematic underscore, driving but restrained, building "
-              "tension, no melody, no vocals"),
+              "tension, no melody, no vocals, polished cinematic underscore, tight controlled low end, professional film mix, high fidelity"),
     "emotional": ("Emotional cinematic ambient, tender warm piano, soft swelling strings, "
                   "bittersweet hopeful pads, intimate and reflective, slow gentle build, "
-                  "no percussion, no drums, no vocals"),
+                  "no percussion, no drums, no vocals, intimate studio recording quality, warm and clean, high fidelity"),
     "documentary": ("Calm neutral documentary underscore, soft minimal piano and warm pad, steady "
                     "understated, curious and clear, unobtrusive background bed, light, "
-                    "no percussion, no drums, no vocals"),
+                    "no percussion, no drums, no vocals, clean unobtrusive studio production, high fidelity"),
 }
-NEGATIVE = "low quality, noisy, distorted, clipping, harsh, lo-fi, abrupt"
+NEGATIVE = ("low quality, noisy, distorted, clipping, harsh, lo-fi, abrupt, muddy, hiss, metallic artifacts, dissonant, out of tune, glitchy, sudden cuts")
 
 # Per-mood musical character + a suggested loudnorm trim (dB) on the bed: tenser/epic beds sit a touch
 # louder, gentle/neutral ones a touch quieter — always under the voice (the mix also sidechain-ducks).

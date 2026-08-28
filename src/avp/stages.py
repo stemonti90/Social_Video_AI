@@ -26,7 +26,7 @@ from .models import Script, Segment, dedupe_segments
 
 log = get_logger("avp.stages")
 
-ENDCARD_SECONDS = 2.5     # the app endcard is shown (with music) but not spoken, for this long
+ENDCARD_TAIL_SECONDS = 1.2   # silent beat AFTER the spoken CTA so the button stays readable
 
 
 def _json(d: dict) -> str:
@@ -94,6 +94,16 @@ def load_script(project: VideoProject) -> Script:
     return base
 
 
+def _cta_narration(script: Script, cfg: Config) -> str:
+    """The SPOKEN call-to-action. A hard cut from content to an app card felt glued-on, so the LLM
+    writes a topic-tied bridge sentence ("Want to capture Saturn's rings with your own phone?") and we
+    append the app hook. Falls back to the generic funnel line when the model gave no bridge."""
+    bridge = (script.cta_bridge or "").strip()
+    if bridge:
+        return f"{bridge} Get {cfg.funnel.app_name} — link in bio."
+    return cfg.funnel.cta_line.format(app=cfg.funnel.app_name)
+
+
 def stage_script(project: VideoProject, cfg: Config, topic: str | None) -> Script:
     if not topic:
         topic = project.manifest.data.get("topic") or ""
@@ -106,7 +116,7 @@ def stage_script(project: VideoProject, cfg: Config, topic: str | None) -> Scrip
     if cfg.funnel.enabled:
         script.segments.append(Segment(
             index=len(script.segments) + 1,
-            narration=cfg.funnel.cta_line.format(app=cfg.funnel.app_name),
+            narration=_cta_narration(script, cfg),
             visual="App endcard", keywords=[], kind="cta"))
     project.script_json.write_text(_json(script.to_dict()))
     emit_script_md(script, project.script_md)
@@ -136,8 +146,23 @@ def stage_voice(project: VideoProject, cfg: Config) -> Script:
                 if out.exists():   # idempotent: reuse cached audio (delete audio/ to re-synth)
                     log.info("[%s] segment %d/%d (cached)", prov.name, seg.index, len(script.segments))
                 elif seg.kind == "cta":
-                    ffmpeg.silence(out, ENDCARD_SECONDS)   # endcard is shown, NOT spoken
-                    log.info("[%s] segment %d/%d (silent endcard)", prov.name, seg.index, len(script.segments))
+                    # SPOKEN endcard: the bridge line is voiced, then a short silent tail keeps the
+                    # card on screen long enough to read the button (a silent card felt glued-on).
+                    speech = normalize_mod.segment_speech(
+                        seg.narration, cfg.script.language, cfg.script.normalize_numbers)
+                    raw = adir / f"{seg.index:02d}.cta_raw.wav"
+                    prov.synthesize(speech, raw)
+                    spoken = adir / f"{seg.index:02d}.cta_spoken.wav"
+                    if do_trim:
+                        ffmpeg.trim_silence(raw, spoken)
+                    else:
+                        shutil.copyfile(raw, spoken)
+                    tail = adir / f"{seg.index:02d}.cta_tail.wav"
+                    ffmpeg.silence(tail, ENDCARD_TAIL_SECONDS)
+                    ffmpeg.concat_audio([spoken, tail], out, gap=0.0)
+                    for tmp in (raw, spoken, tail):
+                        tmp.unlink(missing_ok=True)
+                    log.info("[%s] segment %d/%d (spoken endcard)", prov.name, seg.index, len(script.segments))
                 else:
                     log.info("[%s] segment %d/%d", prov.name, seg.index, len(script.segments))
                     raw = adir / f"{seg.index:02d}.raw.wav"
@@ -252,6 +277,20 @@ def stage_captions(project: VideoProject, cfg: Config) -> None:
 
 
 # --------------------------------------------------------------------------- assemble
+def _segment_sources(project: VideoProject, seg) -> list[Path]:
+    """All on-screen visuals for a segment, in play order: the primary (seg.footage) plus any ranked
+    runners-up the generator kept (NN_2.png, NN_3.png, …). Splitting a ~10s segment across them halves
+    the shot length — one still per segment read as slow. CTA endcards stay single."""
+    if not seg.footage:
+        return []
+    primary = project.footage_dir / seg.footage
+    if seg.kind == "cta" or primary.suffix.lower() not in (".png", ".jpg", ".jpeg"):
+        return [primary]                     # endcard and video clips are never split
+    extras = sorted(p for p in project.footage_dir.glob(f"{seg.index:02d}_[0-9]*")
+                    if p.suffix.lower() in (".png", ".jpg", ".jpeg"))
+    return [primary] + extras
+
+
 def _resolve_music(cfg: Config) -> Path | None:
     if cfg.video.music:
         p = Path(cfg.video.music)
@@ -352,13 +391,28 @@ def _assemble_engine(project: VideoProject, cfg: Config, script: Script, eng: st
             continue
         content = ffmpeg.ffprobe_duration(seg_audio) + gap     # on-screen time incl. trailing gap
         render_dur = content + trans                           # extra tail for the crossfade
-        src = (project.footage_dir / seg.footage) if seg.footage else None
-        if not src or not src.exists():
-            src = ffmpeg.black_still(work / f"black_{seg.index:02d}.png", cfg.video.width, cfg.video.height)
+        srcs = [p for p in _segment_sources(project, seg) if p.exists()]
+        if not srcs:
+            srcs = [ffmpeg.black_still(work / f"black_{seg.index:02d}.png",
+                                       cfg.video.width, cfg.video.height)]
         clip = work / f"clip_{seg.index:02d}.mp4"
         kb = cfg.video.ken_burns and seg.kind != "cta"         # static endcard, no zoom
-        ffmpeg.make_clip(src, render_dur, cfg.video.width, cfg.video.height, cfg.video.fps, kb, clip,
-                         seek=cfg.video.video_seek)
+        if len(srcs) == 1:
+            ffmpeg.make_clip(srcs[0], render_dur, cfg.video.width, cfg.video.height, cfg.video.fps,
+                             kb, clip, seek=cfg.video.video_seek)
+        else:
+            # Multiple stills: split the segment across them with hard cuts (each its own Ken Burns
+            # move). Faster visual pacing without touching audio or the segment-level crossfades.
+            part = render_dur / len(srcs)
+            parts: list[Path] = []
+            for j, s2 in enumerate(srcs):
+                pc = work / f"clip_{seg.index:02d}_{j}.mp4"
+                ffmpeg.make_clip(s2, part, cfg.video.width, cfg.video.height, cfg.video.fps,
+                                 kb, pc, seek=cfg.video.video_seek)
+                parts.append(pc)
+            ffmpeg.concat_videos(parts, clip)
+            log.info("[%s] segment %d: %d visuals (hard cuts every %.1fs)", eng, seg.index,
+                     len(srcs), part)
         clips.append(clip)
         content_durs.append(content)
         segs_used.append(seg)

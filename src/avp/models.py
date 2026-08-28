@@ -45,6 +45,9 @@ class Script:
     disclosure_ai: bool = False           # True only if AI-generated *realistic* visuals are used
     topic: str = ""
     notes: str = ""
+    # One spoken sentence the LLM writes to BRIDGE from this topic into the app CTA (e.g. "Want to
+    # capture Saturn's rings with your own phone?"). Empty on old scripts → generic funnel line.
+    cta_bridge: str = ""
 
     @property
     def narration(self) -> str:

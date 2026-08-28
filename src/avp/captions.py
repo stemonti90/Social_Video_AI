@@ -289,30 +289,47 @@ def render_endcard(path: Path, funnel: FunnelConfig, video: VideoConfig) -> None
 
 
 def render_cosmic_backdrop(path: Path, video: VideoConfig, seed: int = 0) -> None:
-    """Last-resort generated space backdrop (nebula + starfield) so no segment is ever black."""
+    """Last-resort generated space backdrop. The old version blended big pastel ellipses with
+    ImageChops.add(scale=1.7) — which DIVIDES the result, muddying everything into a dark teal
+    'old book canvas' that read as a rendering error on screen for whole segments. Now: near-black
+    sky, a faint blue/violet nebula veil via screen-blend (never green), and a dense starfield with
+    varied brightness plus a few glowing stars — unmistakably space even under Ken Burns zoom."""
     import random
     from PIL import Image, ImageChops, ImageDraw, ImageFilter
 
     rnd = random.Random(seed * 9173 + 7)
     w, h = video.width, video.height
-    base = Image.new("RGB", (w, h), (6, 8, 16))
+    base = Image.new("RGB", (w, h), (3, 4, 10))
 
+    # faint nebula veil — blue/violet only, screen-blended so it can only BRIGHTEN, never muddy
     neb = Image.new("RGB", (w, h), (0, 0, 0))
     nd = ImageDraw.Draw(neb)
-    palette = [(46, 28, 84), (24, 52, 96), (96, 42, 58), (28, 74, 86), (70, 40, 96)]
-    for _ in range(6):
-        rad = rnd.randint(w // 3, w)
+    palette = [(30, 24, 70), (18, 34, 78), (54, 26, 72), (12, 22, 60)]
+    for _ in range(5):
+        rad = rnd.randint(w // 3, int(w * 0.9))
         cx, cy = rnd.randint(0, w), rnd.randint(0, h)
         nd.ellipse([cx - rad, cy - rad, cx + rad, cy + rad], fill=rnd.choice(palette))
-    neb = neb.filter(ImageFilter.GaussianBlur(w // 6))
-    base = ImageChops.add(base, neb, scale=1.7)
+    neb = neb.filter(ImageFilter.GaussianBlur(w // 5))
+    base = ImageChops.screen(base, neb)
 
+    # dense starfield: many faint, some medium, a handful bright with a soft glow
     d = ImageDraw.Draw(base)
-    for _ in range(320):
+    for _ in range(1400):
         x, y = rnd.randint(0, w - 2), rnd.randint(0, h - 2)
-        r = 1 if rnd.random() < 0.82 else 2
-        b = rnd.randint(150, 255)
-        d.ellipse([x, y, x + r, y + r], fill=(b, b, min(255, b + 12)))
+        b = rnd.randint(70, 210)
+        d.point((x, y), fill=(b, b, min(255, b + 14)))
+    for _ in range(140):
+        x, y = rnd.randint(0, w - 3), rnd.randint(0, h - 3)
+        b = rnd.randint(170, 255)
+        d.ellipse([x, y, x + 1, y + 1], fill=(b, b, min(255, b + 10)))
+    glow = Image.new("RGB", (w, h), (0, 0, 0))
+    gd = ImageDraw.Draw(glow)
+    for _ in range(16):
+        x, y = rnd.randint(20, w - 20), rnd.randint(20, h - 20)
+        r = rnd.randint(2, 4)
+        gd.ellipse([x - r * 3, y - r * 3, x + r * 3, y + r * 3], fill=(40, 44, 70))
+        gd.ellipse([x - r, y - r, x + r, y + r], fill=(235, 238, 255))
+    base = ImageChops.screen(base, glow.filter(ImageFilter.GaussianBlur(2)))
     base.save(path)
 
 
