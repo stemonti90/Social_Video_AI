@@ -502,8 +502,15 @@ def resolve_footage(project: VideoProject, script: Script, cfg, allow_download: 
                 if gen:
                     seg.footage = dest.name
                     seg.credit = ""                      # our own pixels: nothing to attribute
-                    report.append(_report_entry(seg, {"title": "AI-generated"}, 1.0, floor,
-                                                "generated", f"mflux/{gen['selection']}"))
+                    # Record the CLIP score we actually measured, not a flat 1.0 — an audit trail
+                    # that always says "perfect" tells you nothing about a weak generation.
+                    gscore = (gen.get("scores") or [None])[gen.get("chosen", 0)] \
+                        if gen.get("scores") else None
+                    report.append(_report_entry(seg, {"title": "AI-generated"},
+                                                gscore if gscore is not None else 0.0,
+                                                float(getattr(cfg.video, "footage_clip_floor", 0.25) or 0.0),
+                                                "generated",
+                                                f"mflux, {gen['candidates']} candidates, {gen['selection']} pick"))
                     used_ids.add(f"gen:{seg.index}")
                     continue
                 log.warning("Segment %d: image generation unavailable — using archive footage", seg.index)

@@ -1495,5 +1495,28 @@ class FootageMatching(unittest.TestCase):
             ig.clip_scores = orig
 
 
+class ScriptLengthBudget(unittest.TestCase):
+    """The word budget must match the voice's MEASURED pace per language, and an over-long draft must
+    be trimmed — a 50s target once produced 60.3s of speech, blowing the 60s ceiling."""
+
+    def test_word_budget_is_language_aware(self):
+        en, it = llm._words_for(50, "en"), llm._words_for(50, "it")
+        self.assertLess(en, it)                       # English is spoken slower (words/sec)
+        self.assertEqual(en, 118)                     # 50s × 2.35 w/s (measured EN pace)
+        self.assertEqual(it, 130)                     # 50s × 2.60 w/s (measured IT pace)
+        self.assertEqual(llm._words_for(50, None), llm._words_for(50, "en"))   # safe default
+        self.assertEqual(llm._words_for(50, "de"), 120)                        # unknown → 2.4
+
+    def test_budget_lands_under_target_at_measured_rate(self):
+        # EN measured 2.37-2.46 w/s: the budget must not exceed the target at the FASTEST word count.
+        self.assertLessEqual(llm._words_for(50, "en") / 2.37, 50.0)
+        self.assertLessEqual(llm._words_for(50, "it") / 2.60, 50.0)
+
+    def test_generate_script_has_a_trim_guard(self):
+        src = Path("src/avp/llm.py").read_text()
+        self.assertIn("TOO LONG", src)                # symmetric with the expand guard
+        self.assertIn("words * 1.12", src)
+
+
 if __name__ == "__main__":
     unittest.main()

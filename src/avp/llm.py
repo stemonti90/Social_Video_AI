@@ -51,19 +51,27 @@ REFINE_USER = ("Current draft JSON:\n{script}\n\nEditor critique to apply:\n{cri
                "Return the improved STRICT JSON only.")
 
 USER_TMPL = """Topic: {topic}
+The topic may be written in ANOTHER LANGUAGE: translate it faithfully first, then write about EXACTLY that subject. Never drift to a different, more famous subject, and never copy the examples in these instructions.
 Target: ~{seconds}s of spoken narration — about {words} words TOTAL (stay within ±10%; do NOT run long), in EXACTLY {nseg}-{nseg2} segments. Going over the length is as wrong as coming in short.
 If the topic is a specific MISSION, PROBE, OBJECT, PERSON, or EVENT, EXPLAIN it with a clear through-line — what it is, what it did / what happened, and why it matters — not a list of disconnected trivia.
 For each segment provide:
 - "narration": TWO full spoken sentences (~18-24 words) — the point, then its consequence/scale/image,
-- "visual": a short cue for the ideal NASA/Hubble footage or image (e.g. "Jupiter's Great Red Spot, close-up"),
+- "visual": a short cue for the ideal footage or image OF THIS TOPIC (describe the shot, e.g. "the object filling the frame, seen from orbit" / "the probe silhouetted against the planet"),
 - "keywords": 2-4 ENGLISH search keywords for space archives (they are English-indexed).
 Also provide a punchy "title".
 Return JSON exactly like:
 {{"title": "...", "segments": [{{"narration": "...", "visual": "...", "keywords": ["...", "..."]}}]}}"""
 
 
-def _words_for(seconds: int) -> int:
-    return max(20, round(seconds * 2.5))  # ~150 words per minute
+# Measured speaking rate of the Kokoro voices, words per second, from real builds:
+# EN (af_heart) 2.37-2.46 · IT (if_sara) 2.60-2.65. A single 2.5 made English scripts overshoot
+# (a 50s target came out 60s of speech), so the budget is language-aware — slightly conservative
+# so the video lands UNDER the target rather than over it.
+_WPS = {"en": 2.35, "it": 2.60}
+
+
+def _words_for(seconds: int, language: str = "en") -> int:
+    return max(20, round(seconds * _WPS.get((language or "en").lower()[:2], 2.4)))
 
 
 def _read_timeout(model: str) -> int:
@@ -290,7 +298,7 @@ def _judge_best(client: "OllamaClient", drafts: list[dict], topic: str, language
 
 def generate_script(cfg: LLMConfig, topic: str, seconds: int = 60, language: str = "en",
                     refine_passes: int = 1, best_of: int = 1) -> Script:
-    words = _words_for(seconds)
+    words = _words_for(seconds, language)
     # ~10s of speech per 2-sentence segment, so segment count tracks the target length. A tight upper
     # bound (nseg+1) keeps the model from padding to twice the length.
     nseg = max(4, round(seconds / 10))
@@ -338,6 +346,27 @@ def generate_script(cfg: LLMConfig, topic: str, seconds: int = 60, language: str
     # narration + more DISTINCT facts. Never regresses (kept only if it parses and is genuinely longer).
     def _nwords(d: dict) -> int:
         return sum(len(str(s.get("narration", "")).split()) for s in _segment_dicts(d))
+    # Symmetric guard. The old code only EXPANDED a short draft, so an over-budget draft sailed
+    # through and the video ran past the 60s ceiling (a 50s target produced 60.3s of speech). Trim
+    # first, then expand — a script is never both.
+    if _nwords(data) > words * 1.12:
+        cur = _nwords(data)
+        try:
+            trim_user = (
+                f"This script is TOO LONG: ~{cur} spoken words, but the target is ~{words} words across "
+                f"{nseg}-{nseg2} segments. Tighten it to the target WITHOUT losing facts: cut filler, "
+                f"redundant qualifiers and any restated idea, and shorten sentences. Keep the hook, keep "
+                f"every distinct fact, keep the same JSON shape.\n\nCurrent JSON:\n"
+                + json.dumps(data, ensure_ascii=False)
+            )
+            raw = client.chat(system, trim_user, fmt=fmt, temperature=0.4, num_predict=2048)
+            cand = _extract_json(raw) if raw else None
+            if isinstance(cand, dict) and _segment_dicts(cand) and _nwords(cand) < cur:
+                log.info("Length guard: trimmed %d → %d words (target ~%d).",
+                         cur, _nwords(cand), words)
+                data = cand
+        except Exception as e:  # noqa: BLE001 — a failed trim just keeps the longer draft
+            log.warning("Length guard (trim) failed (%s) — keeping the draft.", e)
     if _nwords(data) < words * 0.8:
         cur = _nwords(data)
         try:
