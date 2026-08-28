@@ -110,7 +110,11 @@ def stage_script(project: VideoProject, cfg: Config, topic: str | None) -> Scrip
     if not topic:
         raise ValueError("No topic given and no existing one. Pass --topic.")
 
-    script = llm.generate_script(cfg.llm, topic, cfg.script.target_seconds,
+    # target_seconds is the length of the WHOLE video. The spoken CTA + its silent tail take ~8s,
+    # so the content budget hands them back — otherwise a 50s target lands at ~58s+ and a long draft
+    # blows the 60s ceiling.
+    content_target = cfg.script.target_seconds - (8 if cfg.funnel.enabled else 0)
+    script = llm.generate_script(cfg.llm, topic, max(30, content_target),
                                  language=cfg.script.language, refine_passes=cfg.script.refine_passes,
                                  best_of=getattr(cfg.llm, "best_of", 1))
     if cfg.funnel.enabled:

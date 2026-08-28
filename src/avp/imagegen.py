@@ -26,7 +26,7 @@ REGISTRO = {
     "deep_sky": "a nebula or galaxy field, long-exposure astrophotography, faint gas structure",
     "surface": "a planetary or lunar surface up close, raking low light across terrain",
     "spacecraft": "a spacecraft or probe silhouetted against a planet, sunlit metal and antennas",
-    "star": "a star or the Sun with its corona, extreme dynamic range, no lens flare clichés",
+    "star": "the Sun in natural visible light, pale yellow-white photosphere with dark sunspots, realistic granulation, no lens flare clichés",
     "default": "a deep space scene, stars and cosmic structure, documentary framing",
 }
 
@@ -185,11 +185,16 @@ def generate_for_segment(seg: Segment, script: Script, cfg, dest: Path,
     for stale in dest.parent.glob(f"{seg.index:02d}_*.png"):
         stale.unlink(missing_ok=True)            # old runners-up must not leak into this build
 
+    # Candidate framings: same subject, different SHOT — so the mid-segment cut actually changes the
+    # picture instead of showing the same disc with different grain (seed alone barely varies it).
+    framings = ["",
+                " Alternate framing: a much tighter close-up of one detail of the subject, off-center composition.",
+                " Alternate framing: a wide shot with the subject small against deep space."]
     cands: list[Path] = []
     for i in range(n):
         c = work / f"{seg.index:02d}_c{i}.png"
-        # Vary the seed per candidate AND per segment, so segment 2 never repeats segment 1's image.
-        if _run_mflux(prompt, c, base_seed + i * 977 + seg.index * 31, cfg):
+        # Vary seed per candidate AND per segment, so segment 2 never repeats segment 1's image.
+        if _run_mflux(prompt + framings[i % len(framings)], c, base_seed + i * 977 + seg.index * 31, cfg):
             cands.append(c)
     if not cands:
         return None

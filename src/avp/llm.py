@@ -361,7 +361,7 @@ def generate_script(cfg: LLMConfig, topic: str, seconds: int = 60, language: str
                 f"every distinct fact, keep the same JSON shape.\n\nCurrent JSON:\n"
                 + json.dumps(data, ensure_ascii=False)
             )
-            raw = client.chat(system, trim_user, fmt=fmt, temperature=0.4, num_predict=2048)
+            raw = client.chat(system, trim_user, temperature=0.4, num_predict=script_cap)
             cand = _extract_json(raw) if raw else None
             if isinstance(cand, dict) and _segment_dicts(cand) and _nwords(cand) < cur:
                 log.info("Length guard: trimmed %d → %d words (target ~%d).",
