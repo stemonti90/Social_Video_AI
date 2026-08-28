@@ -114,6 +114,14 @@ def _run_mflux(prompt: str, out: Path, seed: int, cfg) -> bool:
     return True
 
 
+# NOTE — false-color suns cannot be fixed in post (tried 2026-08-28, reverted). z-image-turbo always
+# renders solar subjects in saturated SDO orange and no prompt wording overrides it. Three corrections
+# were built and measured on real frames: a linear per-channel gain (blew the disc to flat white), a
+# gamma curve (no effect — B is crushed to ~0 on the disc and 0**x is still 0), and a blend toward a
+# target built from R (works, but yields a washed sepia/grey sun — the blue detail simply is not in the
+# file). Post-processing cannot invent the missing channel; the vivid orange is the better shipping
+# choice. Fixing this for real needs a different image model, not a filter.
+
 # --------------------------------------------------------------------------- CLIP selection
 _CLIP: dict = {}
 
