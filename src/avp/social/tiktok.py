@@ -60,6 +60,9 @@ class TikTok(Publisher):
             "response_type": "code",
             "redirect_uri": redirect_uri(self.platform),
             "state": state,
+            # Never auto-skip the consent screen on re-auth: the person connecting should always
+            # see what they are granting (and the app-review demo has to show this screen).
+            "disable_auto_auth": "1",
         })
 
     def _token_call(self, form: dict, cfg) -> dict:

@@ -21,13 +21,17 @@ SYSTEM = """You are an elite scriptwriter for a faceless short-form video channe
 astronomy and space (TikTok / Reels / YouTube Shorts). These craft rules separate gripping from mediocre:
 - HOOK: the first 6-8 words must be a concrete, counterintuitive or NUMBER-led statement that stops the scroll. NEVER open with a question, "Imagine", "Have you ever", "Picture this", or "In the vast expanse".
 - Exactly ONE new, specific, verifiable fact per content segment (a named object, a number, a comparison, a scale) — then LAND it: a second sentence that gives the consequence, the scale, or a vivid concrete image. State-and-move-on is too thin.
-- LENGTH: every content segment is TWO full spoken sentences (~18-24 spoken words). HIT the requested total word count and segment count — coming in SHORT or running LONG are both failures. Do not pad with filler or repetition, and do not exceed the target; reach the exact length with real, distinct facts richly told.
-- EXPLAIN, don't list: if the topic is a specific mission/probe/object/person/event, build a clear through-line (what it is → what it did → why it matters), not disconnected trivia.
+- LENGTH: each content segment is ONE or TWO short spoken sentences, around the per-segment word count given below. Short beats are deliberate: each segment becomes its own shot, and a segment that runs long forces a single image to sit on screen too many seconds. HIT the requested total word count and segment count — coming in SHORT or running LONG are both failures.
+- DRAMATURGY, not exposition. A short-form script is not "what it is → what it did → why it matters" — that is a documentary and it loses the scroll. Build instead: a fact that shouldn't be possible → why it shouldn't be possible → how it is possible anyway → what that means. Explain, never list disconnected trivia, but let the explanation ARRIVE as the answer to a tension you opened, not as a lecture delivered up front.
+- Segment 1 must NOT begin with the subject's name, and must not announce what the subject is. It states the single strangest concrete thing in the whole script — the fact you would lead with if you had one sentence to stop someone scrolling. The viewer should work out what the video is about from that fact, not be told. ("Voyager 1 carries a golden record into the void" is still an announcement; "A machine 25 billion kilometres away is still talking to us" is a hook.)
+- Every segment must leave the next one NECESSARY: end on a consequence, a number that begs a question, or an unresolved tension. If a segment could be the last one, it is written wrong.
 - Every segment must make a DISTINCT point. NEVER repeat, restate or paraphrase an earlier line to reach the segment count — if you genuinely run out of distinct facts, broaden the angle (history, mechanism, scale, discovery, what's next) rather than repeating.
 - Open a curiosity loop in the first 1-2 segments and PAY IT OFF before the end.
 - Escalate to a single peak "wow" moment in the penultimate segment.
 - Concrete nouns over adjectives; a confident, flowing spoken cadence (not terse, not padded). BANNED words/phrases: mind-blowing, incredible, literally, breathtaking, journey, unlock, delve, "did you know". No markdown, no emojis, no stage directions.
 - Every fact must be real and checkable; if unsure, stay qualitative — never invent numbers.
+- SUPERLATIVES are where these scripts get things wrong most often. Before writing "the only", "the first", "the largest", "the farthest", check whether a second case exists — there usually is one (Voyager 2 reached interstellar space too; several probes have left the planets behind). If you cannot be certain, drop the superlative: the fact is almost always just as strong without it.
+- Use METRIC units (kilometres). The audience reads subtitles in a metric country, and a distance in miles carries no sense of scale for them.
 - Vary structure between videos; never sound template-stamped.
 - "keywords": 2-4 ENGLISH, archive-catalogable PROPER NOUNS (e.g. "Cassini Saturn", "Carina Nebula JWST", "Curiosity rover Mars") — concrete subjects a NASA/Hubble search will find, matching that segment's visual.
 Return STRICT JSON only, no commentary."""
@@ -38,6 +42,8 @@ CRITIQUE_SYSTEM = (
     "a curiosity loop opened early and paid off, escalation to a single peak, concrete nouns over "
     "adjectives, ZERO cliche, and NO repeated or near-duplicate segments. Then list the 3 weakest "
     "lines with an exact rewrite for each, and explicitly flag any segment that repeats another. "
+    "Then CHECK THE FACTS: flag every superlative (only/first/largest/farthest) that is false or "
+    "unverifiable, every number that looks invented, and any distance not given in kilometres. "
     "Be specific and brutal. Plain text, no JSON."
 )
 CRITIQUE_USER = "Script JSON:\n{script}"
@@ -55,14 +61,38 @@ The topic may be written in ANOTHER LANGUAGE: translate it faithfully first, the
 Target: ~{seconds}s of spoken narration — about {words} words TOTAL (stay within ±10%; do NOT run long), in EXACTLY {nseg}-{nseg2} segments. Going over the length is as wrong as coming in short.
 If the topic is a specific MISSION, PROBE, OBJECT, PERSON, or EVENT, EXPLAIN it with a clear through-line — what it is, what it did / what happened, and why it matters — not a list of disconnected trivia.
 For each segment provide:
-- "narration": TWO full spoken sentences (~18-24 words) — the point, then its consequence/scale/image,
-- "visual": a short cue for the ideal footage or image OF THIS TOPIC (describe the shot, e.g. "the object filling the frame, seen from orbit" / "the probe silhouetted against the planet"),
+- "narration": about {wseg} words — one or two short spoken sentences,
+- "visual": a short cue for the ideal footage or image OF THIS TOPIC. Name the SHOT SCALE explicitly — "extreme close-up of ...", "wide shot, the object tiny against ...", "the object filling the frame". Consecutive segments must NOT use the same scale: the video is cut from these, and two identical scales in a row read as one long static shot.
 - "keywords": 2-4 ENGLISH search keywords for space archives (they are English-indexed).
-Also provide a punchy "title", and a "cta_bridge": ONE short spoken sentence (max 14 words) that
-bridges from THIS topic to the viewer capturing the night sky themselves — a question works well
-(e.g. for a Saturn video: "Want to capture Saturn's rings with your own phone?"). Do NOT name any app.
+
+Also provide a punchy "title", plus the BRIDGE to astrophotography — this channel exists to make people
+want to point their own camera at the sky, so every video has to land somewhere real. Two fields:
+
+- "bridge_kind": choose HONESTLY from exactly one of these:
+    "shoot"     — this subject, or the very sky it sits in, can actually be photographed from a balcony
+                  tonight with a phone (the Moon, Saturn, Jupiter, Orion, Andromeda, the ISS, an
+                  eclipse, aurorae, the Milky Way, a meteor shower, a comet).
+    "principle" — the subject itself is out of reach, but it RESTS ON a principle astrophotography also
+                  obeys: faint signal buried in noise, gathering light over time, how far light travels,
+                  what limits resolution, how little light a sensor really receives.
+    "none"      — neither is true without inventing a connection.
+- "cta_bridge": ONE short spoken sentence (max 16 words) that earns that bridge.
+
+HARD RULES for the bridge, because getting this wrong makes the channel look ridiculous:
+- It may ONLY refer to something this script actually talked about. Naming a different object that
+  merely happens to be photographable ("...capture Jupiter's moons") after a video about an
+  interstellar probe is exactly the failure to avoid.
+- For "principle", bridge through the SHARED IDEA, not the object. A probe whose signal arrives buried
+  in noise, and which is read by combining several antennas, bridges to combining many photographs —
+  because it is the same physics, not because both involve space.
+- Never write a generic line ("capture the cosmos yourself", "explore the universe"). If it could close
+  ANY video on this channel, it is wrong.
+- If "none", still write a cta_bridge, but make it a closing thought about the sky itself. Do not
+  mention cameras or photography.
+- Do NOT name any app.
+
 Return JSON exactly like:
-{{"title": "...", "cta_bridge": "...", "segments": [{{"narration": "...", "visual": "...", "keywords": ["...", "..."]}}]}}"""
+{{"title": "...", "bridge_kind": "shoot|principle|none", "cta_bridge": "...", "segments": [{{"narration": "...", "visual": "...", "keywords": ["...", "..."]}}]}}"""
 
 
 # Measured speaking rate of the Kokoro voices, words per second, from real builds:
@@ -303,9 +333,15 @@ def generate_script(cfg: LLMConfig, topic: str, seconds: int = 60, language: str
     words = _words_for(seconds, language)
     # ~10s of speech per 2-sentence segment, so segment count tracks the target length. A tight upper
     # bound (nseg+1) keeps the model from padding to twice the length.
-    nseg = max(4, round(seconds / 10))
+    # One segment ≈ one shot. At ~10s per segment (the old rule) a 50s video was four shots, and a
+    # single image sat on screen for six seconds — the pacing of a documentary, not of a feed where
+    # the eye expects a new picture every couple of seconds. ~5s per segment doubles the cut rate
+    # without changing the video's length or the word budget: the beats simply get shorter.
+    nseg = max(6, round(seconds / 5))
     nseg2 = nseg + 1
-    user = USER_TMPL.format(topic=topic, seconds=seconds, words=words, nseg=nseg, nseg2=nseg2)
+    wseg = max(8, round(words / nseg))       # per-segment budget, so the total still lands on target
+    user = USER_TMPL.format(topic=topic, seconds=seconds, words=words,
+                            nseg=nseg, nseg2=nseg2, wseg=wseg)
     name = LANG_NAME.get(language, "English")
     system = SYSTEM + f"\n- Write ALL narration in {name}."
     client = OllamaClient(cfg)
@@ -405,8 +441,13 @@ def generate_script(cfg: LLMConfig, topic: str, seconds: int = 60, language: str
         raise RuntimeError("Model returned no usable segments. Try re-running or a different model.")
     title = data.get("title") if isinstance(data.get("title"), (str, int, float)) else topic
     bridge = data.get("cta_bridge") if isinstance(data.get("cta_bridge"), str) else ""
+    kind = data.get("bridge_kind") if isinstance(data.get("bridge_kind"), str) else ""
+    kind = kind.strip().lower()
+    if kind not in ("shoot", "principle", "none"):
+        kind = ""                            # unknown/absent → callers fall back to the generic line
     return Script(title=str(title or topic).strip(), segments=segments,
-                  target_seconds=seconds, topic=topic, cta_bridge=bridge.strip())
+                  target_seconds=seconds, topic=topic, cta_bridge=bridge.strip(),
+                  bridge_kind=kind)
 
 
 def translate_segments(cfg: LLMConfig, texts: list[str], target_lang: str) -> list[str]:

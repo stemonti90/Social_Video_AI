@@ -1315,14 +1315,44 @@ class ImageGen(unittest.TestCase):
         from avp.models import Script
         return Script(title="t", topic="Cassini probe", segments=[])
 
-    def test_prompt_has_subject_style_and_negatives(self):
+    def test_prompt_opens_on_the_subject_and_carries_the_style(self):
         from avp import imagegen
         p = imagegen.build_prompt(self._seg(), self._script())
-        self.assertTrue(p.startswith("Saturn rings from orbit."))
+        self.assertTrue(p.startswith("Saturn rings from orbit,"))
         self.assertIn("photorealistic astrophotography", p)
-        self.assertIn("no text", p)
-        self.assertIn("Avoid:", p)
-        self.assertIn("illustration", p)          # never illustration/CGI for space
+
+    def test_negatives_never_appear_in_the_positive_prompt(self):
+        """Regression: these used to be appended as "Avoid: false color, monochrome orange, ...".
+        A diffusion model has no notion of "avoid" inside the prompt — naming a concept makes it MORE
+        likely, so the list meant to prevent orange false-colour was helping produce it. They belong
+        in --negative-prompt, which works because z-image-turbo runs at guidance 3.5."""
+        from avp import imagegen
+        p = imagegen.build_prompt(self._seg(), self._script())
+        self.assertNotIn("Avoid:", p)
+        for banned in ("monochrome orange", "false color", "illustration", "watermark", "no text"):
+            self.assertNotIn(banned, p, f"{banned!r} leaked into the positive prompt")
+        # …and they are still declared, for --negative-prompt to carry
+        for banned in ("monochrome orange", "false color", "illustration"):
+            self.assertIn(banned, imagegen.NEGATIVI)
+
+    def test_registro_prescribes_light_never_framing(self):
+        """Regression: the "star" entry used to read "the Sun ... photosphere with dark sunspots",
+        which is a COMPOSITION. It overrode the script: a sunspot video whose segments asked for a
+        close-up, a scale comparison, flares and a SOHO view came back as four identical full discs."""
+        from avp import imagegen
+        for key, text in imagegen.REGISTRO.items():
+            for framing in ("filling the frame", "close up", "close-up", "wide shot", "documentary framing"):
+                self.assertNotIn(framing, text.lower(), f"REGISTRO[{key}] prescribes framing")
+            self.assertNotIn(" no ", f" {text.lower()} ", f"REGISTRO[{key}] negates inside a positive prompt")
+
+    def test_shot_scale_is_prepended_not_appended(self):
+        """Diffusion models obey the opening tokens; a trailing "Alternate framing: …" was ignored
+        outright (measured: the close-up variant produced another identical full disc)."""
+        from avp import imagegen
+        shot = imagegen.SHOTS[1]
+        p = imagegen.build_prompt(self._seg(), self._script(), shot)
+        self.assertTrue(p.startswith(shot))
+        self.assertLess(p.index("close-up"), p.index("Saturn"))
 
     def test_prompt_bucket_selection(self):
         from avp import imagegen
@@ -1334,9 +1364,9 @@ class ImageGen(unittest.TestCase):
     def test_prompt_falls_back_to_keywords_then_topic(self):
         from avp import imagegen
         p = imagegen.build_prompt(self._seg(visual="", kw=("enceladus", "geysers")), self._script())
-        self.assertTrue(p.startswith("enceladus geysers."))
+        self.assertTrue(p.startswith("enceladus geysers,"))
         bare = imagegen.build_prompt(self._seg(visual="", kw=()), self._script())
-        self.assertTrue(bare.startswith("Cassini probe."))
+        self.assertTrue(bare.startswith("Cassini probe,"))
 
     def test_available_requires_binary_and_model(self):
         from avp import imagegen

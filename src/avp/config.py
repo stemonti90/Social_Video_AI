@@ -43,6 +43,12 @@ class FunnelConfig:
     handle: str = "@astrostackerpro"
     cta_line: str = "Want to capture the cosmos yourself? Get {app} — link in the bio."
     cta_button: str = "Get the app  ·  Link in bio"   # endcard pill label; set per channel language
+    # What to do when the writer finds no honest link between the topic and astrophotography
+    # (bridge_kind "none" — a cosmology or deep-theory video, say):
+    #   "always" — still close on the app, using the generic funnel line. Maximum funnel.
+    #   "honest" — close on the sky instead and show only the logo. Protects the channel's voice.
+    # Anything the writer bridged as "shoot" or "principle" always closes on the app either way.
+    bridge_policy: str = "always"
 
 
 @dataclass

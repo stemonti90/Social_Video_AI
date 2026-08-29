@@ -22,35 +22,52 @@ log = get_logger("avp.imagegen")
 # Visual registry per segment intent — the space equivalent of the article pipeline's REGISTRO.
 # Keeps different subjects looking like one channel instead of a stock-image grab bag.
 REGISTRO = {
-    # Each entry states the LIGHTING AND PALETTE, not just the subject. Without that the model filled
-    # every scene with a warm orange glow — "sunlit metal", "the Sun with its corona" — so a Voyager
-    # video came out the same colour as a sunspot video and the whole channel looked monotone.
-    "planet": ("a planet or moon filling much of the frame, seen from orbit, in its own true colours, "
-               "hard white sunlight and deep black shadow, pure black space behind it"),
-    "deep_sky": ("a nebula or galaxy field on a pure black sky, cool blue and violet hydrogen glow with "
-                 "white starlight, long-exposure astrophotography, no orange cast"),
-    "surface": ("a planetary or lunar surface up close, grey and tan regolith in its natural colour, "
-                "raking white low light, black airless sky above the horizon"),
-    "spacecraft": ("a spacecraft or probe in the black void of deep space, cold white sunlight glinting "
-                   "on grey metal and gold foil, distant pinpoint stars, no glowing background"),
-    "star": ("the Sun in natural visible light, pale yellow-white photosphere with dark sunspots, "
-             "realistic granulation, black sky, no lens flare clichés"),
-    "default": ("a deep space scene on a black sky, white and blue starlight, cosmic structure, "
-                "documentary framing, neutral colour"),
+    # LIGHTING AND PALETTE ONLY — deliberately no composition. An earlier version prescribed the shot
+    # too ("the Sun ... photosphere with dark sunspots" = a full disc), which silently overrode what
+    # the script asked for: a sunspot video whose five segments requested a close-up, a scale
+    # comparison, erupting flares and a SOHO view came back as five identical full discs.
+    # Say how it is LIT, never how it is FRAMED — the framing comes from the script and `SHOTS`.
+    #
+    # Also: not one word of negation here. These strings go into the POSITIVE prompt, where "no
+    # orange cast" reads to the model as "orange cast" — the exact thing it was meant to prevent.
+    # Everything to avoid lives in NEGATIVI, which is passed via --negative-prompt.
+    "planet": ("in its own true colours under hard white sunlight, deep black shadow on the night side, "
+               "pure black space behind it"),
+    "deep_sky": ("cool blue and violet hydrogen glow with white starlight on a pure black sky, "
+                 "long-exposure astrophotography"),
+    "surface": ("grey and tan regolith in its natural colour, raking white low light, "
+                "black airless sky above the horizon"),
+    "spacecraft": ("cold white sunlight glinting on grey metal and gold foil, the black void of deep "
+                   "space around it, distant pinpoint stars"),
+    "star": ("natural visible light, pale yellow-white surface with realistic granulation, "
+             "black sky around it"),
+    "default": ("white and blue starlight on a black sky, neutral documentary colour"),
 }
+
+# Shot scale, prepended so it lands in the first tokens — diffusion models weight the opening of the
+# prompt far more heavily, which is why the old code's trailing "Alternate framing: …" was ignored
+# outright (measured: the close-up variant produced another identical full disc).
+SHOTS = (
+    "",                                                     # whatever the script asked for
+    "Extreme close-up, filling the frame with one small detail. ",
+    "Wide establishing shot, the subject small and distant. ",
+)
 
 # Style constants: what keeps segment-to-segment images coherent. Photographic, never illustration —
 # for space, an "artist's impression" look reads as fake and undercuts the channel's credibility.
 # "real telescope imagery look" invited SDO-style FALSE-COLOR renders (deep orange suns, neon nebulae):
 # striking for astrophotographers, but average viewers read them as a cheap render. Natural color wins.
 STILE = (
-    "photorealistic astrophotography, cinematic wide shot, natural true-color palette exactly as the "
-    "human eye would see it, realistic dynamic range, fine detail and subtle film grain, "
-    "no text, no watermark, no captions, no logos"
+    "photorealistic astrophotography, natural true-color palette exactly as the human eye would see "
+    "it, realistic dynamic range, fine detail and subtle film grain"
 )
+# Passed to --negative-prompt, NOT appended to the positive one. mflux/z-image-turbo runs at guidance
+# 3.5, so classifier-free guidance is active and these actually steer the model away. Appending them
+# as "Avoid: …" text (what this used to do) does the opposite: "monochrome orange" and "false color"
+# sitting in the positive prompt are a large part of why every video came out orange.
 NEGATIVI = ("illustration, 3d render, cgi, digital art, cartoon, anime, painting, oversaturated neon, "
             "false color, infrared look, x-ray palette, monochrome orange, fantasy, people, faces, "
-            "text, watermark, ui elements")
+            "text, watermark, captions, logos, ui elements, lens flare")
 
 # Keyword → registry bucket. First match wins; order matters (surface before planet).
 _BUCKETS = (
@@ -73,14 +90,18 @@ def _bucket(text: str) -> str:
     return "default"
 
 
-def build_prompt(seg: Segment, script: Script) -> str:
+def build_prompt(seg: Segment, script: Script, shot: str = "") -> str:
     """A generation prompt for one segment: its own visual intent, in the channel's house style.
+
     Uses the script's VISUAL/KEYWORDS (what the writer meant to show), not the narration verbatim —
-    narration is spoken language and makes muddy prompts."""
+    narration is spoken language and makes muddy prompts. `shot` is prepended, never appended: the
+    opening tokens are what the model actually obeys.
+
+    Returns the POSITIVE prompt only. What to avoid goes to --negative-prompt (see NEGATIVI)."""
     kw = " ".join(str(k) for k in (seg.keywords or []) if k)
     subject = (seg.visual or kw or script.topic or "deep space").strip()
     context = REGISTRO[_bucket(f"{subject} {kw}")]
-    return f"{subject}. Context: {context}. {STILE}. Avoid: {NEGATIVI}."
+    return f"{shot}{subject}, {context}. {STILE}."
 
 
 # --------------------------------------------------------------------------- mflux
@@ -109,7 +130,7 @@ def _run_mflux(prompt: str, out: Path, seed: int, cfg) -> bool:
     steps = int(getattr(cfg.video, "image_steps", 8))
     cmd = [str(_binary(cfg)), "--model", str(_model_path(cfg)), "--base-model", "z-image-turbo",
            "--steps", str(steps), "--seed", str(seed), "--height", str(h), "--width", str(w),
-           "--prompt", prompt, "--output", str(out)]
+           "--prompt", prompt, "--negative-prompt", NEGATIVI, "--output", str(out)]
     try:
         r = subprocess.run(cmd, capture_output=True, text=True,
                            timeout=int(getattr(cfg.video, "image_timeout", 900)))
@@ -196,22 +217,22 @@ def generate_for_segment(seg: Segment, script: Script, cfg, dest: Path,
     keep = max(1, int(getattr(cfg.video, "images_per_segment", 1) or 1))
     n = max(keep, int(getattr(cfg.video, "image_candidates", 2)))
     base_seed = int(getattr(cfg.video, "image_seed", 100))
-    prompt = build_prompt(seg, script)
     work = work_dir or (dest.parent / "_gen")
     work.mkdir(parents=True, exist_ok=True)
     for stale in dest.parent.glob(f"{seg.index:02d}_*.png"):
         stale.unlink(missing_ok=True)            # old runners-up must not leak into this build
 
-    # Candidate framings: same subject, different SHOT — so the mid-segment cut actually changes the
+    # Candidate shots: same subject, genuinely different SCALE — so the mid-segment cut changes the
     # picture instead of showing the same disc with different grain (seed alone barely varies it).
-    framings = ["",
-                " Alternate framing: a much tighter close-up of one detail of the subject, off-center composition.",
-                " Alternate framing: a wide shot with the subject small against deep space."]
+    # Offset by segment index so consecutive segments don't open on the same scale either.
     cands: list[Path] = []
+    prompt = build_prompt(seg, script)          # reported in the result; candidate 0 uses it as-is
     for i in range(n):
         c = work / f"{seg.index:02d}_c{i}.png"
+        shot = SHOTS[(i + seg.index) % len(SHOTS)]
         # Vary seed per candidate AND per segment, so segment 2 never repeats segment 1's image.
-        if _run_mflux(prompt + framings[i % len(framings)], c, base_seed + i * 977 + seg.index * 31, cfg):
+        if _run_mflux(build_prompt(seg, script, shot), c,
+                      base_seed + i * 977 + seg.index * 31, cfg):
             cands.append(c)
     if not cands:
         return None

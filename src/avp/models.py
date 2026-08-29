@@ -45,9 +45,16 @@ class Script:
     disclosure_ai: bool = False           # True only if AI-generated *realistic* visuals are used
     topic: str = ""
     notes: str = ""
-    # One spoken sentence the LLM writes to BRIDGE from this topic into the app CTA (e.g. "Want to
-    # capture Saturn's rings with your own phone?"). Empty on old scripts → generic funnel line.
+    # One spoken sentence the LLM writes to BRIDGE from this topic into the app CTA.
+    # Empty on old scripts → generic funnel line.
     cta_bridge: str = ""
+    # HOW the bridge was earned, so the CTA can be honest per topic instead of one canned shape:
+    #   "shoot"     — this very sky is photographable tonight (Moon, Saturn, Orion, ISS, aurora)
+    #   "principle" — the subject is unreachable, but it rests on a principle astrophotography shares
+    #                 (signal buried in noise, long exposure, light travel time, resolution)
+    #   "none"      — no honest bridge exists for this topic
+    # A Voyager video bridged with "capture Jupiter's moons" is what this field exists to prevent.
+    bridge_kind: str = ""
 
     @property
     def narration(self) -> str:

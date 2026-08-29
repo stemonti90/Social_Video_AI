@@ -95,10 +95,26 @@ def load_script(project: VideoProject) -> Script:
 
 
 def _cta_narration(script: Script, cfg: Config) -> str:
-    """The SPOKEN call-to-action. A hard cut from content to an app card felt glued-on, so the LLM
-    writes a topic-tied bridge sentence ("Want to capture Saturn's rings with your own phone?") and we
-    append the app hook. Falls back to the generic funnel line when the model gave no bridge."""
+    """The SPOKEN call-to-action.
+
+    A hard cut from content to an app card reads as an ad break, so the writer earns a bridge from
+    THIS topic and we append the app hook. What kind of bridge it found matters:
+
+    * "shoot" / "principle" — a real link exists; speak it, then name the app.
+    * "none" — no honest link. Under the default policy we still close on the app with the generic
+      line; under `funnel.bridge_policy: honest` we speak the writer's closing thought about the sky
+      and let the endcard carry the brand silently. Reciting "capture the cosmos yourself" at the end
+      of a video about, say, dark energy is the kind of non-sequitur that makes a channel look like
+      it is reading from a card — which is exactly what the bridge taxonomy exists to prevent.
+    """
     bridge = (script.cta_bridge or "").strip()
+    kind = (getattr(script, "bridge_kind", "") or "").strip().lower()
+    honest = (getattr(cfg.funnel, "bridge_policy", "always") or "always").lower() == "honest"
+
+    if kind == "none":
+        if honest and bridge:
+            return bridge                       # close on the sky; the endcard still shows the brand
+        return cfg.funnel.cta_line.format(app=cfg.funnel.app_name)
     if bridge:
         return f"{bridge} Get {cfg.funnel.app_name} — link in bio."
     return cfg.funnel.cta_line.format(app=cfg.funnel.app_name)
