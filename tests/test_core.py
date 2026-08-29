@@ -1437,6 +1437,41 @@ class ImageGen(unittest.TestCase):
             imagegen.available, imagegen._run_mflux = orig_avail, orig_run
 
 
+class ClipFailureIsRetried(unittest.TestCase):
+    """Regression: a CLIP load failure used to be cached forever. The image generator holds ~9.8 GB
+    while it runs, so on a 24 GB machine CLIP's own load can lose the race once — and ranking then
+    stayed off for the entire video even though memory frees up between segments."""
+
+    def setUp(self):
+        from avp import imagegen
+        imagegen._CLIP.clear()
+
+    def tearDown(self):
+        from avp import imagegen
+        imagegen._CLIP.clear()
+
+    def test_failure_is_retried_then_eventually_given_up(self):
+        from avp import imagegen
+        calls = {"n": 0}
+
+        def boom(*a, **k):
+            calls["n"] += 1
+            raise RuntimeError("out of memory")
+
+        with mock.patch.dict("sys.modules", {"transformers": mock.Mock(
+                CLIPModel=mock.Mock(from_pretrained=boom), CLIPProcessor=mock.Mock())}):
+            for _ in range(imagegen._CLIP_TRIES + 4):
+                self.assertIsNone(imagegen._clip())
+        # retried up to the cap, then stopped paying the load cost on every segment
+        self.assertEqual(calls["n"], imagegen._CLIP_TRIES)
+
+    def test_success_is_cached(self):
+        from avp import imagegen
+        imagegen._CLIP["state"] = ("model", "proc", "cpu", "torch")
+        with mock.patch.dict("sys.modules", {"transformers": None}):
+            self.assertEqual(imagegen._clip()[0], "model")
+
+
 class FootageMatching(unittest.TestCase):
     """Archive matching (A): richer query variants for the search, and a CLIP rerank on the pixels so
     a good photo with an unhelpful NASA title stops losing to keyword-matching filler."""

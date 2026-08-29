@@ -154,13 +154,22 @@ def _run_mflux(prompt: str, out: Path, seed: int, cfg) -> bool:
 
 # --------------------------------------------------------------------------- CLIP selection
 _CLIP: dict = {}
+_CLIP_TRIES = 3          # give up ranking only after this many genuine load failures
 
 
 def _clip():
-    """Lazily load CLIP (transformers, already a dependency). Cached; returns None if unavailable so
-    selection degrades to 'first candidate' rather than failing the build."""
-    if "state" in _CLIP:
+    """Lazily load CLIP (transformers, already a dependency). Returns None if unavailable so selection
+    degrades to 'first candidate' rather than failing the build.
+
+    A SUCCESS is cached forever; a FAILURE is not. The generator holds ~9.8 GB while it runs, and on a
+    24 GB machine CLIP's own ~600 MB can fail to load in that window — observed mid-build, free memory
+    down to tens of megabytes. Caching that failure switched ranking off for the whole video even
+    though memory frees up between generations, so we retry (at most `_CLIP_TRIES` times, to avoid
+    paying the load cost on every segment when CLIP is genuinely absent)."""
+    if _CLIP.get("state") is not None:
         return _CLIP["state"]
+    if _CLIP.get("fails", 0) >= _CLIP_TRIES:
+        return None
     try:
         import torch
         from transformers import CLIPModel, CLIPProcessor
@@ -171,8 +180,10 @@ def _clip():
         model = model.to(dev).eval()
         _CLIP["state"] = (model, proc, dev, torch)
     except Exception as e:  # noqa: BLE001 — CLIP is a refinement, not a requirement
-        log.warning("CLIP unavailable (%s) — picking the first candidate.", e)
-        _CLIP["state"] = None
+        _CLIP["fails"] = _CLIP.get("fails", 0) + 1
+        log.warning("CLIP unavailable (%s) — picking the first candidate%s.", e,
+                    "" if _CLIP["fails"] >= _CLIP_TRIES else "; will retry next segment")
+        return None
     return _CLIP["state"]
 
 

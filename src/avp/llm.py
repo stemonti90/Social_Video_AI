@@ -30,6 +30,7 @@ astronomy and space (TikTok / Reels / YouTube Shorts). These craft rules separat
 - Escalate to a single peak "wow" moment in the penultimate segment.
 - Concrete nouns over adjectives; a confident, flowing spoken cadence (not terse, not padded). BANNED words/phrases: mind-blowing, incredible, literally, breathtaking, journey, unlock, delve, "did you know". No markdown, no emojis, no stage directions.
 - Every fact must be real and checkable; if unsure, stay qualitative — never invent numbers.
+- A NUMBER MUST MEASURE WHAT THE SENTENCE SAYS IT MEASURES. Distance, diameter, age, mass, temperature and speed are different quantities, and the most common error in astronomy writing is quoting an object's DISTANCE as its SIZE. The Orion Nebula is ~1,340 light-years AWAY and ~24 light-years ACROSS; writing "a 1,300 light-year wide nebula" is wrong by a factor of fifty. Before every figure, name to yourself which quantity it belongs to.
 - SUPERLATIVES are where these scripts get things wrong most often. Before writing "the only", "the first", "the largest", "the farthest", check whether a second case exists — there usually is one (Voyager 2 reached interstellar space too; several probes have left the planets behind). If you cannot be certain, drop the superlative: the fact is almost always just as strong without it.
 - Use METRIC units (kilometres). The audience reads subtitles in a metric country, and a distance in miles carries no sense of scale for them.
 - Vary structure between videos; never sound template-stamped.
@@ -42,8 +43,10 @@ CRITIQUE_SYSTEM = (
     "a curiosity loop opened early and paid off, escalation to a single peak, concrete nouns over "
     "adjectives, ZERO cliche, and NO repeated or near-duplicate segments. Then list the 3 weakest "
     "lines with an exact rewrite for each, and explicitly flag any segment that repeats another. "
-    "Then CHECK THE FACTS: flag every superlative (only/first/largest/farthest) that is false or "
-    "unverifiable, every number that looks invented, and any distance not given in kilometres. "
+    "Then CHECK THE FACTS: for EVERY number, name the quantity it claims to measure and say "
+    "whether it actually belongs to that quantity — an object's distance quoted as its width is "
+    "the most common failure. Flag every superlative (only/first/largest/farthest) that is false "
+    "or unverifiable, every number that looks invented, and any distance not in kilometres. "
     "Be specific and brutal. Plain text, no JSON."
 )
 CRITIQUE_USER = "Script JSON:\n{script}"
