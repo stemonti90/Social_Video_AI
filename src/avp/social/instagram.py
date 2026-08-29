@@ -1,22 +1,28 @@
-"""Instagram Reels via the Meta Graph API.
+"""Instagram Reels via the *Instagram API with Instagram Login*.
 
-Flow (verified against a working client, 2026-08-29):
+Why this flavour and not Facebook Login + Pages: Meta's use-case app model locks
+``instagram_content_publish`` away from Facebook Login for Business — verified live on
+2026-08-29, where the FLB configuration offered exactly two permissions (pages_show_list,
+business_management) and nothing Instagram-shaped. The Instagram-Login product is the door
+Meta actually leaves open: its own app id + secret, scopes ``instagram_business_basic`` +
+``instagram_business_content_publish``, tokens on graph.instagram.com, and **no Facebook
+Page required** (the Page link stays useful for Business Suite, but the API ignores it).
 
-  1. POST /{ig-user-id}/media          media_type=REELS&video_url=…&caption=…  → creation_id
-  2. GET  /{creation_id}?fields=status_code                                     → poll to FINISHED
-  3. POST /{ig-user-id}/media_publish  creation_id=…                            → the live post
+The flow, end to end:
 
-Notes that matter:
+  1. ``instagram.com/oauth/authorize``            → consent as the IG professional account
+  2. ``POST api.instagram.com/oauth/access_token``→ short-lived token + user_id (~1 h)
+  3. ``GET graph.instagram.com/access_token``     → 60-day token (ig_exchange_token)
+  4. ``GET graph.instagram.com/refresh_access_token`` renews it (token must be >24 h old
+     and still valid — a fully expired token means reconnecting by hand)
+  5. publish: container (REELS + video_url) → poll status_code → media_publish
 
-* **No file upload.** Step 1 takes a URL that Meta fetches; see `hosting.PublicCopy`.
-* **Step 2 is not optional.** Meta returns a creation_id immediately and transcodes afterwards;
-  publishing before the container reports FINISHED fails, and a container that goes to ERROR is the
-  only place the real reason (bad codec, wrong aspect, too long) is ever reported.
-* **The account must be a Business/Creator account linked to a Facebook Page.** Personal Instagram
-  accounts cannot publish through the API at all — no scope fixes that.
+Instagram still fetches the video from a URL — no upload path — so `hosting.PublicCopy`
+stays in the loop exactly as before.
 """
 from __future__ import annotations
 
+import time
 from pathlib import Path
 from urllib.parse import urlencode
 
@@ -26,74 +32,75 @@ from .hosting import PublicCopy
 
 log = get_logger("avp.social.instagram")
 
-GRAPH = "https://graph.facebook.com/v20.0"
+GRAPH = "https://graph.instagram.com/v23.0"
 
 
 class Instagram(Publisher):
     platform = "instagram"
-    # instagram_content_publish is the one that actually posts; the others are what Meta requires to
-    # discover which Page/IG account the token may act for.
-    scopes = ("instagram_basic", "instagram_content_publish",
-              "pages_show_list", "pages_read_engagement", "business_management")
+    scopes = ("instagram_business_basic", "instagram_business_content_publish")
 
     # ---------------------------------------------------------------- connecting
     def authorize_url(self, state: str, cfg=None) -> str:
         app_id, _ = app_credentials(self.platform, cfg)
-        return "https://www.facebook.com/v20.0/dialog/oauth?" + urlencode({
+        return "https://www.instagram.com/oauth/authorize?" + urlencode({
             "client_id": app_id,
             "redirect_uri": redirect_uri(self.platform),
             "scope": ",".join(self.scopes),
             "response_type": "code",
             "state": state,
+            # NOT force_reauth: despite the name (and Meta's own copy-paste embed URL), it does
+            # not merely re-show the consent screen — it throws the browser out to a full
+            # username+password login even when a valid Instagram session already exists
+            # (verified 2026-08-29). The consent screen appears anyway on a first grant.
         })
 
     def exchange(self, code: str, cfg=None) -> dict:
         app_id, secret = app_credentials(self.platform, cfg)
-        short = http("GET", f"{GRAPH}/oauth/access_token", params={
+        short = http("POST", "https://api.instagram.com/oauth/access_token", data={
             "client_id": app_id, "client_secret": secret,
+            "grant_type": "authorization_code",
             "redirect_uri": redirect_uri(self.platform), "code": code})
-        # Short-lived tokens die in ~1 hour. Exchange immediately for the 60-day long-lived one, or a
-        # scheduled post tomorrow is already broken.
-        long = http("GET", f"{GRAPH}/oauth/access_token", params={
-            "grant_type": "fb_exchange_token", "client_id": app_id,
-            "client_secret": secret, "fb_exchange_token": short["access_token"]})
-        token = long["access_token"]
-
-        pages = http("GET", f"{GRAPH}/me/accounts", params={
-            "fields": "id,name,access_token,instagram_business_account{id,username}",
-            "limit": 100, "access_token": token}).get("data", [])
-        linked = [p for p in pages if p.get("instagram_business_account")]
-        if not linked:
-            raise RuntimeError(
-                "No Instagram Business account is linked to any Facebook Page on this login. "
-                "Convert the Instagram account to Business/Creator and link it to a Page, then retry.")
-        page = linked[0]
-        ig = page["instagram_business_account"]
-        if len(linked) > 1:
-            log.warning("Several linked accounts found — using @%s. Others: %s",
-                        ig.get("username"), ", ".join(
-                            p["instagram_business_account"].get("username", "?") for p in linked[1:]))
-        return {
-            # Publishing acts as the PAGE, so the page token is the one to keep — a user token gets
-            # "(#200) requires instagram_content_publish" even when the scope was granted.
-            "access_token": page.get("access_token") or token,
-            "expires_in": long.get("expires_in", 60 * 24 * 3600),
-            "ig_user_id": ig["id"], "page_id": page["id"],
-            "account": f"@{ig.get('username', ig['id'])}",
-            "scope": ",".join(self.scopes),
-        }
+        if not short.get("access_token"):
+            raise RuntimeError(f"Instagram refused the code exchange: {short}")
+        # Short-lived tokens die in ~an hour; trade up to the 60-day one immediately or the
+        # first scheduled post tomorrow is already broken.
+        long = http("GET", "https://graph.instagram.com/access_token", params={
+            "grant_type": "ig_exchange_token", "client_secret": secret,
+            "access_token": short["access_token"]})
+        token = long.get("access_token") or short["access_token"]
+        rec = {"access_token": token,
+               "expires_in": long.get("expires_in", 3600),
+               "ig_user_id": str(short.get("user_id", "")),
+               "scope": ",".join(self.scopes)}
+        try:
+            me = http("GET", f"{GRAPH}/me", params={
+                "fields": "user_id,username", "access_token": token})
+            rec["account"] = f"@{me.get('username', rec['ig_user_id'])}"
+            # /me's user_id is the professional-account id the publish endpoints want; the
+            # exchange's user_id is app-scoped and usually — but not always — identical.
+            rec["ig_user_id"] = str(me.get("user_id") or rec["ig_user_id"])
+        except Exception as e:  # noqa: BLE001 — a label is not worth failing the connect
+            log.debug("Could not read the Instagram username (%s)", e)
+        return rec
 
     def refresh(self, record: dict, cfg=None) -> dict:
-        # Page tokens derived from a long-lived user token do not expire on their own, but they die
-        # when the password changes or the grant is revoked — both need a human, so say so plainly.
-        raise RuntimeError("The Instagram token is no longer valid — run `avp connect instagram` again.")
+        # ig_refresh_token renews a still-valid long-lived token for another 60 days. It
+        # refuses tokens younger than 24h (we never hit that: we refresh near expiry) and
+        # tokens already expired (that needs a human re-consent — say so plainly).
+        d = http("GET", "https://graph.instagram.com/refresh_access_token", params={
+            "grant_type": "ig_refresh_token", "access_token": record.get("access_token", "")})
+        if not d.get("access_token"):
+            raise RuntimeError("The Instagram token could not be refreshed — run "
+                               "`avp connect instagram` again.")
+        return {**record, "access_token": d["access_token"],
+                "expires_in": d.get("expires_in", 60 * 24 * 3600), "expires_at": None}
 
     # ---------------------------------------------------------------- posting
     def post(self, video: Path, caption: str, meta: dict, cfg, token: str,
              record: dict, disclose_ai: bool) -> dict:
         ig_id = record.get("ig_user_id")
         if not ig_id:
-            raise RuntimeError("No Instagram business id stored — run `avp connect instagram` again.")
+            raise RuntimeError("No Instagram account id stored — run `avp connect instagram` again.")
 
         with PublicCopy(video, cfg) as pub:
             container = http("POST", f"{GRAPH}/{ig_id}/media", params={
@@ -113,7 +120,7 @@ class Instagram(Publisher):
                 raise RuntimeError(f"Instagram could not process the video: "
                                    f"{final.get('status') or final}")
 
-            # Publish while the copy is still up: Meta re-reads the source during publish.
+            # Publish while the copy is still up: Meta may re-read the source during publish.
             live = http("POST", f"{GRAPH}/{ig_id}/media_publish",
                         params={"creation_id": cid, "access_token": token})
 
