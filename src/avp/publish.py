@@ -1,10 +1,17 @@
-"""Publish a finished video to socials via Postiz (open-source scheduler, AGPL-3.0).
+"""Publish a finished video to socials.
 
-Postiz covers TikTok, Instagram, YouTube + ~18 other networks. Real posting needs a running Postiz with
-the channels connected (and their platform app approvals — e.g. the TikTok content-posting audit, Meta
-app review). By DEFAULT this is a dry run: it builds the per-platform plan (caption + the exact Postiz
-`settings` object that would be sent) and writes publish_plan.json. Pass go=True (CLI --go) with Postiz
-configured to actually post.
+Two backends, chosen by ``publish.backend``:
+
+* **native** (default) — `avp.social` talks to TikTok / Meta / Google directly. Nothing else to run,
+  and TikTok is asked for three scopes instead of six.
+* **postiz** — the original path through a self-hosted Postiz (AGPL-3.0), still useful for the ~18
+  other networks it supports.
+
+Either way the platform app approvals are unavoidable (TikTok's content-posting audit, Meta app
+review, Google's OAuth verification) — those are imposed by the platforms, not by the backend.
+
+By DEFAULT this is a dry run: it builds the per-platform plan (caption + the exact provider settings
+that would be sent) and writes publish_plan.json. Pass go=True (CLI --go) to actually post.
 
 API contract (verified against https://docs.postiz.com/public-api, 2026-06):
   - Auth header: ``Authorization: {apiKey}`` (raw key, NOT ``Bearer``).
@@ -164,6 +171,28 @@ def _discover(client: PostizClient) -> dict[str, str]:
     return out
 
 
+def _publish_native(plan: list[dict], video: Path, meta: dict, cfg: Config,
+                    disclose_ai: bool, project: VideoProject) -> list[dict]:
+    """Post directly to each platform. One dead platform must not take the others down with it — a
+    failed TikTok upload is no reason to skip a perfectly good Instagram post — so failures are
+    recorded per item and the loop continues."""
+    from . import social
+
+    for it in plan:
+        plat = it["platform"]
+        try:
+            it["result"] = social.post(plat, video, it["caption"], meta, cfg, disclose_ai)
+            it["posted"] = True
+        except Exception as e:  # noqa: BLE001 — the reason belongs in the plan, not a traceback
+            it["posted"] = False
+            it["error"] = str(e)
+            log.error("Post to %s failed: %s", plat, e)
+    (project.root / "publish_plan.json").write_text(json.dumps(plan, indent=2, ensure_ascii=False))
+    ok = [i["platform"] for i in plan if i.get("posted")]
+    log.info("Published to %s", ", ".join(ok) if ok else "nothing")
+    return plan
+
+
 def stage_publish(project: VideoProject, cfg: Config, go: bool = False,
                   platforms: list[str] | None = None, when: str | None = None) -> list[dict]:
     meta_path = project.root / "metadata.json"
@@ -195,8 +224,13 @@ def stage_publish(project: VideoProject, cfg: Config, go: bool = False,
         log.info("[%s] %s", it["platform"], (it["caption"][:90] or "(no caption)"))
 
     if not go:
-        log.info("DRY RUN — wrote publish_plan.json. Configure Postiz + run with --go to post.")
+        how = ("connect the accounts with `avp connect <platform>`"
+               if (cfg.publish.backend or "native").lower() == "native" else "configure Postiz")
+        log.info("DRY RUN — wrote publish_plan.json. To post: %s, then run with --go.", how)
         return plan
+
+    if (cfg.publish.backend or "native").lower() == "native":
+        return _publish_native(plan, video, meta, cfg, disclose_ai, project)
 
     client = PostizClient(cfg.publish)
     if not client.token:

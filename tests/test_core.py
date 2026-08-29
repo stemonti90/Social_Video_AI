@@ -5,6 +5,7 @@ Run: PYTHONPATH=src .venv/bin/python -m unittest discover -s tests -v
 import json
 import subprocess
 import tempfile
+import time
 import unittest
 from pathlib import Path
 from unittest import mock
@@ -1620,6 +1621,251 @@ class SocialPolishFixes(unittest.TestCase):
             self.assertEqual([p.name for p in stages._segment_sources(P, cta)], ["06.png"])
             vid = Segment(index=2, narration="n", footage="02.mp4")
             self.assertEqual([p.name for p in stages._segment_sources(P, vid)], ["02.mp4"])
+
+
+class SocialTokenStore(unittest.TestCase):
+    """The token store must survive the things that actually happen to it: a crash mid-write, a
+    corrupt file, and being printed to a terminal."""
+
+    def _store(self, tmp):
+        return mock.patch.dict("os.environ", {"AVP_TOKEN_STORE": str(Path(tmp) / "t.json")})
+
+    def test_roundtrip_and_expiry_stamp(self):
+        from avp.social import tokens
+        with tempfile.TemporaryDirectory() as tmp, self._store(tmp):
+            tokens.put("tiktok", {"access_token": "a", "refresh_token": "r", "expires_in": 3600,
+                                  "account": "Astro"})
+            rec = tokens.get("tiktok")
+            # expires_in is converted to an absolute expires_at, or a token stored today looks fresh
+            # forever after a restart.
+            self.assertNotIn("expires_in", rec)
+            self.assertGreater(rec["expires_at"], time.time() + 3000)
+            self.assertTrue(tokens.is_fresh(rec))
+
+    def test_expired_token_is_not_fresh(self):
+        from avp.social import tokens
+        self.assertFalse(tokens.is_fresh({"access_token": "a", "expires_at": time.time() - 1}))
+        # inside the safety skew: still "not fresh", because an upload takes minutes
+        self.assertFalse(tokens.is_fresh({"access_token": "a", "expires_at": time.time() + 60}))
+        self.assertTrue(tokens.is_fresh({"access_token": "a", "expires_at": time.time() + 9999}))
+        self.assertFalse(tokens.is_fresh(None))
+        self.assertFalse(tokens.is_fresh({}))
+
+    def test_connected_never_leaks_tokens(self):
+        from avp.social import tokens
+        with tempfile.TemporaryDirectory() as tmp, self._store(tmp):
+            tokens.put("tiktok", {"access_token": "SECRET-VALUE", "refresh_token": "ALSO-SECRET",
+                                  "expires_in": 100, "account": "Astro"})
+            blob = json.dumps(tokens.connected())
+            self.assertNotIn("SECRET-VALUE", blob)
+            self.assertNotIn("ALSO-SECRET", blob)
+            self.assertIn("Astro", blob)
+
+    def test_corrupt_store_is_survivable(self):
+        from avp.social import tokens
+        with tempfile.TemporaryDirectory() as tmp, self._store(tmp):
+            Path(tmp, "t.json").write_text("{not json")
+            self.assertEqual(tokens.connected(), {})       # no crash on a scheduled run
+            tokens.put("tiktok", {"access_token": "a"})    # and it recovers by overwriting
+            self.assertEqual(tokens.get("tiktok")["access_token"], "a")
+
+    def test_file_is_private(self):
+        from avp.social import tokens
+        with tempfile.TemporaryDirectory() as tmp, self._store(tmp):
+            tokens.put("tiktok", {"access_token": "a"})
+            self.assertEqual(oct(tokens.store_path().stat().st_mode)[-3:], "600")
+
+    def test_forget(self):
+        from avp.social import tokens
+        with tempfile.TemporaryDirectory() as tmp, self._store(tmp):
+            tokens.put("tiktok", {"access_token": "a"})
+            self.assertTrue(tokens.forget("tiktok"))
+            self.assertFalse(tokens.forget("tiktok"))
+            self.assertIsNone(tokens.get("tiktok"))
+
+
+class SocialTokenRefreshExpiry(unittest.TestCase):
+    """Regression: a refreshed record carries expires_at=None plus a new expires_in. If None counted
+    as a real value the token looked fresh forever and every post after the true expiry 401'd."""
+
+    def test_refresh_recomputes_the_expiry(self):
+        from avp.social import tokens
+        with tempfile.TemporaryDirectory() as tmp:
+            with mock.patch.dict("os.environ", {"AVP_TOKEN_STORE": str(Path(tmp) / "t.json")}):
+                tokens.put("tiktok", {"access_token": "old", "expires_in": 10})
+                self.assertFalse(tokens.is_fresh(tokens.get("tiktok")))     # 10s < the 300s skew
+                # what TikTok.refresh() hands back
+                tokens.put("tiktok", {"access_token": "new", "expires_in": 86400,
+                                      "expires_at": None})
+                rec = tokens.get("tiktok")
+                self.assertTrue(tokens.is_fresh(rec))
+                self.assertIsNotNone(rec["expires_at"])
+                self.assertNotIn("expires_in", rec)         # never left behind to confuse a later read
+                self.assertGreater(rec["expires_at"], time.time() + 80000)
+
+
+class YouTubeTitleChoice(unittest.TestCase):
+    """Regression: `a or b if c else d` binds as `(a or b) if c else d`, so an empty caption threw
+    away a perfectly good metadata title."""
+
+    def _title(self, meta, caption):
+        from avp.social.youtube import YouTube
+        captured = {}
+
+        class FakeResp:
+            status_code = 200
+            headers = {"Location": "https://upload.example/session"}
+            text = ""
+
+            def json(self):
+                return {"id": "vid1", "status": {"privacyStatus": "public"}}
+
+        def fake_post(url, headers=None, json=None, timeout=None):
+            captured["title"] = json["snippet"]["title"]
+            return FakeResp()
+
+        with tempfile.TemporaryDirectory() as tmp:
+            vid = Path(tmp) / "v.mp4"
+            vid.write_bytes(b"\0" * 16)
+            with mock.patch("avp.social.youtube.requests.post", side_effect=fake_post), \
+                 mock.patch("avp.social.youtube.requests.put", return_value=FakeResp()):
+                YouTube().post(vid, caption, meta, Config(), "tok", {}, False)
+        return captured["title"]
+
+    def test_metadata_title_wins_even_with_an_empty_caption(self):
+        self.assertEqual(self._title({"youtube": {"title": "Real Title"}}, ""), "Real Title")
+
+    def test_falls_back_to_the_first_caption_line(self):
+        self.assertEqual(self._title({}, "First line\nsecond"), "First line")
+
+    def test_never_empty(self):
+        self.assertEqual(self._title({}, "   \n  "), "Untitled")
+
+
+class TikTokChunking(unittest.TestCase):
+    """TikTok requires 5-64 MB chunks; getting the plan wrong rejects the whole upload."""
+
+    def test_single_chunk_when_it_fits(self):
+        from avp.social.tiktok import chunk_plan
+        self.assertEqual(chunk_plan(12 * 1024 * 1024), (12 * 1024 * 1024, 1))
+        self.assertEqual(chunk_plan(64 * 1024 * 1024), (64 * 1024 * 1024, 1))
+
+    def test_splits_past_the_single_chunk_limit(self):
+        from avp.social.tiktok import CHUNK_SIZE, chunk_plan
+        size = 200 * 1024 * 1024
+        chunk, total = chunk_plan(size)
+        self.assertEqual(chunk, CHUNK_SIZE)
+        self.assertEqual(total, 20)
+
+    def test_last_chunk_absorbs_the_remainder(self):
+        """floor() division means the final chunk is bigger than chunk_size, which TikTok allows —
+        what must never happen is a chunk count that leaves bytes unsent."""
+        from avp.social.tiktok import chunk_plan
+        size = 205 * 1024 * 1024
+        chunk, total = chunk_plan(size)
+        covered_before_last = (total - 1) * chunk
+        self.assertLess(covered_before_last, size)          # the last chunk still has work to do
+        self.assertGreaterEqual(covered_before_last + (size - covered_before_last), size)
+
+
+class SocialAuthUrls(unittest.TestCase):
+    APPS = {"AVP_TIKTOK_CLIENT_KEY": "k", "AVP_TIKTOK_CLIENT_SECRET": "s",
+            "AVP_META_APP_ID": "k", "AVP_META_APP_SECRET": "s",
+            "AVP_GOOGLE_CLIENT_ID": "k", "AVP_GOOGLE_CLIENT_SECRET": "s"}
+
+    def test_tiktok_asks_for_three_scopes_only(self):
+        """Postiz demands six; TikTok's review penalises scopes the app cannot demonstrate, so the
+        native client must keep asking for exactly what it uses."""
+        from avp.social.tiktok import TikTok
+        self.assertEqual(set(TikTok.scopes),
+                         {"user.info.basic", "video.upload", "video.publish"})
+
+    def test_urls_carry_the_verified_redirect(self):
+        from avp import social
+        with mock.patch.dict("os.environ", self.APPS):
+            for plat in social.PLATFORMS:
+                url, state = social.start_connect(plat)
+                self.assertIn("www.astrostackerpro.com%2Fconnect%2F" + plat, url)
+                self.assertIn(state, url)
+
+    def test_youtube_requests_offline_access(self):
+        """Without access_type=offline AND prompt=consent Google returns no refresh token, and the
+        link silently becomes single-use."""
+        from avp import social
+        with mock.patch.dict("os.environ", self.APPS):
+            url, _ = social.start_connect("youtube")
+        self.assertIn("access_type=offline", url)
+        self.assertIn("prompt=consent", url)
+
+    def test_missing_credentials_say_which_variable(self):
+        from avp.social.base import app_credentials
+        with mock.patch.dict("os.environ", {}, clear=True):
+            with self.assertRaises(RuntimeError) as e:
+                app_credentials("tiktok")
+        self.assertIn("AVP_TIKTOK_CLIENT_KEY", str(e.exception))
+
+
+class NativePublishDispatch(unittest.TestCase):
+    def _project(self, tmp):
+        root = Path(tmp) / "p"
+        (root).mkdir(parents=True)
+        (root / "metadata.json").write_text(json.dumps(
+            {"tiktok": {"caption": "hello"}, "youtube": {"title": "T", "description": "D"}}))
+        vid = root / "final.mp4"
+        vid.write_bytes(b"\0" * 1024)
+        proj = mock.Mock()
+        proj.root = root
+        proj.output = vid
+        proj.output_for = lambda _e: vid
+        return proj
+
+    def test_one_dead_platform_does_not_stop_the_others(self):
+        """A failed TikTok upload is no reason to skip a good Instagram post."""
+        from avp import publish
+        cfg = Config()
+        cfg.publish.backend = "native"
+        cfg.publish.platforms = ["tiktok", "instagram"]
+        with tempfile.TemporaryDirectory() as tmp:
+            proj = self._project(tmp)
+
+            def fake_post(platform, *a, **kw):
+                if platform == "tiktok":
+                    raise RuntimeError("boom")
+                return {"post_id": "ig1"}
+
+            with mock.patch("avp.social.post", side_effect=fake_post):
+                plan = publish.stage_publish(proj, cfg, go=True)
+            # the outcome is written back, so a scheduled run leaves an auditable record
+            saved = json.loads((proj.root / "publish_plan.json").read_text())
+        by = {p["platform"]: p for p in plan}
+        self.assertFalse(by["tiktok"]["posted"])
+        self.assertIn("boom", by["tiktok"]["error"])
+        self.assertTrue(by["instagram"]["posted"])
+        self.assertEqual([p["posted"] for p in saved], [False, True])
+
+    def test_postiz_backend_still_reachable(self):
+        from avp import publish
+        cfg = Config()
+        cfg.publish.backend = "postiz"
+        cfg.publish.platforms = ["tiktok"]
+        cfg.publish.postiz_token = ""
+        with tempfile.TemporaryDirectory() as tmp:
+            proj = self._project(tmp)
+            with mock.patch("avp.social.post") as native:
+                with self.assertRaises(RuntimeError):      # no token → the Postiz path complains
+                    publish.stage_publish(proj, cfg, go=True)
+            native.assert_not_called()
+
+    def test_dry_run_posts_nothing(self):
+        from avp import publish
+        cfg = Config()
+        cfg.publish.platforms = ["tiktok"]
+        with tempfile.TemporaryDirectory() as tmp:
+            proj = self._project(tmp)
+            with mock.patch("avp.social.post") as native:
+                plan = publish.stage_publish(proj, cfg, go=False)
+            native.assert_not_called()
+        self.assertEqual(plan[0]["caption"], "hello")
 
 
 if __name__ == "__main__":

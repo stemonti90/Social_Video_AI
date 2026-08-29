@@ -104,6 +104,17 @@ def _build_parser() -> argparse.ArgumentParser:
     tp.add_argument("--refill", action="store_true", help="top the queue up via the LLM now")
     tp.add_argument("--add", nargs="*", default=None, help="append one or more topics to the queue")
 
+    cn = sub.add_parser("connect", parents=[common],
+                        help="link a social account (OAuth) so `publish --go` can post to it")
+    cn.add_argument("platform", choices=["tiktok", "instagram", "youtube"])
+    cn.add_argument("--code", default=None,
+                    help="the authorisation code from the callback page (second step)")
+
+    sub.add_parser("accounts", parents=[common], help="show the linked social accounts")
+
+    dc = sub.add_parser("disconnect", parents=[common], help="forget a linked social account")
+    dc.add_argument("platform", choices=["tiktok", "instagram", "youtube"])
+
     wk = sub.add_parser("worker", parents=[common],
                         help="claim + render jobs from the control server (Mac GPU worker)")
     wk.add_argument("--server", default=None, help="control server base URL (or env AVP_CONTROL_URL)")
@@ -112,6 +123,49 @@ def _build_parser() -> argparse.ArgumentParser:
     wk.add_argument("--poll", type=int, default=60, help="seconds between polls when idle")
     wk.add_argument("--name", default="mac-worker", help="worker id reported to the server")
     return p
+
+
+def _cmd_social(args, cfg: Config) -> int:
+    """connect / accounts / disconnect.
+
+    `connect` is deliberately two steps. The OAuth redirect has to land on an HTTPS URL the platform
+    trusts, so it lands on a static page on the main site; that page shows the code and the exact
+    command to paste back. It costs one paste roughly once a year (TikTok refresh tokens last 365
+    days) and saves running a callback service just to catch a query string."""
+    from . import social
+
+    if args.cmd == "accounts":
+        linked = social.tokens.connected()
+        if not linked:
+            print("No linked accounts. Run `avp connect tiktok` (or instagram / youtube).")
+            return 0
+        for plat, info in sorted(linked.items()):
+            left = info["expires_in"]
+            # TikTok access tokens last 24h (the refresh token does the real work), so "<1d" is the
+            # normal healthy state — show hours instead of a scary-looking "0d".
+            when = ("expired" if info["expired"]
+                    else "no expiry" if not left
+                    else f"{left // 86400}d left" if left >= 86400
+                    else f"{left // 3600}h left")
+            print(f"  {plat:<10} {info['account']:<28} {when}")
+        return 0
+
+    if args.cmd == "disconnect":
+        print(f"Forgot {args.platform}." if social.tokens.forget(args.platform)
+              else f"{args.platform} was not linked.")
+        return 0
+
+    if args.code:
+        info = social.finish_connect(args.platform, args.code, cfg)
+        print(f"Linked {args.platform}: {info.get('account', '?')}")
+        return 0
+
+    url, state = social.start_connect(args.platform, cfg)
+    print(f"\n1. Open this and authorise the account:\n\n{url}\n")
+    print(f"2. You land on {social.redirect_uri(args.platform)} — copy the command it shows,")
+    print(f"   or run:  avp connect {args.platform} --code <CODE>\n")
+    print(f"   (state = {state}; the page shows the same value if the link is fresh)")
+    return 0
 
 
 def _cmd_list(cfg: Config) -> int:
@@ -245,6 +299,17 @@ def main(argv: list[str] | None = None) -> int:
                                     publish=not args.no_publish, config_path=args.config)
         print(json.dumps(report, indent=2, ensure_ascii=False))
         return 0
+
+    if args.cmd in ("connect", "accounts", "disconnect"):
+        # These are the commands a user runs while credentials are still half-configured, so a clean
+        # one-line message beats a traceback. Same convention as the pipeline stages below.
+        try:
+            return _cmd_social(args, cfg)
+        except Exception as e:  # noqa: BLE001
+            log.error("%s", e)
+            if args.verbose:
+                raise
+            return 1
 
     if args.cmd == "worker":
         from . import worker as worker_mod

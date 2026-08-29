@@ -124,7 +124,20 @@ class CaptionStyle:
 
 @dataclass
 class PublishConfig:
-    """Publishing to socials via Postiz (open-source scheduler; covers TikTok/IG/YouTube + more)."""
+    """Publishing to socials.
+
+    Two backends. ``native`` (default) talks to TikTok / Meta / Google directly: no extra services to
+    run, and it asks TikTok for three scopes instead of the six Postiz requires — which matters,
+    because TikTok's review delays apps that request scopes they don't exercise. ``postiz`` keeps the
+    old path for the other ~18 networks Postiz supports.
+    """
+    backend: str = "native"       # native | postiz
+    # Per-platform OAuth app credentials. Env wins (AVP_TIKTOK_CLIENT_KEY, AVP_META_APP_ID, …); this is
+    # the fallback for a config-driven setup. config.yaml is gitignored, but prefer the environment.
+    apps: dict = field(default_factory=dict)      # {"tiktok": {"client_id": …, "client_secret": …}}
+    # Instagram's API fetches the video from a URL instead of accepting an upload, so a Reel needs the
+    # MP4 briefly reachable in public. {"ssh": …, "dir": …, "url": …} — see social/hosting.py.
+    media_host: dict = field(default_factory=dict)
     postiz_url: str = "http://localhost:4007/api"   # self-host public API base = NEXT_PUBLIC_BACKEND_URL
     postiz_token: str = ""        # or set env AVP_POSTIZ_TOKEN
     platforms: list[str] = field(default_factory=lambda: ["youtube", "tiktok", "instagram"])
