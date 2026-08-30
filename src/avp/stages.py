@@ -133,6 +133,14 @@ def stage_script(project: VideoProject, cfg: Config, topic: str | None) -> Scrip
     script = llm.generate_script(cfg.llm, topic, max(30, content_target),
                                  language=cfg.script.language, refine_passes=cfg.script.refine_passes,
                                  best_of=getattr(cfg.llm, "best_of", 1))
+    # Check the facts BEFORE the CTA is appended and before a single frame is rendered: a correction
+    # is free here and costs a full rebuild once the voice has been synthesised against the old words.
+    try:
+        from . import factcheck
+        factcheck.run(script, cfg, out_dir=project.root)
+    except Exception as e:  # noqa: BLE001 — the checker is a safety net, never a gate
+        log.warning("Fact-check stage skipped (%s)", e)
+
     if cfg.funnel.enabled:
         script.segments.append(Segment(
             index=len(script.segments) + 1,

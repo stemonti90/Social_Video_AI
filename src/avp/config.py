@@ -31,6 +31,16 @@ class ScriptConfig:
     subtitle_language: str | None = None   # if set & != language → translated phrase subtitles (e.g. EN audio, IT subs)
     refine_passes: int = 2       # critique→refine rounds on the ONE script (quality via depth, never regresses)
     normalize_numbers: bool = True   # rewrite digits → spoken words for TTS ("85%"→"ottantacinque per cento")
+    # Adversarial fact-check by a stronger model before anything is rendered. The local writer is
+    # fluent and unreliable — it invents mechanisms and writes about dead missions in the present
+    # tense — and no amount of prompt tightening fixes that, because a 12B model cannot audit its own
+    # knowledge. See avp/factcheck.py.
+    #   "off"  — skip
+    #   "flag" — check and report to factcheck.json, change nothing
+    #   "fix"  — also apply corrections the checker is CONFIDENT about (never the uncertain ones)
+    factcheck: str = "off"
+    factcheck_model: str = "deepseek-chat"
+    factcheck_key: str = ""      # prefer the DEEPSEEK_API_KEY env var; this is the fallback
 
 
 @dataclass

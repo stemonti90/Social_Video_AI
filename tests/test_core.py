@@ -4,6 +4,7 @@ Run: PYTHONPATH=src .venv/bin/python -m unittest discover -s tests -v
 """
 import json
 import subprocess
+import requests
 import tempfile
 import time
 import unittest
@@ -2001,6 +2002,142 @@ class DustyVsAirlessSurface(unittest.TestCase):
             text = imagegen.REGISTRO[key].lower()
             for neg in (" no ", "without", "never", "avoid"):
                 self.assertNotIn(neg, text, f"{key} must not negate: {text!r}")
+
+
+class FactCheck(unittest.TestCase):
+    """The checker is a safety net. It must catch what the local writer invents, and it must never
+    be able to stop a build."""
+
+    def _script(self):
+        from avp.models import Script, Segment
+        return Script(title="t", topic="Opportunity", segments=[
+            Segment(index=1, narration="A machine 225 million kilometres away is still screaming."),
+            Segment(index=2, narration="It scavenged power from the Martian soil for fifteen years."),
+            Segment(index=3, narration="The rover crawled 45 kilometres across the plain."),
+        ])
+
+    def _cfg(self, mode="fix"):
+        cfg = Config()
+        cfg.script.factcheck = mode
+        cfg.script.factcheck_key = "test-key"
+        return cfg
+
+    def _reply(self, findings):
+        return {"choices": [{"message": {"content": json.dumps({"findings": findings})}}]}
+
+    def test_confident_corrections_are_applied(self):
+        from avp import factcheck
+        sc, cfg = self._script(), self._cfg("fix")
+        payload = self._reply([
+            {"segment": 2, "claim": "scavenged power from the Martian soil",
+             "verdict": "wrong", "why": "It was solar powered.",
+             "fix": "ran on sunlight for"},
+        ])
+        with mock.patch("avp.factcheck.requests.post",
+                        return_value=mock.Mock(status_code=200, json=lambda: payload)):
+            rep = factcheck.run(sc, cfg)
+        self.assertTrue(rep.checked)
+        self.assertIn("ran on sunlight for", sc.segments[1].narration)
+        self.assertNotIn("Martian soil", sc.segments[1].narration)
+        self.assertTrue(rep.findings[0].applied)
+
+    def test_unsure_is_reported_but_never_rewritten(self):
+        """Swapping a maybe-true line for a maybe-true line is churn, not correction."""
+        from avp import factcheck
+        sc, cfg = self._script(), self._cfg("fix")
+        before = sc.segments[0].narration
+        payload = self._reply([
+            {"segment": 1, "claim": "is still screaming", "verdict": "unsure",
+             "why": "Operational status changes.", "fix": "fell silent"},
+        ])
+        with mock.patch("avp.factcheck.requests.post",
+                        return_value=mock.Mock(status_code=200, json=lambda: payload)):
+            rep = factcheck.run(sc, cfg)
+        self.assertEqual(sc.segments[0].narration, before)
+        self.assertFalse(rep.findings[0].applied)
+
+    def test_flag_mode_never_touches_the_script(self):
+        from avp import factcheck
+        sc, cfg = self._script(), self._cfg("flag")
+        before = [s.narration for s in sc.segments]
+        payload = self._reply([{"segment": 2, "claim": "scavenged power from the Martian soil",
+                                "verdict": "wrong", "why": "solar", "fix": "ran on sunlight"}])
+        with mock.patch("avp.factcheck.requests.post",
+                        return_value=mock.Mock(status_code=200, json=lambda: payload)):
+            factcheck.run(sc, cfg)
+        self.assertEqual([s.narration for s in sc.segments], before)
+
+    def test_a_longer_fix_is_refused(self):
+        """Corrections are spoken: caption timings and the 60s ceiling come from word count."""
+        from avp import factcheck
+        sc, cfg = self._script(), self._cfg("fix")
+        payload = self._reply([
+            {"segment": 3, "claim": "crawled 45 kilometres", "verdict": "wrong", "why": "x",
+             "fix": "crawled forty five kilometres across the endless rust coloured martian plain"},
+        ])
+        with mock.patch("avp.factcheck.requests.post",
+                        return_value=mock.Mock(status_code=200, json=lambda: payload)):
+            rep = factcheck.run(sc, cfg)
+        self.assertIn("crawled 45 kilometres", sc.segments[2].narration)
+        self.assertFalse(rep.findings[0].applied)
+
+    def test_a_dead_api_never_stops_the_build(self):
+        from avp import factcheck
+        for boom in (requests.exceptions.ConnectionError("no route"),
+                     requests.exceptions.ReadTimeout("slow")):
+            sc, cfg = self._script(), self._cfg("fix")
+            before = [s.narration for s in sc.segments]
+            with mock.patch("avp.factcheck.requests.post", side_effect=boom):
+                rep = factcheck.run(sc, cfg)
+            self.assertFalse(rep.checked)
+            self.assertIn("unavailable", rep.reason)
+            self.assertEqual([s.narration for s in sc.segments], before)
+
+    def test_a_500_and_a_garbage_reply_both_fail_open(self):
+        from avp import factcheck
+        sc, cfg = self._script(), self._cfg("fix")
+        with mock.patch("avp.factcheck.requests.post",
+                        return_value=mock.Mock(status_code=500, text="upstream boom")):
+            self.assertFalse(factcheck.run(sc, cfg).checked)
+        garbage = {"choices": [{"message": {"content": "I'm afraid I can't do that."}}]}
+        with mock.patch("avp.factcheck.requests.post",
+                        return_value=mock.Mock(status_code=200, json=lambda: garbage)):
+            rep = factcheck.run(sc, cfg)
+        self.assertTrue(rep.checked)          # it answered, it just said nothing usable
+        self.assertEqual(rep.findings, [])
+
+    def test_missing_key_is_not_a_crash(self):
+        from avp import factcheck
+        cfg = Config(); cfg.script.factcheck = "fix"; cfg.script.factcheck_key = ""
+        with mock.patch.dict("os.environ", {}, clear=True):
+            rep = factcheck.run(self._script(), cfg)
+        self.assertFalse(rep.checked)
+        self.assertIn("no API key", rep.reason)
+
+    def test_off_makes_no_call_at_all(self):
+        from avp import factcheck
+        with mock.patch("avp.factcheck.requests.post") as post:
+            rep = factcheck.run(self._script(), self._cfg("off"))
+        post.assert_not_called()
+        self.assertFalse(rep.checked)
+
+    def test_only_time_dependent_claims_earn_a_web_lookup(self):
+        from avp import factcheck
+        self.assertTrue(factcheck.volatile("it is still transmitting"))
+        self.assertTrue(factcheck.volatile("the only human-made object out there"))
+        self.assertTrue(factcheck.volatile("45 kilometres of driving"))
+        self.assertFalse(factcheck.volatile("Mars is a rocky planet"))
+
+    def test_report_is_written_for_the_audit_trail(self):
+        from avp import factcheck
+        with tempfile.TemporaryDirectory() as td:
+            payload = self._reply([])
+            with mock.patch("avp.factcheck.requests.post",
+                            return_value=mock.Mock(status_code=200, json=lambda: payload)):
+                factcheck.run(self._script(), self._cfg("flag"), out_dir=Path(td))
+            saved = json.loads((Path(td) / "factcheck.json").read_text())
+        self.assertTrue(saved["checked"])          # a clean pass still proves it looked
+        self.assertEqual(saved["segments"], 3)
 
 
 if __name__ == "__main__":
