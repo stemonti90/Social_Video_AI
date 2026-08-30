@@ -491,10 +491,25 @@ def resolve_footage(project: VideoProject, script: Script, cfg, allow_download: 
         meaning = _segment_meaning(seg, script)
         floor = float(getattr(cfg.video, "footage_relevance_floor", 0.35) or 0.0)
 
-        # 0) Locally generated visual (mflux + CLIP), when configured AND actually installed. It runs
-        # before the archives so every segment gets an image made FOR it; if generation is off or the
-        # model isn't on disk, we fall straight through to the real-footage chain below.
-        if str(getattr(cfg.video, "footage_source", "archive")).lower() == "generate":
+        # 0) Locally generated visual (mflux + CLIP), when configured AND actually installed.
+        #
+        # ORDER MATTERS, and it is per-subject. Generation normally runs first so every segment gets
+        # an image made FOR it. But for the subject families where this model is measurably wrong —
+        # nebulae rendered as spiral galaxies, the Sun as a false-colour orange disc; see
+        # imagegen.ARCHIVE_FIRST for the evidence — a generated image is not "a bit worse", it is the
+        # wrong object. There the real archives go first and generation becomes the fallback, which
+        # is also the better picture: NASA has actually photographed these things.
+        gen_on = str(getattr(cfg.video, "footage_source", "archive")).lower() == "generate"
+        archive_first = False
+        if gen_on:
+            try:
+                from . import imagegen
+                archive_first = imagegen.prefers_archive(seg, script)
+            except Exception:  # noqa: BLE001 — a broken import must not change the routing
+                archive_first = False
+
+        def _try_generate() -> bool:
+            """Generate this segment's visual. Returns True if it landed. Never raises."""
             try:
                 from . import imagegen
                 dest = fdir / f"{seg.index:02d}.png"
@@ -512,14 +527,23 @@ def resolve_footage(project: VideoProject, script: Script, cfg, allow_download: 
                                                 "generated",
                                                 f"mflux, {gen['candidates']} candidates, {gen['selection']} pick"))
                     used_ids.add(f"gen:{seg.index}")
-                    continue
+                    return True
                 log.warning("Segment %d: image generation unavailable — using archive footage", seg.index)
             except Exception as e:  # noqa: BLE001 — generation must never sink the stage
                 log.warning("Segment %d: image generation failed (%s) — using archive footage",
                             seg.index, e)
+            return False
+
+        if gen_on and not archive_first and _try_generate():
+            continue
+        if archive_first:
+            log.info("Segment %d: %s — asking the archives before generating",
+                     seg.index, "deep-sky/solar subject")
         # Fallback chain — never leave a segment black, never let one segment abort the stage:
         try:
             if _try_nasa(project, seg, queries, terms, used_ids, cfg, report, meaning):  # 1) NASA (PD)
+                continue
+            if archive_first and _try_generate():   # archives had nothing → generate after all
                 continue
             if _try_wikimedia(project, seg, queries + GENERIC_QUERIES, used_ids):  # 2) Wikimedia Commons
                 report.append(_report_entry(seg, {"title": seg.credit}, 0.0, floor, "fallback",

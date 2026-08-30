@@ -152,6 +152,33 @@ def _run_mflux(prompt: str, out: Path, seed: int, cfg) -> bool:
 # file). Post-processing cannot invent the missing channel; the vivid orange is the better shipping
 # choice. Fixing this for real needs a different image model, not a filter.
 
+# --------------------------------------------------------------------------- what NOT to generate
+# Two subject families where this model is measurably WRONG, not merely weaker. For these the caller
+# asks the archives first and only falls back to generation.
+#
+#   "deep_sky"  — z-image-turbo has exactly ONE canonical deep-sky image: a face-on spiral galaxy.
+#                 Measured 2026-08-30 on the Orion Nebula with five prompts at a fixed seed: the full
+#                 pipeline prompt; the same without the shot-scale prefix; that plus a negative prompt
+#                 naming "spiral galaxy, galactic disc, spiral arms, whirlpool"; a bare "The Orion
+#                 Nebula, M42, photograph"; and an explicit "emission nebula, chaotic cloud of gas and
+#                 dust, NO spiral structure, four bright young stars at its heart". All five returned
+#                 the same spiral galaxy. The prior does not bend — and a nebula rendered as a galaxy
+#                 is not a stylistic miss, it is the wrong object in an astronomy video.
+#   "star"      — always the saturated false-colour SDO orange disc (documented above, 2026-08-28).
+#
+# Everything else still generates: probes in flight, planetary surfaces and conceptual shots are
+# either fine or have no archive equivalent. Revisit this set when the image model changes — it is a
+# statement about z-image-turbo, not about generation in general.
+ARCHIVE_FIRST = frozenset({"deep_sky", "star"})
+
+
+def prefers_archive(seg: Segment, script: Script) -> bool:
+    """True when real archive footage should be tried BEFORE generating this segment."""
+    kw = " ".join(str(k) for k in (seg.keywords or []) if k)
+    subject = (seg.visual or kw or script.topic or "")
+    return _bucket(f"{subject} {kw}") in ARCHIVE_FIRST
+
+
 # --------------------------------------------------------------------------- CLIP selection
 _CLIP: dict = {}
 _CLIP_TRIES = 3          # give up ranking only after this many genuine load failures

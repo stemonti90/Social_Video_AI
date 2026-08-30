@@ -1933,5 +1933,52 @@ class NativePublishDispatch(unittest.TestCase):
         self.assertEqual(plan[0]["caption"], "hello")
 
 
+class ArchiveFirstRouting(unittest.TestCase):
+    """Nebulae and the Sun must reach the archives BEFORE the generator, because this image model
+    renders them as the wrong object entirely (imagegen.ARCHIVE_FIRST documents the measurements)."""
+
+    def _seg(self, visual, kw):
+        from avp.models import Segment
+        return Segment(index=1, narration="n", visual=visual, keywords=kw.split())
+
+    def _script(self):
+        from avp.models import Script
+        return Script(title="t", topic="test", segments=[])
+
+    def test_deep_sky_and_sun_go_to_archives_first(self):
+        from avp import imagegen
+        sc = self._script()
+        self.assertTrue(imagegen.prefers_archive(
+            self._seg("Wide shot, the Orion Nebula core", "Orion Nebula M42"), sc))
+        self.assertTrue(imagegen.prefers_archive(
+            self._seg("close up of a sunspot", "sun solar"), sc))
+
+    def test_spacecraft_and_surfaces_still_generate_first(self):
+        """The rule is narrow on purpose: a probe in flight has no archive equivalent, and the
+        generator handles it well once the palette is right."""
+        from avp import imagegen
+        sc = self._script()
+        self.assertFalse(imagegen.prefers_archive(
+            self._seg("the Voyager probe in deep space", "Voyager spacecraft"), sc))
+        self.assertFalse(imagegen.prefers_archive(
+            self._seg("the surface of Mars", "Mars crater regolith"), sc))
+
+    def test_falls_back_to_keywords_and_topic(self):
+        from avp import imagegen
+        from avp.models import Script
+        sc = Script(title="t", topic="the Andromeda galaxy", segments=[])
+        self.assertTrue(imagegen.prefers_archive(self._seg("", "nebula cluster"), sc))
+        self.assertTrue(imagegen.prefers_archive(self._seg("", ""), sc))   # topic alone decides
+
+    def test_negatives_are_not_in_the_positive_prompt(self):
+        """Regression: "Avoid: false color, monochrome orange" used to be appended to the POSITIVE
+        prompt, where a diffusion model reads it as a request. Those words belong to NEGATIVI."""
+        from avp import imagegen
+        p = imagegen.build_prompt(self._seg("Saturn from orbit", "saturn rings"), self._script())
+        for banned in ("Avoid:", "false color", "monochrome orange", "no text", "illustration"):
+            self.assertNotIn(banned, p, f"{banned!r} must not sit in the positive prompt")
+        self.assertIn("false color", imagegen.NEGATIVI)
+
+
 if __name__ == "__main__":
     unittest.main()
