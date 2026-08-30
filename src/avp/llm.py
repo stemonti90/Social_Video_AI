@@ -30,6 +30,8 @@ astronomy and space (TikTok / Reels / YouTube Shorts). These craft rules separat
 - Escalate to a single peak "wow" moment in the penultimate segment.
 - Concrete nouns over adjectives; a confident, flowing spoken cadence (not terse, not padded). BANNED words/phrases: mind-blowing, incredible, literally, breathtaking, journey, unlock, delve, "did you know". No markdown, no emojis, no stage directions.
 - Every fact must be real and checkable; if unsure, stay qualitative — never invent numbers.
+- NEVER INVENT A MECHANISM. Explaining *how* something worked is where fabrication creeps in: a solar-powered rover described as "scavenging power from the soil" sounds plausible and is simply false. If you do not know the mechanism, say what the thing DID, not how it did it. A vaguer true sentence always beats a vivid invented one.
+- GET THE TENSE RIGHT. Missions end, probes fall silent, spacecraft are destroyed on purpose. Before writing "is still...", check whether it still is. Saying a rover that fell silent years ago "is still transmitting" is the kind of error that costs a science channel its credibility in the comments.
 - A NUMBER MUST MEASURE WHAT THE SENTENCE SAYS IT MEASURES. Distance, diameter, age, mass, temperature and speed are different quantities, and the most common error in astronomy writing is quoting an object's DISTANCE as its SIZE. The Orion Nebula is ~1,340 light-years AWAY and ~24 light-years ACROSS; writing "a 1,300 light-year wide nebula" is wrong by a factor of fifty. Before every figure, name to yourself which quantity it belongs to.
 - SUPERLATIVES are where these scripts get things wrong most often. Before writing "the only", "the first", "the largest", "the farthest", check whether a second case exists — there usually is one (Voyager 2 reached interstellar space too; several probes have left the planets behind). If you cannot be certain, drop the superlative: the fact is almost always just as strong without it.
 - Use METRIC units (kilometres). The audience reads subtitles in a metric country, and a distance in miles carries no sense of scale for them.
@@ -72,9 +74,14 @@ Also provide a punchy "title", plus the BRIDGE to astrophotography — this chan
 want to point their own camera at the sky, so every video has to land somewhere real. Two fields:
 
 - "bridge_kind": choose HONESTLY from exactly one of these:
-    "shoot"     — this subject, or the very sky it sits in, can actually be photographed from a balcony
-                  tonight with a phone (the Moon, Saturn, Jupiter, Orion, Andromeda, the ISS, an
-                  eclipse, aurorae, the Milky Way, a meteor shower, a comet).
+    "shoot"     — this subject, or the very sky it sits in, can actually be photographed from a
+                  balcony with a phone. This is the DEFAULT whenever the topic touches anything
+                  visible from Earth, and it is broader than it first looks: ANY naked-eye planet
+                  (Mars, Venus, Jupiter, Saturn, Mercury) counts, and so does the sky an object
+                  sits in — a video about a Mars rover still bridges to Mars, a bright orange dot
+                  anyone can find. Also the Moon, bright nebulae and clusters, the Milky Way, the
+                  ISS, eclipses, aurorae, meteor showers, comets. These are examples, NOT a closed
+                  list: if a viewer could point a phone at anything in this story, choose "shoot".
     "principle" — the subject itself is out of reach, but it RESTS ON a principle astrophotography also
                   obeys: faint signal buried in noise, gathering light over time, how far light travels,
                   what limits resolution, how little light a sensor really receives.
@@ -85,9 +92,15 @@ HARD RULES for the bridge, because getting this wrong makes the channel look rid
 - It may ONLY refer to something this script actually talked about. Naming a different object that
   merely happens to be photographable ("...capture Jupiter's moons") after a video about an
   interstellar probe is exactly the failure to avoid.
+- Only choose "principle" when NOTHING in the story is visible from Earth. Reaching for a principle
+  while the subject sits in plain sight — bridging a Mars video to light-travel time when Mars itself
+  is a bright dot in tonight's sky — throws away the strongest link you had.
 - For "principle", bridge through the SHARED IDEA, not the object. A probe whose signal arrives buried
   in noise, and which is read by combining several antennas, bridges to combining many photographs —
   because it is the same physics, not because both involve space.
+- The bridge is a claim, and a wrong claim is worse than a weak one. "Starlight that travelled millions
+  of kilometres" is false (starlight travels light-YEARS); an editor would catch it and so will your
+  audience. Say nothing you cannot stand behind.
 - Never write a generic line ("capture the cosmos yourself", "explore the universe"). If it could close
   ANY video on this channel, it is wrong.
 - If "none", still write a cta_bridge, but make it a closing thought about the sky itself. Do not

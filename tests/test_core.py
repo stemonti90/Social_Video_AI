@@ -1980,5 +1980,28 @@ class ArchiveFirstRouting(unittest.TestCase):
         self.assertIn("false color", imagegen.NEGATIVI)
 
 
+class DustyVsAirlessSurface(unittest.TestCase):
+    """A world with an atmosphere and a world without one need opposite skies. Mars under the airless
+    rule came back with the rover sitting in open black space."""
+
+    def test_mars_and_titan_are_dusty(self):
+        from avp import imagegen
+        self.assertEqual(imagegen._bucket("wide shot, rover tracks in the Martian soil"), "dusty_surface")
+        self.assertEqual(imagegen._bucket("Titan dunes under haze"), "dusty_surface")
+
+    def test_moon_and_asteroids_stay_airless(self):
+        from avp import imagegen
+        self.assertEqual(imagegen._bucket("the lunar surface, craters"), "surface")
+        self.assertEqual(imagegen._bucket("a rocky asteroid surface, regolith"), "surface")
+
+    def test_neither_registry_entry_negates(self):
+        """Both entries feed the POSITIVE prompt, where "no black sky" reads as "black sky"."""
+        from avp import imagegen
+        for key in ("surface", "dusty_surface"):
+            text = imagegen.REGISTRO[key].lower()
+            for neg in (" no ", "without", "never", "avoid"):
+                self.assertNotIn(neg, text, f"{key} must not negate: {text!r}")
+
+
 if __name__ == "__main__":
     unittest.main()

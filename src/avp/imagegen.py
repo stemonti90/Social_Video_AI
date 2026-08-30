@@ -35,8 +35,15 @@ REGISTRO = {
                "pure black space behind it"),
     "deep_sky": ("cool blue and violet hydrogen glow with white starlight on a pure black sky, "
                  "long-exposure astrophotography"),
-    "surface": ("grey and tan regolith in its natural colour, raking white low light, "
-                "black airless sky above the horizon"),
+    # Two kinds of ground, and the sky is what separates them. "surface" describes an AIRLESS world
+    # (the Moon, an asteroid): hard shadows, black sky right down to the horizon. Mars has an
+    # atmosphere and looked wrong under that rule — an Opportunity build came back with the rover
+    # sitting under open black space in four frames out of eight (2026-08-30). A dusty world scatters
+    # its own light: butterscotch sky, soft shadows, haze that swallows the far horizon.
+    "surface": ("grey regolith in its natural colour, raking white low light, hard black shadows, "
+                "airless black sky meeting the horizon sharply"),
+    "dusty_surface": ("rusty ochre soil under a hazy butterscotch sky, soft diffuse daylight, "
+                      "fine dust softening the distant horizon"),
     "spacecraft": ("cold white sunlight glinting on grey metal and gold foil, the black void of deep "
                    "space around it, distant pinpoint stars"),
     "star": ("natural visible light, pale yellow-white surface with realistic granulation, "
@@ -71,6 +78,8 @@ NEGATIVI = ("illustration, 3d render, cgi, digital art, cartoon, anime, painting
 
 # Keyword → registry bucket. First match wins; order matters (surface before planet).
 _BUCKETS = (
+    # Dusty worlds first: "Martian surface" must not fall into the airless-Moon bucket.
+    ("dusty_surface", ("mars", "martian", "titan", "venus", "venusian", "dust storm", "sand dune")),
     ("surface", ("surface", "crater", "terrain", "dune", "canyon", "regolith", "landscape", "ice sheet")),
     ("spacecraft", ("probe", "spacecraft", "satellite", "rover", "telescope", "mission", "lander",
                     "orbiter", "voyager", "cassini", "hubble", "webb")),
