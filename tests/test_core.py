@@ -2004,6 +2004,91 @@ class DustyVsAirlessSurface(unittest.TestCase):
                 self.assertNotIn(neg, text, f"{key} must not negate: {text!r}")
 
 
+class FactCheckVisuals(unittest.TestCase):
+    """Shot descriptions drive image generation, so a wrong one is worse than a wrong spoken line —
+    nobody hears it, but everyone sees the picture it produced. They are corrected under different
+    rules: length barely matters, the shot scale does."""
+
+    def _script(self):
+        from avp.models import Script, Segment
+        return Script(title="t", topic="Opportunity", segments=[
+            Segment(index=1, narration="The rover crossed the plain.",
+                    visual="wide shot, the dusty Martian horizon under a pale blue sky"),
+            Segment(index=2, narration="It drilled into rock.",
+                    visual="extreme close-up, jagged rock samples on Mars"),
+        ])
+
+    def _cfg(self, mode="fix"):
+        cfg = Config()
+        cfg.script.factcheck = mode
+        cfg.script.factcheck_key = "test-key"
+        return cfg
+
+    def _reply(self, findings):
+        return {"choices": [{"message": {"content": json.dumps({"findings": findings})}}]}
+
+    def _run(self, sc, findings, mode="fix"):
+        from avp import factcheck
+        with mock.patch("avp.factcheck.requests.post",
+                        return_value=mock.Mock(status_code=200, json=lambda: self._reply(findings))):
+            return factcheck.run(sc, self._cfg(mode))
+
+    def test_a_wrong_sky_is_corrected_in_the_visual(self):
+        sc = self._script()
+        rep = self._run(sc, [{"segment": 1, "field": "visual",
+                              "claim": "under a pale blue sky", "verdict": "wrong",
+                              "why": "The Martian day sky is butterscotch, blue only at sunset.",
+                              "fix": "under a hazy butterscotch sky"}])
+        self.assertIn("butterscotch", sc.segments[0].visual)
+        self.assertNotIn("pale blue", sc.segments[0].visual)
+        self.assertTrue(rep.findings[0].applied)
+        self.assertEqual(rep.findings[0].field, "visual")
+
+    def test_the_spoken_line_is_untouched_by_a_visual_finding(self):
+        sc = self._script()
+        before = sc.segments[0].narration
+        self._run(sc, [{"segment": 1, "field": "visual", "claim": "under a pale blue sky",
+                        "verdict": "wrong", "why": "x", "fix": "under a butterscotch sky"}])
+        self.assertEqual(sc.segments[0].narration, before)
+
+    def test_a_fix_that_drops_the_shot_scale_is_refused(self):
+        """Segments alternate wide / medium / close on purpose; a fix that loses the scale would
+        silently flatten the cut rhythm."""
+        sc = self._script()
+        rep = self._run(sc, [{"segment": 1, "field": "visual",
+                              "claim": "wide shot, the dusty Martian horizon under a pale blue sky",
+                              "verdict": "wrong", "why": "sky colour",
+                              "fix": "the dusty Martian horizon under a butterscotch sky"}])
+        self.assertIn("wide shot", sc.segments[0].visual)
+        self.assertFalse(rep.findings[0].applied)
+
+    def test_a_bloated_visual_is_refused(self):
+        """This string is prepended to an image prompt, where a long tail stops being obeyed."""
+        sc = self._script()
+        rep = self._run(sc, [{"segment": 2, "field": "visual",
+                              "claim": "jagged rock samples on Mars", "verdict": "wrong", "why": "x",
+                              "fix": "jagged rock samples on Mars " + "extremely detailed " * 10}])
+        self.assertEqual(sc.segments[1].visual, "extreme close-up, jagged rock samples on Mars")
+        self.assertFalse(rep.findings[0].applied)
+
+    def test_a_visual_may_grow_a_little_unlike_a_spoken_line(self):
+        """Nobody speaks a shot description, so the tight spoken-length rule does not apply."""
+        sc = self._script()
+        rep = self._run(sc, [{"segment": 2, "field": "visual",
+                              "claim": "jagged rock samples on Mars", "verdict": "wrong", "why": "x",
+                              "fix": "jagged rust coloured rock samples on the Martian regolith"}])
+        self.assertTrue(rep.findings[0].applied)
+        self.assertIn("rust coloured", sc.segments[1].visual)
+
+    def test_the_field_defaults_to_narration_when_absent(self):
+        """Older or sloppy replies must not silently rewrite the wrong field."""
+        sc = self._script()
+        self._run(sc, [{"segment": 1, "claim": "The rover crossed the plain.",
+                        "verdict": "wrong", "why": "x", "fix": "The rover crossed dunes."}])
+        self.assertEqual(sc.segments[0].narration, "The rover crossed dunes.")
+        self.assertIn("pale blue", sc.segments[0].visual)   # visual untouched
+
+
 class FactCheck(unittest.TestCase):
     """The checker is a safety net. It must catch what the local writer invents, and it must never
     be able to stop a build."""

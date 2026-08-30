@@ -27,9 +27,11 @@ Three hard rules, all learned the expensive way:
 * **Never block the build.** No key, no network, a 500 from the API, a malformed reply — every one of
   those logs a warning and returns "no findings". A channel that publishes three videos a day cannot
   stop because someone else's endpoint is down.
-* **Never lengthen a line.** Corrections are spoken, and the caption timings, the segment durations
-  and the 60-second ceiling are all derived from the word count. A "better" sentence three words
-  longer silently pushes the video over.
+* **Never lengthen a spoken line.** Caption timings, segment durations and the 60-second ceiling are
+  all derived from word count. A "better" sentence three words longer silently pushes the video over.
+  Shot descriptions are not spoken, so they are judged differently: they may grow a little, but they
+  must keep their shot scale (segments alternate wide / medium / close on purpose) and stay short
+  enough that an image model still obeys the tail.
 * **Write down what was checked, not just what was wrong.** `factcheck.json` in the project is the
   audit trail; a pass that reports nothing should still prove it looked.
 """
@@ -58,7 +60,10 @@ SYSTEM = """You are a ruthless fact-checker for an astronomy and spaceflight cha
 been written by a small language model that is fluent and unreliable. Your job is to find every claim \
 that is FALSE, and to leave everything else alone.
 
-You are checking for these failure modes specifically, in order of how often they occur:
+Each segment gives you TWO things to check, and they fail differently:
+
+NARRATION — the words spoken aloud. Check them for these failure modes, in order of how often \
+they occur:
 1. INVENTED MECHANISMS — a plausible-sounding explanation of *how* something worked that is simply not \
 how it worked. (A solar-powered rover described as drawing power from the soil.)
 2. WRONG TENSE — a mission, probe or telescope that has ended, been destroyed or fallen silent, \
@@ -67,7 +72,23 @@ written about in the present tense.
 4. FABRICATED FIGURES — a number that sounds specific and has no source.
 5. PHYSICS THAT DOES NOT HOLD — wrong units, wrong orders of magnitude, wrong scale of distance.
 
+VISUAL — a shot description that will be handed to an image generator. Nobody hears it, but a wrong \
+one produces a wrong picture, which is worse. Check whether the scene DESCRIBED IS POSSIBLE and looks \
+the way it is described:
+6. IMPOSSIBLE OR WRONG APPEARANCE — the wrong sky colour for that world (Mars is butterscotch by day, \
+blue only at sunset; the Moon's sky is black), a surface on a gas giant, rings where there are none, \
+stars visible in a sunlit lunar photograph, an object drawn with features it does not have.
+7. A VIEW NOBODY COULD HAVE — a lander photographed from outside by no one, a probe filmed from a \
+chase camera that was never there. A conceptual or artist's-impression shot is fine; a shot that \
+claims to be a photograph of an impossible vantage point is not.
+
+Every visual MUST keep its shot scale — the phrase naming how close the camera is ("wide shot", \
+"medium shot", "close-up", "extreme close-up", "filling the frame"). The video is cut from these and \
+consecutive segments deliberately alternate. If you correct a visual, KEEP its scale word intact and \
+change only what is factually wrong. Never turn a wide shot into a close-up.
+
 Rules for your verdicts:
+- Say which field you are judging: "narration" or "visual".
 - Judge each claim on its own. Quote it exactly as written.
 - "wrong" means you are confident it is false. "unsure" means it is the KIND of thing that changes \
 with time or that you cannot settle from memory — a current distance, an operational status, a count \
@@ -79,10 +100,10 @@ words. The line is spoken aloud and the video's timing is built from its length.
 - If the script is clean, return an empty list. Do not invent problems to look useful.
 
 Return STRICT JSON only, no commentary:
-{"findings": [{"segment": 1, "claim": "exact quoted text", "verdict": "wrong|unsure", \
-"why": "one sentence", "fix": "replacement of the same length or shorter"}]}"""
+{"findings": [{"segment": 1, "field": "narration|visual", "claim": "exact quoted text", \
+"verdict": "wrong|unsure", "why": "one sentence", "fix": "replacement, no longer than the original"}]}"""
 
-USER = """Script to check (segment number, then the spoken narration):
+USER = """Script to check. For each segment: what is SAID, then the SHOT that will be generated.
 
 {body}
 
@@ -99,11 +120,19 @@ _VOLATILE = re.compile(
 )
 
 
+# The shot scale is load-bearing: segments deliberately alternate wide / medium / close, and a
+# "correction" that quietly turns a wide shot into a close-up undoes the pacing work it knows nothing
+# about. A visual fix must still carry one of these.
+SCALE_WORDS = ("wide", "medium", "close-up", "closeup", "close up", "extreme",
+               "filling the frame", "aerial", "macro", "establishing")
+
+
 @dataclass
 class Finding:
     segment: int
     claim: str
     verdict: str                 # "wrong" | "unsure"
+    field: str = "narration"     # "narration" (spoken) | "visual" (drives image generation)
     why: str = ""
     fix: str = ""
     web: str = ""                # what the web check concluded, when one ran
@@ -156,7 +185,9 @@ def _judge(script: Script, cfg) -> list[Finding]:
         raise RuntimeError("no API key (set DEEPSEEK_API_KEY or script.factcheck_key)")
 
     content = [s for s in script.segments if getattr(s, "kind", "content") != "cta"]
-    body = "\n".join(f"{s.index}. {s.narration.strip()}" for s in content)
+    body = "\n\n".join(
+        f"segment {s.index}\n  narration: {s.narration.strip()}\n  visual: {(s.visual or '').strip()}"
+        for s in content)
     model = str(getattr(cfg.script, "factcheck_model", "deepseek-chat") or "deepseek-chat")
 
     r = requests.post(
@@ -188,9 +219,13 @@ def _judge(script: Script, cfg) -> list[Finding]:
             idx = int(f.get("segment", 0))
         except (TypeError, ValueError):
             continue
+        which = str(f.get("field", "narration")).strip().lower()
+        if which not in ("narration", "visual"):
+            which = "narration"
         out.append(Finding(segment=idx,
                            claim=str(f.get("claim", "")).strip(),
                            verdict=verdict,
+                           field=which,
                            why=str(f.get("why", "")).strip(),
                            fix=str(f.get("fix", "")).strip()))
     return out
@@ -200,6 +235,27 @@ def _shorter_or_equal(fix: str, original: str) -> bool:
     """Corrections must not lengthen the spoken line: captions, segment durations and the 60s ceiling
     are all derived from word count. Two words of slack absorbs honest phrasing differences."""
     return len(fix.split()) <= len(original.split()) + 2
+
+
+def _visual_ok(fix: str, original: str) -> tuple[bool, str]:
+    """Whether a corrected SHOT description may be applied. Nobody speaks it, so length matters far
+    less — but two things still do.
+
+    It must keep a shot scale, because segments alternate wide / medium / close on purpose and a fix
+    that drops the scale silently flattens the cut rhythm. And it must not balloon: this string is
+    prepended to an image prompt, where a long tail simply stops being obeyed."""
+    n, was = len(fix.split()), len(original.split())
+    # Two bounds, because bloat arrives in two shapes: a long fix, and a short phrase padded into a
+    # long one. "jagged rocks on Mars" swelling to twenty-five words of "extremely detailed" clears
+    # any absolute cap while still drowning the subject the shot was supposed to describe.
+    if n > 30:
+        return False, "longer than 30 words — an image prompt stops obeying the tail"
+    if n > max(8, was * 2):
+        return False, f"padded from {was} words to {n} — the subject gets buried"
+    low = fix.lower()
+    if any(w in original.lower() for w in SCALE_WORDS) and not any(w in low for w in SCALE_WORDS):
+        return False, "the fix dropped the shot scale"
+    return True, ""
 
 
 def apply(script: Script, findings: list[Finding]) -> int:
@@ -215,20 +271,32 @@ def apply(script: Script, findings: list[Finding]) -> int:
         if f.verdict != "wrong" or not f.fix or not f.claim:
             continue
         seg = by_index.get(f.segment)
-        if seg is None or f.claim not in seg.narration:
+        if seg is None:
+            continue
+        visual = f.field == "visual"
+        current = (seg.visual or "") if visual else seg.narration
+        if f.claim not in current:
             # The checker quoted something that isn't there verbatim — usually a paraphrase. Rewriting
             # on a fuzzy match risks mangling a good line, so leave it flagged and move on.
-            log.warning("Fact-check: segment %s quote not found verbatim, left for review: %r",
-                        f.segment, f.claim[:60])
+            log.warning("Fact-check: segment %s %s quote not found verbatim, left for review: %r",
+                        f.segment, f.field, f.claim[:60])
             continue
-        if not _shorter_or_equal(f.fix, f.claim):
-            log.warning("Fact-check: fix for segment %s is longer than the line — flagged, not applied",
-                        f.segment)
-            continue
-        seg.narration = seg.narration.replace(f.claim, f.fix)
+        if visual:
+            ok, why_not = _visual_ok(f.fix, f.claim)
+            if not ok:
+                log.warning("Fact-check: visual fix for segment %s refused (%s)", f.segment, why_not)
+                continue
+            seg.visual = current.replace(f.claim, f.fix)
+        else:
+            if not _shorter_or_equal(f.fix, f.claim):
+                log.warning("Fact-check: fix for segment %s is longer than the spoken line — "
+                            "flagged, not applied", f.segment)
+                continue
+            seg.narration = current.replace(f.claim, f.fix)
         f.applied = True
         applied += 1
-        log.info("Fact-check: segment %s corrected — %s", f.segment, f.why or "no reason given")
+        log.info("Fact-check: segment %s %s corrected — %s",
+                 f.segment, f.field, f.why or "no reason given")
     return applied
 
 
@@ -264,7 +332,8 @@ def run(script: Script, cfg, out_dir: Path | None = None) -> Report:
     log.warning("Fact-check: %d wrong, %d unsure out of %d segments.",
                 len(wrong), len(unsure), rep.segments)
     for f in rep.findings:
-        log.info("  [%s] seg %s: %s — %s", f.verdict, f.segment, f.claim[:70], f.why[:80])
+        log.info("  [%s/%s] seg %s: %s — %s",
+                 f.verdict, f.field, f.segment, f.claim[:70], f.why[:80])
 
     if mode == "fix":
         n = apply(script, rep.findings)
