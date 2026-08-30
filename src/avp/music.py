@@ -6,6 +6,8 @@ imported lazily, only when music generation is actually requested (music_source=
 """
 from __future__ import annotations
 
+import re
+
 from pathlib import Path
 
 from .log import get_logger
@@ -86,7 +88,12 @@ def classify_mood(text: str, lang: str = "it", default: str = "documentary") -> 
     scores: dict[str, int] = {}
     hits: dict[str, list[str]] = {}
     for mood, kws in _MOOD_KEYWORDS.items():
-        matched = [k for k in kws if k in blob]
+        # WORD BOUNDARIES, not substrings. A plain `k in blob` let short keywords fire inside longer
+        # words and quietly decide the whole soundtrack: a Jupiter script scored "emotional" because
+        # "solid" contains "soli", and a hard-science video got piano and strings. The same trap sits
+        # in "void" inside "avoid" and "race" inside "trace" or "embrace".
+        matched = [k for k in kws
+                   if re.search(rf"\b{re.escape(k)}\b", blob)]
         if matched:
             scores[mood] = len(matched)
             hits[mood] = matched[:5]

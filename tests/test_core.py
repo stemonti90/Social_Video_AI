@@ -2004,6 +2004,75 @@ class DustyVsAirlessSurface(unittest.TestCase):
                 self.assertNotIn(neg, text, f"{key} must not negate: {text!r}")
 
 
+class MoodKeywordBoundaries(unittest.TestCase):
+    """One short keyword firing inside a longer word decides an entire soundtrack. A Jupiter script
+    scored "emotional" — piano and strings over hard science — because "solid" contains "soli"."""
+
+    def test_a_keyword_inside_a_longer_word_does_not_count(self):
+        from avp.music import classify_mood
+        for text, trap in [("the crust stays solid for billions of years", "soli"),
+                           ("engineers avoid that orbit entirely", "void"),
+                           ("we can trace the signal back", "race"),
+                           ("the probe will embrace the atmosphere", "race")]:
+            r = classify_mood(text)
+            self.assertNotIn(trap, r["rationale"],
+                             f"{trap!r} matched inside a longer word: {text!r}")
+
+    def test_the_same_word_standing_alone_still_counts(self):
+        """The fix must not deafen the classifier — real signals still have to land."""
+        from avp.music import classify_mood
+        self.assertEqual(classify_mood("the void, silence and death, a dark end")["mood"], "dark")
+        self.assertEqual(classify_mood("a vast, epic structure, truly giant")["mood"], "cinematic")
+        # a lone real hit is still a hit — the boundary rule must not raise the bar
+        self.assertIn("void", classify_mood("adrift in the void")["rationale"])
+
+    def test_no_signal_falls_back_to_the_neutral_bed(self):
+        from avp.music import classify_mood
+        r = classify_mood("Ganymede's diameter exceeds Mercury's by a small margin.")
+        self.assertEqual(r["mood"], "documentary")
+
+
+class CtaEndcardTiming(unittest.TestCase):
+    """The spoken CTA runs ~7 seconds. Parking the app card there for all of it made the video feel
+    over while the voice was still going — viewers read it as the images having run out."""
+
+    def test_the_card_gets_a_short_fixed_tail_not_a_share(self):
+        """The point of a fixed tail: a CTA twice as long must not put the card up twice as long."""
+        from avp.stages import _cta_split, ENDCARD_SECONDS
+        for total in (6.0, 8.0, 12.0):
+            durs = _cta_split(total, 2)
+            self.assertAlmostEqual(sum(durs), total, places=3)
+            self.assertAlmostEqual(durs[-1], ENDCARD_SECONDS, places=3)
+        # and the bridge gets everything else, so it grows with the CTA instead of the card growing
+        self.assertGreater(_cta_split(12.0, 2)[0], _cta_split(6.0, 2)[0])
+
+    def test_a_very_short_cta_never_gives_the_card_more_than_half(self):
+        """A 3s CTA must not be all card: the bridge still has to be seen inside the story."""
+        from avp.stages import _cta_split
+        durs = _cta_split(3.0, 2)
+        self.assertAlmostEqual(sum(durs), 3.0, places=3)
+        self.assertLessEqual(durs[-1], 1.5 + 1e-6)
+
+    def test_a_lone_card_still_fills_the_segment(self):
+        """When no content still is available the card is all there is, and must not leave a gap."""
+        from avp.stages import _cta_split
+        self.assertEqual(_cta_split(6.0, 1), [6.0])
+
+    def test_the_cta_plays_the_last_content_picture_first(self):
+        from avp.stages import _segment_sources
+        from avp.models import Segment
+        with tempfile.TemporaryDirectory() as td:
+            root = Path(td)
+            (root / "footage").mkdir()
+            card = root / "footage" / "endcard.png"; card.write_bytes(b"x")
+            last = root / "footage" / "04_2.png"; last.write_bytes(b"x")
+            project = mock.Mock(footage_dir=root / "footage")
+            seg = Segment(index=5, narration="n", footage="endcard.png", kind="cta")
+            self.assertEqual(_segment_sources(project, seg, last), [last, card])
+            # and with nothing to fall back on, just the card
+            self.assertEqual(_segment_sources(project, seg, None), [card])
+
+
 class CutRhythm(unittest.TestCase):
     """The segment count IS the cut rhythm, and it has a floor and a ceiling that were both found the
     hard way: ~10s per segment reads as a documentary, ~5s reads as the video played at 1.5x."""

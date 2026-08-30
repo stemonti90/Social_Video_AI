@@ -223,6 +223,10 @@ VOICE_WARM = ("highpass=f=80,"
               "acompressor=threshold=-18dB:ratio=2.5:attack=8:release=140")
 
 
+# How fast the music bed comes up. Short on purpose: see the note in mix_audio.
+MUSIC_FADE_IN = 0.8
+
+
 def mix_audio(voice: Path, music: Path | None, music_gain_db: float, out: Path,
               loudness_lufs: float = -14.0) -> None:
     """Warm the narration, then mux it with optional music kept **clearly audible** under the
@@ -240,8 +244,13 @@ def mix_audio(voice: Path, music: Path | None, music_gain_db: float, out: Path,
             fc = (
                 f"[0:a]{VOICE_WARM}[vw];[vw]asplit=2[v0][v1];"          # warmed voice → mix + key
                 # normalize the (often low-energy) generated bed to a steady ~-21 LUFS so it sits
-                # clearly under the voice, +music_gain_db trim, 2 s fade-in
-                f"[1:a]loudnorm=I=-19.5:TP=-2:LRA=11,volume={music_gain_db}dB,afade=t=in:st=0:d=2[mraw];"
+                # clearly under the voice, +music_gain_db trim, then a SHORT fade-in.
+                # It was two seconds, which on a feed means the bed is still climbing while the hook
+                # is being spoken — the opening lands dry and viewers read it as the music starting
+                # late. Under a second is long enough to avoid a click and short enough that the
+                # first line already has a floor under it.
+                f"[1:a]loudnorm=I=-19.5:TP=-2:LRA=11,volume={music_gain_db}dB,"
+                f"afade=t=in:st=0:d={MUSIC_FADE_IN}[mraw];"
                 # GENTLE duck: ~3-4 dB dip under speech, music stays present (no hard pumping)
                 f"[mraw][v0]sidechaincompress=threshold=0.1:ratio=2.5:attack=20:release=400:detection=rms:makeup=1[mduck];"
                 f"{fadeout}"

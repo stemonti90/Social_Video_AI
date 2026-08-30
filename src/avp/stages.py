@@ -314,18 +314,40 @@ def stage_captions(project: VideoProject, cfg: Config) -> None:
 
 
 # --------------------------------------------------------------------------- assemble
-def _segment_sources(project: VideoProject, seg) -> list[Path]:
+ENDCARD_SECONDS = 2.6   # how long the app card holds the screen, alone, at the very end
+
+
+def _segment_sources(project: VideoProject, seg, last_content: Path | None = None) -> list[Path]:
     """All on-screen visuals for a segment, in play order: the primary (seg.footage) plus any ranked
     runners-up the generator kept (NN_2.png, NN_3.png, …). Splitting a ~10s segment across them halves
-    the shot length — one still per segment read as slow. CTA endcards stay single."""
+    the shot length — one still per segment read as slow.
+
+    The CTA is the exception, and the reason is worth stating. Its spoken bridge runs ~7 seconds, and
+    parking the app card on screen for all of it made the video feel finished while the voice was
+    still going — the card became a wall the viewer waited out. So the bridge plays over the last
+    content picture, still inside the story it refers to, and the card arrives only for the closing
+    beat. `_cta_split` gives it a fixed short slice rather than an equal share."""
     if not seg.footage:
         return []
     primary = project.footage_dir / seg.footage
-    if seg.kind == "cta" or primary.suffix.lower() not in (".png", ".jpg", ".jpeg"):
-        return [primary]                     # endcard and video clips are never split
+    if seg.kind == "cta":
+        return [last_content, primary] if last_content and last_content.exists() else [primary]
+    if primary.suffix.lower() not in (".png", ".jpg", ".jpeg"):
+        return [primary]                     # video clips are never split
     extras = sorted(p for p in project.footage_dir.glob(f"{seg.index:02d}_[0-9]*")
                     if p.suffix.lower() in (".png", ".jpg", ".jpeg"))
     return [primary] + extras
+
+
+def _cta_split(render_dur: float, n_sources: int) -> list[float]:
+    """How long each CTA visual holds. The card takes a fixed tail, never a proportional share: the
+    bridge sentence can run 4s or 9s depending on the topic, and an equal split would put the card up
+    for half a long CTA and flash it for a short one. Everything before it shares what is left."""
+    if n_sources < 2:
+        return [render_dur]
+    card = min(ENDCARD_SECONDS, render_dur * 0.5)      # never more than half, however short the CTA
+    before = (render_dur - card) / (n_sources - 1)
+    return [before] * (n_sources - 1) + [card]
 
 
 def _resolve_music(cfg: Config) -> Path | None:
@@ -421,6 +443,9 @@ def _assemble_engine(project: VideoProject, cfg: Config, script: Script, eng: st
     clips: list[Path] = []
     content_durs: list[float] = []
     segs_used: list[Segment] = []
+    # The CTA plays its spoken bridge over the last picture the viewer was already looking at, so the
+    # pitch stays inside the story instead of cutting to a card mid-sentence.
+    last_content: Path | None = None
     for seg in script.segments:
         seg_audio = adir / f"{seg.index:02d}.wav"
         if not seg_audio.exists():
@@ -428,7 +453,7 @@ def _assemble_engine(project: VideoProject, cfg: Config, script: Script, eng: st
             continue
         content = ffmpeg.ffprobe_duration(seg_audio) + gap     # on-screen time incl. trailing gap
         render_dur = content + trans                           # extra tail for the crossfade
-        srcs = [p for p in _segment_sources(project, seg) if p.exists()]
+        srcs = [p for p in _segment_sources(project, seg, last_content) if p and p.exists()]
         if not srcs:
             srcs = [ffmpeg.black_still(work / f"black_{seg.index:02d}.png",
                                        cfg.video.width, cfg.video.height)]
@@ -440,16 +465,25 @@ def _assemble_engine(project: VideoProject, cfg: Config, script: Script, eng: st
         else:
             # Multiple stills: split the segment across them with hard cuts (each its own Ken Burns
             # move). Faster visual pacing without touching audio or the segment-level crossfades.
-            part = render_dur / len(srcs)
+            # Content segments share the time evenly; the CTA gives its card a fixed short tail.
+            durs = (_cta_split(render_dur, len(srcs)) if seg.kind == "cta"
+                    else [render_dur / len(srcs)] * len(srcs))
             parts: list[Path] = []
-            for j, s2 in enumerate(srcs):
+            for j, (s2, dj) in enumerate(zip(srcs, durs)):
                 pc = work / f"clip_{seg.index:02d}_{j}.mp4"
-                ffmpeg.make_clip(s2, part, cfg.video.width, cfg.video.height, cfg.video.fps,
-                                 kb, pc, seek=cfg.video.video_seek)
+                # The app card is the one still that must never drift: it carries text a viewer has
+                # to read. Everything else keeps its Ken Burns move, including the photo the CTA's
+                # spoken bridge plays over.
+                is_card = seg.kind == "cta" and j == len(srcs) - 1
+                move = cfg.video.ken_burns and not is_card
+                ffmpeg.make_clip(s2, dj, cfg.video.width, cfg.video.height, cfg.video.fps,
+                                 move, pc, seek=cfg.video.video_seek)
                 parts.append(pc)
             ffmpeg.concat_videos(parts, clip)
-            log.info("[%s] segment %d: %d visuals (hard cuts every %.1fs)", eng, seg.index,
-                     len(srcs), part)
+            log.info("[%s] segment %d: %d visuals (%s)", eng, seg.index, len(srcs),
+                     ", ".join(f"{d:.1f}s" for d in durs))
+        if seg.kind != "cta" and srcs:
+            last_content = srcs[-1]
         clips.append(clip)
         content_durs.append(content)
         segs_used.append(seg)
