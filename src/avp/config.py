@@ -30,7 +30,7 @@ class ScriptConfig:
     # a 43s cut of the same script felt rushed because every idea got less room, not because the
     # voice was faster (it is 2.38 words/s in every build). Aim near the ceiling, leave headroom for
     # the ~10% the writer can overshoot by, and let the trim guard in llm.py catch the rest.
-    target_seconds: int = 56
+    target_seconds: int = 58
     language: str = "en"         # en | it — language of the spoken narration
     subtitle_language: str | None = None   # if set & != language → translated phrase subtitles (e.g. EN audio, IT subs)
     refine_passes: int = 2       # critique→refine rounds on the ONE script (quality via depth, never regresses)

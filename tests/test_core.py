@@ -2008,30 +2008,47 @@ class CutRhythm(unittest.TestCase):
     """The segment count IS the cut rhythm, and it has a floor and a ceiling that were both found the
     hard way: ~10s per segment reads as a documentary, ~5s reads as the video played at 1.5x."""
 
-    def _plan(self, target_seconds):
-        """What a given target actually produces: (segments, seconds per image)."""
-        from avp.llm import _words_for
+    def _plan(self, target_seconds, images_per_segment=2):
+        """What a given target actually produces: (segments, seconds per image, words). Mirrors the
+        real formula rather than restating a number, so the test moves when the rhythm moves."""
+        from avp.llm import _words_for, SECONDS_PER_IMAGE
         content = target_seconds - 8                     # the spoken CTA and its tail
-        nseg = max(5, round(content / 7))
-        return nseg, content / (nseg * 2), _words_for(content, "en")
+        nseg = max(3, round(content / (SECONDS_PER_IMAGE * images_per_segment)))
+        return nseg, content / (nseg * images_per_segment), _words_for(content, "en")
 
     def test_a_picture_gets_between_three_and_five_seconds(self):
-        """Below ~3s the eye never settles; above ~5s the feed scrolls past."""
-        for target in (45, 50, 56, 60):
+        """Below ~3s the eye never settles — viewers reported the video felt sped up. Above ~5s the
+        feed scrolls past. The target sits at 4.3s; the band is what must never be left."""
+        for target in (45, 50, 56, 58, 60):
             _, per_image, _ = self._plan(target)
             self.assertGreaterEqual(per_image, 3.0, f"{target}s cuts too fast")
             self.assertLessEqual(per_image, 5.0, f"{target}s cuts too slow")
+
+    def test_the_rhythm_survives_a_change_to_images_per_segment(self):
+        """The count is derived from seconds-per-IMAGE, so halving the images per segment must
+        double the segments rather than double how long each picture sits there."""
+        one, _, _ = self._plan(58, images_per_segment=1)
+        two, _, _ = self._plan(58, images_per_segment=2)
+        self.assertGreater(one, two)
+        for ipp in (1, 2, 3):
+            _, per_image, _ = self._plan(58, images_per_segment=ipp)
+            self.assertGreaterEqual(per_image, 3.0)
+            self.assertLessEqual(per_image, 5.0)
 
     def test_the_default_target_sits_just_under_the_ceiling(self):
         """Near 60s, never over: the writer can overshoot by ~10% and the trim guard takes the rest."""
         cfg = Config()
         self.assertGreaterEqual(cfg.script.target_seconds, 54)
-        self.assertLess(cfg.script.target_seconds, 60)
+        self.assertLess(cfg.script.target_seconds, 60)   # the writer can overshoot ~10%
 
-    def test_short_videos_still_get_enough_beats(self):
-        """The floor keeps a 30s cut from collapsing into three long static shots."""
-        nseg, _, _ = self._plan(30)
-        self.assertGreaterEqual(nseg, 5)
+    def test_short_videos_keep_both_a_story_and_the_rhythm(self):
+        """A floor protects the story — three beats minimum — but must not push the cut rate out of
+        band to do it. A floor of four sent a 30s video to 2.75s per image, the exact fault this
+        whole change was fixing."""
+        nseg, per_image, _ = self._plan(30)
+        self.assertGreaterEqual(nseg, 3)
+        self.assertGreaterEqual(per_image, 3.0)
+        self.assertLessEqual(per_image, 5.0)
 
     def test_the_word_budget_matches_the_measured_speaking_rate(self):
         """2.38 words/second across four real builds; the budget must not drift from that or videos

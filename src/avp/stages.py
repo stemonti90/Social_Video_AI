@@ -132,7 +132,10 @@ def stage_script(project: VideoProject, cfg: Config, topic: str | None) -> Scrip
     content_target = cfg.script.target_seconds - (8 if cfg.funnel.enabled else 0)
     script = llm.generate_script(cfg.llm, topic, max(30, content_target),
                                  language=cfg.script.language, refine_passes=cfg.script.refine_passes,
-                                 best_of=getattr(cfg.llm, "best_of", 1))
+                                 best_of=getattr(cfg.llm, "best_of", 1),
+                                 # the cut rhythm is seconds-per-IMAGE, so the writer needs to know
+                                 # how many images each segment will be given
+                                 images_per_segment=int(getattr(cfg.video, "images_per_segment", 2) or 2))
     # Check the facts BEFORE the CTA is appended and before a single frame is rendered: a correction
     # is free here and costs a full rebuild once the voice has been synthesised against the old words.
     try:
@@ -238,6 +241,12 @@ def stage_voice(project: VideoProject, cfg: Config) -> Script:
 # --------------------------------------------------------------------------- footage
 def stage_footage(project: VideoProject, cfg: Config, download: bool = True) -> Script:
     script = load_script(project)
+    # Image generation needs ~10GB of unified memory (measured: 9.84GB peak for z-image-turbo at
+    # 720x1280). The script stage leaves an Ollama model resident — gemma4 alone is ~8-16GB — and on
+    # a 24GB machine the two do not fit: mflux is killed with SIGSEGV and every segment silently
+    # falls back to archive footage. A whole build came back with zero generated images that way.
+    # `_free_memory` already existed for exactly this reason, but only ever ran before assemble.
+    _free_memory(cfg)
     footage_mod.resolve_footage(project, script, cfg, allow_download=download)
     project.script_json.write_text(_json(script.to_dict()))
     missing = [s.index for s in script.segments if not s.footage]

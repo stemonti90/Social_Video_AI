@@ -117,6 +117,12 @@ Return JSON exactly like:
 # so the video lands UNDER the target rather than over it.
 _WPS = {"en": 2.35, "it": 2.60}
 
+# How long one image holds the screen. This single number is the cut rhythm, and both ends of the
+# range were found by shipping the mistake: ~7s (four segments in a 50s video) reads as a television
+# documentary, ~2.4s reads as the video played at 1.5x — viewers reported not being able to read.
+# Neither was a speech problem; the voice measures 2.38 words/second in every build.
+SECONDS_PER_IMAGE = 4.3
+
 
 def _words_for(seconds: int, language: str = "en") -> int:
     return max(20, round(seconds * _WPS.get((language or "en").lower()[:2], 2.4)))
@@ -345,11 +351,10 @@ def _judge_best(client: "OllamaClient", drafts: list[dict], topic: str, language
 
 
 def generate_script(cfg: LLMConfig, topic: str, seconds: int = 60, language: str = "en",
-                    refine_passes: int = 1, best_of: int = 1) -> Script:
+                    refine_passes: int = 1, best_of: int = 1, images_per_segment: int = 2) -> Script:
     words = _words_for(seconds, language)
-    # ~10s of speech per 2-sentence segment, so segment count tracks the target length. A tight upper
-    # bound (nseg+1) keeps the model from padding to twice the length.
-    # One segment ≈ one shot, and this number is the whole cut rhythm.
+    # One segment ≈ one shot, and this number is the whole cut rhythm. A tight upper bound (nseg+1)
+    # keeps the model from padding to twice the length.
     #
     # Measured across four real builds. At ~10s per segment a 50s video was FOUR shots and each image
     # sat on screen for nearly seven seconds: documentary pacing, dead on a feed. Overcorrecting to
@@ -358,9 +363,12 @@ def generate_script(cfg: LLMConfig, topic: str, seconds: int = 60, language: str
     # no room. The speech itself was never fast: 2.38 words/second in every build, matching the
     # budget below. It was the cutting.
     #
-    # ~7s per segment lands at roughly 3.5s per image (two images per segment), which is twice the
-    # old cut rate and still lets a picture breathe.
-    nseg = max(5, round(seconds / 7))
+    # Expressed as the thing we actually care about — how long one PICTURE stays on screen — rather
+    # than a magic segment count, so it stays correct if images_per_segment ever changes.
+    # Floor of 3, not more: a story needs a beginning, a turn and a landing. A higher floor looks
+    # protective but fights the rhythm on short videos — at 4 a 30s cut is forced to 2.75s per image,
+    # back into the territory viewers read as sped up.
+    nseg = max(3, round(seconds / (SECONDS_PER_IMAGE * max(1, images_per_segment))))
     nseg2 = nseg + 1
     wseg = max(8, round(words / nseg))       # per-segment budget, so the total still lands on target
     user = USER_TMPL.format(topic=topic, seconds=seconds, words=words,

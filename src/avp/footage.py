@@ -558,6 +558,20 @@ def resolve_footage(project: VideoProject, script: Script, cfg, allow_download: 
         seg.credit = ""
         report.append(_report_entry(seg, None, 0.0, floor, "fallback", "no archive match → generated backdrop"))
         log.info("Segment %d ← generated cosmic backdrop (no archive match)", seg.index)
+    # A generation run that produced nothing is a failure that used to hide: each segment logged its
+    # own quiet fallback line, and the build finished looking healthy while every picture came from
+    # an archive instead of from us. Say it once, loudly, where it cannot be missed.
+    if str(getattr(cfg.video, "footage_source", "archive")).lower() == "generate" and report:
+        made = sum(1 for e in report if e.get("outcome") == "generated")
+        wanted = sum(1 for e in report if "endcard" not in str(e.get("asset", "")).lower())
+        if wanted and not made:
+            log.error("Image generation was requested but produced NOTHING — all %d segments fell "
+                      "back to archive footage. Usually memory pressure (mflux needs ~10GB); look "
+                      "for 'mflux returned -11' above.", wanted)
+        elif made < wanted:
+            log.warning("Image generation covered %d of %d segments; the rest came from archives.",
+                        made, wanted)
+
     if report:
         try:
             (project.root / "footage_report.json").write_text(
