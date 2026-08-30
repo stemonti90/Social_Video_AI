@@ -98,6 +98,11 @@ audience, not a paper. Do not flag "roughly", do not flag rounded figures, do no
 - When you flag something, supply a fix that is TRUE and NO LONGER than the original — count the \
 words. The line is spoken aloud and the video's timing is built from its length.
 - If the script is clean, return an empty list. Do not invent problems to look useful.
+- THINK BEFORE YOU ANSWER, NOT INSIDE THE ANSWER. The "why" field is a finished conclusion in one \
+sentence, never a scratchpad. If working through a claim leads you to decide it is acceptable after \
+all, emit NO finding for it — do not emit one and explain inside it that you changed your mind.
+- Every "wrong" verdict must carry a real replacement in "fix". If you cannot write the corrected \
+line, you do not know the claim is false: mark it "unsure" instead.
 
 Return STRICT JSON only, no commentary:
 {"findings": [{"segment": 1, "field": "narration|visual", "claim": "exact quoted text", \
@@ -215,6 +220,14 @@ def _judge(script: Script, cfg) -> list[Finding]:
         verdict = str(f.get("verdict", "")).strip().lower()
         if verdict not in ("wrong", "unsure"):
             continue
+        # A "wrong" with no replacement is a hunch, not a finding. Observed live: the checker talked
+        # itself out of a verdict inside the "why" field — "the claim is actually true... no flag" —
+        # yet still emitted verdict "wrong" with an empty fix. Nothing was rewritten only because the
+        # fix was blank; had it invented one, a correct line would have been replaced. Downgrading
+        # here makes that safety deliberate: unsure is reported, never applied.
+        fix_text = str(f.get("fix", "")).strip()
+        if verdict == "wrong" and not fix_text:
+            verdict = "unsure"
         try:
             idx = int(f.get("segment", 0))
         except (TypeError, ValueError):
@@ -227,7 +240,7 @@ def _judge(script: Script, cfg) -> list[Finding]:
                            verdict=verdict,
                            field=which,
                            why=str(f.get("why", "")).strip(),
-                           fix=str(f.get("fix", "")).strip()))
+                           fix=fix_text))
     return out
 
 

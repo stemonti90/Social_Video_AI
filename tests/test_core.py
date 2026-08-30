@@ -2004,6 +2004,45 @@ class DustyVsAirlessSurface(unittest.TestCase):
                 self.assertNotIn(neg, text, f"{key} must not negate: {text!r}")
 
 
+class FactCheckSelfContradiction(unittest.TestCase):
+    """Observed live on a real build: the checker reasoned inside its own "why" field, concluded the
+    claim was fine — "the claim is actually true... no flag" — and still emitted verdict "wrong".
+    Nothing broke only because the fix came back empty. That safety is now deliberate."""
+
+    def _script(self):
+        from avp.models import Script, Segment
+        return Script(title="t", topic="Jupiter", segments=[
+            Segment(index=1, narration="Ganymede is the only moon with an intrinsic magnetic field."),
+        ])
+
+    def _run(self, sc, findings):
+        from avp import factcheck
+        cfg = Config(); cfg.script.factcheck = "fix"; cfg.script.factcheck_key = "k"
+        payload = {"choices": [{"message": {"content": json.dumps({"findings": findings})}}]}
+        with mock.patch("avp.factcheck.requests.post",
+                        return_value=mock.Mock(status_code=200, json=lambda: payload)):
+            return factcheck.run(sc, cfg)
+
+    def test_wrong_without_a_fix_is_downgraded_and_never_applied(self):
+        sc = self._script()
+        before = sc.segments[0].narration
+        rep = self._run(sc, [{"segment": 1, "field": "narration",
+                              "claim": "Ganymede is the only moon with an intrinsic magnetic field.",
+                              "verdict": "wrong",
+                              "why": "...the claim is actually true, so no flag. No flag.",
+                              "fix": ""}])
+        self.assertEqual(sc.segments[0].narration, before)   # untouched
+        self.assertEqual(rep.findings[0].verdict, "unsure")  # downgraded, still reported
+        self.assertFalse(rep.findings[0].applied)
+
+    def test_a_whitespace_only_fix_counts_as_no_fix(self):
+        sc = self._script()
+        rep = self._run(sc, [{"segment": 1, "field": "narration",
+                              "claim": "Ganymede is the only moon with an intrinsic magnetic field.",
+                              "verdict": "wrong", "why": "x", "fix": "   "}])
+        self.assertEqual(rep.findings[0].verdict, "unsure")
+
+
 class FactCheckVisuals(unittest.TestCase):
     """Shot descriptions drive image generation, so a wrong one is worse than a wrong spoken line —
     nobody hears it, but everyone sees the picture it produced. They are corrected under different
