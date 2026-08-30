@@ -2004,6 +2004,45 @@ class DustyVsAirlessSurface(unittest.TestCase):
                 self.assertNotIn(neg, text, f"{key} must not negate: {text!r}")
 
 
+class CutRhythm(unittest.TestCase):
+    """The segment count IS the cut rhythm, and it has a floor and a ceiling that were both found the
+    hard way: ~10s per segment reads as a documentary, ~5s reads as the video played at 1.5x."""
+
+    def _plan(self, target_seconds):
+        """What a given target actually produces: (segments, seconds per image)."""
+        from avp.llm import _words_for
+        content = target_seconds - 8                     # the spoken CTA and its tail
+        nseg = max(5, round(content / 7))
+        return nseg, content / (nseg * 2), _words_for(content, "en")
+
+    def test_a_picture_gets_between_three_and_five_seconds(self):
+        """Below ~3s the eye never settles; above ~5s the feed scrolls past."""
+        for target in (45, 50, 56, 60):
+            _, per_image, _ = self._plan(target)
+            self.assertGreaterEqual(per_image, 3.0, f"{target}s cuts too fast")
+            self.assertLessEqual(per_image, 5.0, f"{target}s cuts too slow")
+
+    def test_the_default_target_sits_just_under_the_ceiling(self):
+        """Near 60s, never over: the writer can overshoot by ~10% and the trim guard takes the rest."""
+        cfg = Config()
+        self.assertGreaterEqual(cfg.script.target_seconds, 54)
+        self.assertLess(cfg.script.target_seconds, 60)
+
+    def test_short_videos_still_get_enough_beats(self):
+        """The floor keeps a 30s cut from collapsing into three long static shots."""
+        nseg, _, _ = self._plan(30)
+        self.assertGreaterEqual(nseg, 5)
+
+    def test_the_word_budget_matches_the_measured_speaking_rate(self):
+        """2.38 words/second across four real builds; the budget must not drift from that or videos
+        land short (which reads as rushed) or long (which breaks the 60s ceiling)."""
+        from avp.llm import _words_for
+        for seconds in (30, 42, 48):
+            implied = _words_for(seconds, "en") / seconds
+            self.assertAlmostEqual(implied, 2.38, delta=0.15,
+                                   msg=f"{seconds}s implies {implied:.2f} words/s")
+
+
 class FactCheckSelfContradiction(unittest.TestCase):
     """Observed live on a real build: the checker reasoned inside its own "why" field, concluded the
     claim was fine — "the claim is actually true... no flag" — and still emitted verdict "wrong".

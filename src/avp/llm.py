@@ -349,11 +349,18 @@ def generate_script(cfg: LLMConfig, topic: str, seconds: int = 60, language: str
     words = _words_for(seconds, language)
     # ~10s of speech per 2-sentence segment, so segment count tracks the target length. A tight upper
     # bound (nseg+1) keeps the model from padding to twice the length.
-    # One segment ≈ one shot. At ~10s per segment (the old rule) a 50s video was four shots, and a
-    # single image sat on screen for six seconds — the pacing of a documentary, not of a feed where
-    # the eye expects a new picture every couple of seconds. ~5s per segment doubles the cut rate
-    # without changing the video's length or the word budget: the beats simply get shorter.
-    nseg = max(6, round(seconds / 5))
+    # One segment ≈ one shot, and this number is the whole cut rhythm.
+    #
+    # Measured across four real builds. At ~10s per segment a 50s video was FOUR shots and each image
+    # sat on screen for nearly seven seconds: documentary pacing, dead on a feed. Overcorrecting to
+    # ~5s produced nine shots and 2.4s per image, which a viewer reads as the video being played at
+    # 1.5x — the eye never settles, and the writing is squeezed into one-line beats that give an idea
+    # no room. The speech itself was never fast: 2.38 words/second in every build, matching the
+    # budget below. It was the cutting.
+    #
+    # ~7s per segment lands at roughly 3.5s per image (two images per segment), which is twice the
+    # old cut rate and still lets a picture breathe.
+    nseg = max(5, round(seconds / 7))
     nseg2 = nseg + 1
     wseg = max(8, round(words / nseg))       # per-segment budget, so the total still lands on target
     user = USER_TMPL.format(topic=topic, seconds=seconds, words=words,
