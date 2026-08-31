@@ -463,12 +463,47 @@ def _try_wikimedia(project: VideoProject, seg, queries, used_ids) -> bool:
     return True
 
 
+_OURS = frozenset({"generated", "nasa", "wikimedia", "fallback"})
+
+
+def _stale_from_a_previous_script(project, seg) -> bool:
+    """True when the picture already sitting at footage/NN.* was made by US, for DIFFERENT words.
+
+    The manual-override glob is `NN.*` — exactly the name the generator writes — so an image left
+    over from an earlier build is indistinguishable from one the operator dropped in on purpose.
+    After `avp run --force` rewrote the script, every segment logged "← manual 01.png" and generation
+    was skipped entirely: a brand-new 8-segment script was rendered over the previous script's
+    7 pictures, narration about the Perseverance rover playing over an empty plain.
+
+    The previous run's footage_report.json settles it — it records, per segment, both the narration
+    the picture was chosen for and how it was obtained. Ours + different narration = stale. Anything
+    we cannot prove is ours stays a manual override, so a file the operator placed is never
+    silently discarded."""
+    try:
+        rows = json.loads((project.root / "footage_report.json").read_text())
+    except Exception:  # noqa: BLE001 — no report, or unreadable: assume the operator put it there
+        return False
+    for r in rows:
+        if r.get("index") != seg.index:
+            continue
+        if r.get("outcome") not in _OURS:
+            return False                       # ours only; "manual" and unknowns are the operator's
+        return (r.get("segment") or "") != (seg.narration or "")[:120]
+    return False
+
+
 def resolve_footage(project: VideoProject, script: Script, cfg, allow_download: bool = True) -> Script:
     fdir = project.footage_dir
     used_ids: set[str] = set()   # dedup the same asset across segments
     report: list[dict] = []      # per-segment relevance audit (text, query, asset, score, outcome)
     for seg in script.segments:
         manual = sorted(fdir.glob(f"{seg.index:02d}.*")) or sorted(fdir.glob(f"{seg.index}.*"))
+        if manual and _stale_from_a_previous_script(project, seg):
+            log.info("Segment %d: the picture on disk was made for the previous script — regenerating",
+                     seg.index)
+            for old_file in manual + sorted(fdir.glob(f"{seg.index:02d}_[0-9]*")):
+                old_file.unlink(missing_ok=True)
+            manual = []
         if manual:
             seg.footage = manual[0].name
             used_ids.add(manual[0].stem)
@@ -499,14 +534,22 @@ def resolve_footage(project: VideoProject, script: Script, cfg, allow_download: 
         # imagegen.ARCHIVE_FIRST for the evidence — a generated image is not "a bit worse", it is the
         # wrong object. There the real archives go first and generation becomes the fallback, which
         # is also the better picture: NASA has actually photographed these things.
-        gen_on = str(getattr(cfg.video, "footage_source", "archive")).lower() == "generate"
+        #
+        # `generate_only` overrides all of that: the archives are never consulted, for any subject.
+        # It is a deliberate trade the operator makes — every frame is ours, and deep-sky segments
+        # get this model's idea of a nebula (a spiral galaxy) rather than NASA's photograph of one.
+        src = str(getattr(cfg.video, "footage_source", "archive")).lower()
+        gen_on = src in ("generate", "generate_only")
+        gen_only = src == "generate_only"
         archive_first = False
-        if gen_on:
+        if gen_on and not gen_only:
             try:
                 from . import imagegen
                 archive_first = imagegen.prefers_archive(seg, script)
             except Exception:  # noqa: BLE001 — a broken import must not change the routing
                 archive_first = False
+
+        fallback_name = "a procedural backdrop" if gen_only else "archive footage"
 
         def _try_generate() -> bool:
             """Generate this segment's visual. Returns True if it landed. Never raises."""
@@ -528,13 +571,28 @@ def resolve_footage(project: VideoProject, script: Script, cfg, allow_download: 
                                                 f"mflux, {gen['candidates']} candidates, {gen['selection']} pick"))
                     used_ids.add(f"gen:{seg.index}")
                     return True
-                log.warning("Segment %d: image generation unavailable — using archive footage", seg.index)
+                log.warning("Segment %d: image generation unavailable — falling back to %s",
+                            seg.index, fallback_name)
             except Exception as e:  # noqa: BLE001 — generation must never sink the stage
-                log.warning("Segment %d: image generation failed (%s) — using archive footage",
-                            seg.index, e)
+                log.warning("Segment %d: image generation failed (%s) — falling back to %s",
+                            seg.index, e, fallback_name)
             return False
 
         if gen_on and not archive_first and _try_generate():
+            continue
+        if gen_only:
+            # No archive safety net here, so a failed generation gets one more attempt: the common
+            # cause is momentary memory pressure (mflux needs ~10GB), which a second run often clears.
+            if _try_generate():
+                continue
+            log.error("Segment %d: generation failed twice and footage_source is generate_only — "
+                      "falling back to a procedural backdrop, NOT archive footage.", seg.index)
+            from . import captions as captions_mod
+            dest = fdir / f"{seg.index:02d}.png"
+            captions_mod.render_cosmic_backdrop(dest, cfg.video, seg.index)
+            seg.footage, seg.credit = dest.name, ""
+            report.append(_report_entry(seg, None, 0.0, floor, "fallback",
+                                        "generate_only: generation failed → procedural backdrop"))
             continue
         if archive_first:
             log.info("Segment %d: %s — asking the archives before generating",
@@ -561,16 +619,18 @@ def resolve_footage(project: VideoProject, script: Script, cfg, allow_download: 
     # A generation run that produced nothing is a failure that used to hide: each segment logged its
     # own quiet fallback line, and the build finished looking healthy while every picture came from
     # an archive instead of from us. Say it once, loudly, where it cannot be missed.
-    if str(getattr(cfg.video, "footage_source", "archive")).lower() == "generate" and report:
+    if str(getattr(cfg.video, "footage_source", "archive")).lower() in ("generate", "generate_only") and report:
         made = sum(1 for e in report if e.get("outcome") == "generated")
         wanted = sum(1 for e in report if "endcard" not in str(e.get("asset", "")).lower())
+        only = str(getattr(cfg.video, "footage_source", "")).lower() == "generate_only"
+        rest = "procedural backdrops" if only else "archive footage"
         if wanted and not made:
             log.error("Image generation was requested but produced NOTHING — all %d segments fell "
-                      "back to archive footage. Usually memory pressure (mflux needs ~10GB); look "
-                      "for 'mflux returned -11' above.", wanted)
+                      "back to %s. Usually memory pressure (mflux needs ~10GB); look for "
+                      "'mflux returned -11' above.", wanted, rest)
         elif made < wanted:
-            log.warning("Image generation covered %d of %d segments; the rest came from archives.",
-                        made, wanted)
+            log.warning("Image generation covered %d of %d segments; the rest came from %s.",
+                        made, wanted, rest)
 
     if report:
         try:

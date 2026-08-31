@@ -2028,6 +2028,132 @@ class CardMeetsTheVoice(unittest.TestCase):
         self.assertGreaterEqual(durs[0], stages.MIN_BRIDGE_SECONDS - 1e-9)
 
 
+class StaleImagesAreNotManualOverrides(unittest.TestCase):
+    """`avp run --force` rewrote the script and every segment logged "← manual 01.png": the override
+    glob is `NN.*`, exactly what the generator writes, so the previous build's pictures were mistaken
+    for files the operator had placed and generation was skipped. An 8-segment script rendered over
+    the previous script's 7 pictures — narration about the Perseverance rover over an empty plain."""
+
+    def _project(self, tmp, rows):
+        root = Path(tmp)
+        if rows is not None:
+            (root / "footage_report.json").write_text(json.dumps(rows))
+        return mock.Mock(root=root)
+
+    def _seg(self, narration):
+        return Segment(index=1, narration=narration, visual="v", keywords=[])
+
+    def test_our_own_picture_for_different_words_is_stale(self):
+        from avp.footage import _stale_from_a_previous_script
+        with tempfile.TemporaryDirectory() as tmp:
+            p = self._project(tmp, [{"index": 1, "segment": "The old narration.",
+                                     "outcome": "generated"}])
+            self.assertTrue(_stale_from_a_previous_script(p, self._seg("A completely new line.")))
+
+    def test_our_own_picture_for_the_same_words_is_a_legitimate_resume(self):
+        """`avp build` must stay resumable — an interrupted run should not rebuild what it had."""
+        from avp.footage import _stale_from_a_previous_script
+        with tempfile.TemporaryDirectory() as tmp:
+            p = self._project(tmp, [{"index": 1, "segment": "Same words.", "outcome": "generated"}])
+            self.assertFalse(_stale_from_a_previous_script(p, self._seg("Same words.")))
+
+    def test_a_file_we_cannot_prove_is_ours_stays_the_operators(self):
+        """Deleting someone's deliberately placed picture is the one unrecoverable mistake here."""
+        from avp.footage import _stale_from_a_previous_script
+        for rows in (None,                                            # no report at all
+                     [],                                              # report, no entry for it
+                     [{"index": 1, "segment": "x", "outcome": "manual"}],
+                     [{"index": 2, "segment": "x", "outcome": "generated"}]):   # another segment
+            with tempfile.TemporaryDirectory() as tmp:
+                p = self._project(tmp, rows)
+                self.assertFalse(_stale_from_a_previous_script(p, self._seg("new words")), rows)
+
+    def test_an_unreadable_report_is_not_a_licence_to_delete(self):
+        from avp.footage import _stale_from_a_previous_script
+        with tempfile.TemporaryDirectory() as tmp:
+            (Path(tmp) / "footage_report.json").write_text("{not json")
+            self.assertFalse(_stale_from_a_previous_script(mock.Mock(root=Path(tmp)),
+                                                           self._seg("new words")))
+
+    def test_the_narration_is_compared_the_way_the_report_stores_it(self):
+        """The report truncates to 120 chars; comparing against the full line would call every long
+        segment stale and regenerate the whole video on every resume."""
+        from avp.footage import _stale_from_a_previous_script
+        long = "word " * 60
+        with tempfile.TemporaryDirectory() as tmp:
+            p = self._project(tmp, [{"index": 1, "segment": long[:120], "outcome": "generated"}])
+            self.assertFalse(_stale_from_a_previous_script(p, self._seg(long)))
+
+
+class GenerateOnlyNeverTouchesTheArchives(unittest.TestCase):
+    """`footage_source: generate_only` is a promise: every frame on screen is one we made. A build
+    that quietly borrowed a NASA still for one segment broke that promise without saying so."""
+
+    def _run(self, source, generate_returns, subject="the solar arrays tracking the sun"):
+        """Run the footage stage with the archives wired to explode if they are ever consulted."""
+        from avp import footage as fmod
+        calls = {"nasa": 0, "wikimedia": 0, "generate": 0}
+
+        def _gen(seg, script, cfg, dest, **kw):
+            calls["generate"] += 1
+            if not generate_returns:
+                return None
+            dest.write_bytes(b"png")
+            return {"candidates": 1, "selection": "clip", "chosen": 0, "scores": [0.4]}
+
+        def _nasa(*a, **kw):
+            calls["nasa"] += 1
+            return False
+
+        def _wiki(*a, **kw):
+            calls["wikimedia"] += 1
+            return False
+
+        with tempfile.TemporaryDirectory() as tmp:
+            cfg = Config.load(None)
+            cfg.paths.projects_dir = tmp
+            cfg.video.footage_source = source
+            from avp.manifest import VideoProject
+            project = VideoProject("t", cfg)
+            project.footage_dir.mkdir(parents=True, exist_ok=True)
+            script = Script(title="t", topic="ISS", segments=[
+                Segment(index=1, narration="n", visual=subject, keywords=["solar", "sun"])])
+            with mock.patch("avp.imagegen.generate_for_segment", side_effect=_gen), \
+                 mock.patch("avp.imagegen.available", return_value=True), \
+                 mock.patch.object(fmod, "_try_nasa", _nasa), \
+                 mock.patch.object(fmod, "_try_wikimedia", _wiki):
+                fmod.resolve_footage(project, script, cfg, allow_download=True)
+        return calls, script
+
+    def test_a_solar_subject_no_longer_gets_routed_to_the_archives(self):
+        """This is the exact segment that failed: "solar arrays tracking the sun" hit the `star`
+        bucket, so archive-first routing handed a NASA video to a build meant to be all ours."""
+        from avp import imagegen
+        seg = Segment(index=1, narration="n", visual="the solar arrays tracking the sun",
+                      keywords=["solar", "sun"])
+        # under `generate` it genuinely does prefer the archives — that routing is still correct there
+        self.assertTrue(imagegen.prefers_archive(seg, Script(title="t", topic="ISS", segments=[])))
+        calls, script = self._run("generate_only", True)
+        self.assertEqual(calls["nasa"], 0)
+        self.assertEqual(calls["wikimedia"], 0)
+        self.assertEqual(calls["generate"], 1)
+        self.assertEqual(script.segments[0].credit, "")     # our own pixels, nothing to attribute
+
+    def test_a_failed_generation_retries_then_falls_back_to_our_own_backdrop(self):
+        """No archive safety net, so: one retry (memory pressure usually clears), then a procedural
+        starfield. Still ours — never a borrowed photograph."""
+        calls, script = self._run("generate_only", False)
+        self.assertEqual(calls["generate"], 2)
+        self.assertEqual(calls["nasa"], 0)
+        self.assertEqual(calls["wikimedia"], 0)
+        self.assertTrue(script.segments[0].footage)
+
+    def test_plain_generate_still_reaches_the_archives(self):
+        """The new value must not change what `generate` does — nebulae still want NASA's photo."""
+        calls, _ = self._run("generate", False)
+        self.assertGreaterEqual(calls["nasa"], 1)
+
+
 class ArchiveFirstRouting(unittest.TestCase):
     """Nebulae and the Sun must reach the archives BEFORE the generator, because this image model
     renders them as the wrong object entirely (imagegen.ARCHIVE_FIRST documents the measurements)."""

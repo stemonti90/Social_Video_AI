@@ -53,7 +53,9 @@ video:
   # ALWAYS pre-quantize: quantizing on the fly peaks ~28GB / ~12min per image on a 24GB Mac,
   # versus ~9.8GB / ~74s from the saved model. With `generate` the visuals are synthetic —
   # set publish.disclose_ai true (TikTok video_made_with_ai).
-  footage_source: archive     # archive | generate
+  # archive | generate (archives as fallback) | generate_only (never touch the archives —
+  # every frame is ours, at the cost of nebulae that render as spiral galaxies)
+  footage_source: archive
   image_venv: vendor/mflux-venv
   image_model: vendor/zimage-q4    # pre-quantized model dir
   image_candidates: 2         # per segment; CLIP keeps the best

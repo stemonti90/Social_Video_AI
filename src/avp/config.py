@@ -115,7 +115,12 @@ class VideoConfig:
     # CLIP cosine similarity lives on its OWN scale (ViT-B/32: ~0.30+ good, ~0.25 usable, <0.22 poor)
     # — do NOT rescale it into the text-relevance scale, or a mediocre match reads as a great one.
     footage_clip_floor: float = 0.25        # below this the winner is still wrong → next source
-    footage_source: str = "archive"         # archive | generate
+    # archive       — NASA/Wikimedia only
+    # generate      — generate first, archives as fallback (and FIRST for deep-sky/solar
+    #                 subjects, where this model paints the wrong object; see imagegen)
+    # generate_only — every frame is ours; the archives are never consulted, at the cost of
+    #                 nebulae that render as spiral galaxies
+    footage_source: str = "archive"         # archive | generate | generate_only
     image_venv: str = "vendor/mflux-venv"   # venv holding mflux-generate-z-image-turbo
     image_model: str = "vendor/zimage-q4"   # PRE-QUANTIZED model dir (mflux-save -q 4); on-the-fly
     #                                         quantizing peaks ~28GB and takes ~12min/image on 24GB
