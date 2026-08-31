@@ -401,8 +401,11 @@ def apply(script: Script, findings: list[Finding]) -> int:
             seg.narration = current.replace(f.claim, f.fix)
         f.applied = True
         applied += 1
-        log.info("Fact-check: segment %s %s corrected — %s",
-                 f.segment, f.field, f.why or "no reason given")
+        # Print the REPLACEMENT, then the reason, each labelled. Logging only `why` under the word
+        # "corrected" reads as though the reason were the new line — a rationale about the Great Wall
+        # of China looked like it had been written into a script about Olympus Mons.
+        log.info("Fact-check: segment %s %s corrected\n    was: %s\n    now: %s\n    why: %s",
+                 f.segment, f.field, f.claim, f.fix, f.why or "no reason given")
     return applied
 
 
