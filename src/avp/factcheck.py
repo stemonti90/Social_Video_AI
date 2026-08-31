@@ -68,7 +68,11 @@ they occur:
 how it worked. (A solar-powered rover described as drawing power from the soil.)
 2. WRONG TENSE — a mission, probe or telescope that has ended, been destroyed or fallen silent, \
 written about in the present tense.
-3. FALSE SUPERLATIVES — "the only", "the first", "the largest" where a sibling or predecessor exists.
+3. FALSE SUPERLATIVES — "the only", "the first", "the largest" where a sibling or predecessor exists. \
+Be especially hard on spaceflight superlatives, where the sibling is usually another nation's programme \
+and is easy to forget: more than one crewed station has been in orbit at a time, more than one probe \
+has left the heliosphere, more than one agency has landed on Mars. "The only X we have" is still a \
+false superlative if someone else has one — a viewer will not read "we" as "our side".
 4. FABRICATED FIGURES — a number that sounds specific and has no source.
 5. PHYSICS THAT DOES NOT HOLD — wrong units, wrong orders of magnitude, wrong scale of distance.
 
@@ -94,7 +98,11 @@ Rules for your verdicts:
 with time or that you cannot settle from memory — a current distance, an operational status, a count \
 of how many objects have done something. Use "unsure" honestly; it triggers a web check, not a rewrite.
 - A simplification that is broadly true is NOT wrong. This is a 40-second video for a general \
-audience, not a paper. Do not flag "roughly", do not flag rounded figures, do not flag vivid language.
+audience, not a paper. Do not flag "roughly", do not flag vivid language, and above all DO NOT FLAG \
+ROUNDED NUMBERS. A figure rounded for speech is correct, not an error: 28,000 km/h for 27,580, \
+450,000 kg for 419,725, "over 23 years" for 25. Replacing a spoken round number with an exact one \
+makes the narration worse, not better — it is harder to say, harder to hear, and no more true. Only \
+flag a figure when it is wrong by an order of magnitude, in the wrong unit, or invented outright.
 - When you flag something, supply a fix that is TRUE and NO LONGER than the original — count the \
 words. The line is spoken aloud and the video's timing is built from its length.
 - If the script is clean, return an empty list. Do not invent problems to look useful.
