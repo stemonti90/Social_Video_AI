@@ -252,6 +252,91 @@ def _judge(script: Script, cfg) -> list[Finding]:
     return out
 
 
+FOCUS_SYSTEM = """You check ONE claim from an astronomy video script. It was picked because it \
+contains a superlative, an operational status, or a figure — statements whose truth depends on when \
+you ask, and which a viewer will challenge in the comments.
+
+Name any counterexample you can think of BEFORE deciding: another country's programme, an earlier \
+mission, a second spacecraft that did the same thing. A number rounded for speech is NOT an error.
+
+Return STRICT JSON:
+{"verdict": "ok|wrong", "why": "one sentence", "fix": "corrected line, no longer than the original"}"""
+
+# How many single-claim calls one script may spend. Each is a few hundred tokens, so the cost is
+# negligible, but the latency is serial and a runaway script should not add a minute to every build.
+MAX_FOCUS_CALLS = 6
+
+
+def _sentences(text: str) -> list[str]:
+    """Split narration into claim-sized pieces. Crude on purpose: a claim is judged and quoted whole,
+    so a split that keeps sentences intact matters far more than one that handles every edge case."""
+    return [p.strip() for p in re.split(r"(?<=[.!?])\s+", (text or "").strip()) if p.strip()]
+
+
+def _focus_check(claim: str, key: str, model: str) -> Finding | None:
+    """Judge ONE claim in its own call. Returns a Finding only when it comes back wrong.
+
+    A claim alone gets more scrutiny than one of six, and that is worth the extra calls — but do not
+    oversell it. Measured on "the only laboratory we have to test the human body's endurance", which
+    is false because Tiangong has been permanently crewed for years and is in 2026 running a
+    year-long study of exactly that: the batch pass missed it three times out of three, and the
+    focused pass caught it once out of four. The verdict flips between runs at temperature 0, and on
+    the misses the model states positively that the ISS "remains the only" such laboratory. That is
+    not inattention, it is what the model believes, and no wording fixes a belief.
+
+    The honest conclusion: an LLM checker is a filter, not a guarantee, and this particular class —
+    a superlative whose counterexample sits outside the model's salient knowledge — needs evidence
+    rather than recall. Wiring a search API is the fix; this pass narrows the gap, it does not close
+    it."""
+    r = requests.post(
+        DEEPSEEK_URL,
+        headers={"Authorization": f"Bearer {key}", "Content-Type": "application/json"},
+        json={"model": model,
+              "messages": [{"role": "system", "content": FOCUS_SYSTEM},
+                           {"role": "user", "content": f"Claim: {claim}"}],
+              "temperature": 0.0,
+              "response_format": {"type": "json_object"}},
+        timeout=TIMEOUT)
+    if r.status_code >= 400:
+        raise RuntimeError(f"{r.status_code}: {(r.text or '')[:120]}")
+    d = _extract_json(r.json()["choices"][0]["message"]["content"])
+    if str(d.get("verdict", "")).strip().lower() != "wrong":
+        return None
+    fix = str(d.get("fix", "")).strip()
+    if not fix:
+        return None                       # a verdict with no correction is a hunch (see _judge)
+    return Finding(segment=0, claim=claim, verdict="wrong", field="narration",
+                   why=str(d.get("why", "")).strip(), fix=fix, web="focused re-check")
+
+
+def _focus_pass(script: Script, already: list[Finding], key: str, model: str) -> list[Finding]:
+    """Re-examine every volatile claim the batch pass did not already flag, one call each."""
+    seen = {f.claim for f in already}
+    out: list[Finding] = []
+    budget = MAX_FOCUS_CALLS
+    for seg in script.segments:
+        if getattr(seg, "kind", "content") == "cta":
+            continue
+        for sentence in _sentences(seg.narration):
+            if budget <= 0:
+                break
+            if sentence in seen or not volatile(sentence):
+                continue
+            budget -= 1
+            try:
+                found = _focus_check(sentence, key, model)
+            except Exception as e:  # noqa: BLE001 — one bad call must not sink the pass
+                log.warning("Focused re-check failed for segment %d (%s)", seg.index, e)
+                continue
+            if found:
+                found.segment = seg.index
+                out.append(found)
+    if budget <= 0:
+        log.info("Focused re-check hit its %d-call budget; later claims were not re-examined.",
+                 MAX_FOCUS_CALLS)
+    return out
+
+
 def _shorter_or_equal(fix: str, original: str) -> bool:
     """Corrections must not lengthen the spoken line: captions, segment durations and the 60s ceiling
     are all derived from word count. Two words of slack absorbs honest phrasing differences."""
@@ -343,6 +428,21 @@ def run(script: Script, cfg, out_dir: Path | None = None) -> Report:
         rep.reason = f"checker unavailable: {e}"
         log.warning("Fact-check skipped — %s", e)
         return _write(rep, out_dir)
+
+    # Second pass, one claim at a time. The batch call reads a whole script in one go and its
+    # attention thins out across it: it walked past "the only laboratory we have" on three separate
+    # runs while another crewed station has been in orbit for years. The same sentence handed over
+    # alone was caught at once. So every claim whose truth depends on WHEN you ask — a superlative,
+    # an operational status, a figure — gets its own look if the batch pass said nothing about it.
+    try:
+        extra = _focus_pass(script, rep.findings, _api_key(cfg),
+                            str(getattr(cfg.script, "factcheck_model", "deepseek-chat")))
+        if extra:
+            log.warning("Focused re-check found %d claim%s the batch pass missed.",
+                        len(extra), "" if len(extra) == 1 else "s")
+        rep.findings.extend(extra)
+    except Exception as e:  # noqa: BLE001 — same rule: a safety net never blocks a build
+        log.warning("Focused re-check skipped (%s)", e)
 
     if not rep.findings:
         log.info("Fact-check: %d segments, nothing flagged.", rep.segments)
