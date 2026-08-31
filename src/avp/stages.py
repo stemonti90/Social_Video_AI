@@ -9,6 +9,7 @@ assemble-> ffmpeg render to a 9:16 mp4
 from __future__ import annotations
 
 import json
+import re
 import shutil
 from pathlib import Path
 
@@ -94,6 +95,12 @@ def load_script(project: VideoProject) -> Script:
     return base
 
 
+def _cta_hook(cfg: Config) -> str:
+    """The sentence that names the app. Kept separate from the bridge because assemble needs to know
+    where in the narration it begins — that is the frame the endcard has to be on screen for."""
+    return f"Get {cfg.funnel.app_name} — link in bio."
+
+
 def _cta_narration(script: Script, cfg: Config) -> str:
     """The SPOKEN call-to-action.
 
@@ -116,7 +123,7 @@ def _cta_narration(script: Script, cfg: Config) -> str:
             return bridge                       # close on the sky; the endcard still shows the brand
         return cfg.funnel.cta_line.format(app=cfg.funnel.app_name)
     if bridge:
-        return f"{bridge} Get {cfg.funnel.app_name} — link in bio."
+        return f"{bridge} {_cta_hook(cfg)}"
     return cfg.funnel.cta_line.format(app=cfg.funnel.app_name)
 
 
@@ -314,7 +321,10 @@ def stage_captions(project: VideoProject, cfg: Config) -> None:
 
 
 # --------------------------------------------------------------------------- assemble
-ENDCARD_SECONDS = 2.6   # how long the app card holds the screen, alone, at the very end
+ENDCARD_SECONDS = 2.6      # fallback tail when the app hook cannot be located in the narration
+CARD_LEAD = 0.3            # the card lands this early, so the eye arrives before the ear
+MIN_CARD_SECONDS = 1.6     # below this the card is a flash, not something you can read
+MIN_BRIDGE_SECONDS = 1.0   # the bridge keeps at least this much of its own picture
 
 
 def _segment_sources(project: VideoProject, seg, last_content: Path | None = None) -> list[Path]:
@@ -339,13 +349,83 @@ def _segment_sources(project: VideoProject, seg, last_content: Path | None = Non
     return [primary] + extras
 
 
-def _cta_split(render_dur: float, n_sources: int) -> list[float]:
-    """How long each CTA visual holds. The card takes a fixed tail, never a proportional share: the
-    bridge sentence can run 4s or 9s depending on the topic, and an equal split would put the card up
-    for half a long CTA and flash it for a short one. Everything before it shares what is left."""
+_ALNUM = re.compile(r"[^a-z0-9]+")
+
+
+def _word_times(project: VideoProject, eng: str) -> list[tuple[str, float]]:
+    """(word, start) for the whole narration, from the captions stage. Empty if it never ran."""
+    f = project.root / f"captions.{eng}.json"
+    if not f.exists():
+        return []
+    try:
+        return [(w["text"], float(w["start"])) for w in json.loads(f.read_text())]
+    except Exception:  # noqa: BLE001 — a malformed timing file must not stop a render
+        return []
+
+
+def _phrase_start(words: list[tuple[str, float]], phrase: str) -> float | None:
+    """When the voice last begins saying `phrase`, in narration time.
+
+    Matching is on the letters alone, with every separator stripped from both sides, because the
+    aligner tokenizes differently from the writer: "AstroStackerPro" comes back as "AstroStacker" +
+    "Pro", and the em dash in "— link in bio" is its own zero-length token. Comparing the *joined*
+    letter streams makes those splits invisible. The search runs from the right: both phrases we look
+    for live at the end of the narration, and the CTA can legitimately echo a word from earlier."""
+    norm = [_ALNUM.sub("", w.lower()) for w, _ in words]
+    needle = _ALNUM.sub("", phrase.lower())
+    if not needle:
+        return None
+    pos = "".join(norm).rfind(needle)
+    if pos < 0:
+        return None
+    acc = 0
+    for (_, start), n in zip(words, norm):
+        if acc + len(n) > pos:
+            return start
+        acc += len(n)
+    return None
+
+
+def _card_seconds(project: VideoProject, cfg: Config, script: Script, eng: str,
+                  render_dur: float) -> float:
+    """How long the app card holds — measured, not assumed.
+
+    The card used to take a fixed 2.6s tail, and on a video with a long app hook that put the picture
+    of the *subject* on screen while the voice was already saying "Get AstroStackerPro": measured at
+    2.9s of pitch delivered over content imagery. So we read the word timings the captions stage
+    already produced and hand the card every frame from the moment the app is named — a beat early,
+    so the eye lands before the ear.
+
+    Falls back to the fixed tail whenever that cannot be measured: captions not run, timings
+    unreadable, or a CTA that never names the app at all (`bridge_policy: honest` on a topic with no
+    honest link, where the card is a silent sign-off and a short tail is exactly right)."""
+    fallback = min(ENDCARD_SECONDS, render_dur * 0.5)
+    words = _word_times(project, eng)
+    if not words:
+        return fallback
+    t_hook = _phrase_start(words, _cta_hook(cfg))
+    t_cta = _phrase_start(words, _cta_narration(script, cfg))
+    if t_hook is None or t_cta is None or t_hook < t_cta:
+        return fallback
+    card = render_dur - (t_hook - t_cta) + CARD_LEAD
+    # Clamped at both ends: long enough to read, but never so long it eats the bridge it belongs to.
+    return max(MIN_CARD_SECONDS, min(card, render_dur - MIN_BRIDGE_SECONDS))
+
+
+def _cta_split(render_dur: float, n_sources: int, card: float | None = None) -> list[float]:
+    """How long each CTA visual holds. The card takes a tail, never a proportional share: the bridge
+    sentence can run 4s or 9s depending on the topic, and an equal split would put the card up for
+    half a long CTA and flash it for a short one. Everything before it shares what is left."""
     if n_sources < 2:
         return [render_dur]
-    card = min(ENDCARD_SECONDS, render_dur * 0.5)      # never more than half, however short the CTA
+    if card is None:
+        # Unmeasured: the blind constant, never more than half — with no idea where the app hook
+        # falls, a card that dominates the CTA is a worse bet than one that arrives a little late.
+        card = min(ENDCARD_SECONDS, render_dur * 0.5)
+    else:
+        # Measured: the card may legitimately take most of a CTA whose hook IS most of the narration.
+        # The only hard floor is that the bridge keeps enough screen time to register as a picture.
+        card = min(card, render_dur - MIN_BRIDGE_SECONDS * (n_sources - 1))
     before = (render_dur - card) / (n_sources - 1)
     return [before] * (n_sources - 1) + [card]
 
@@ -466,7 +546,9 @@ def _assemble_engine(project: VideoProject, cfg: Config, script: Script, eng: st
             # Multiple stills: split the segment across them with hard cuts (each its own Ken Burns
             # move). Faster visual pacing without touching audio or the segment-level crossfades.
             # Content segments share the time evenly; the CTA gives its card a fixed short tail.
-            durs = (_cta_split(render_dur, len(srcs)) if seg.kind == "cta"
+            durs = (_cta_split(render_dur, len(srcs),
+                               _card_seconds(project, cfg, script, eng, render_dur))
+                    if seg.kind == "cta"
                     else [render_dur / len(srcs)] * len(srcs))
             parts: list[Path] = []
             for j, (s2, dj) in enumerate(zip(srcs, durs)):

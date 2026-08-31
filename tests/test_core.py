@@ -1934,6 +1934,100 @@ class NativePublishDispatch(unittest.TestCase):
         self.assertEqual(plan[0]["caption"], "hello")
 
 
+class CardMeetsTheVoice(unittest.TestCase):
+    """The app card must be on screen the moment the voice names the app. It used to take a fixed
+    2.6s tail, which on a real build (the ISS video) put the card up at 53.2s while the voice started
+    pitching at 51.2s: two seconds of "Get AstroStackerPro" spoken over a photo of the station."""
+
+    def _words(self, pairs):
+        return [(w, t) for w, t in pairs]
+
+    def test_it_finds_the_hook_even_when_the_aligner_splits_the_app_name(self):
+        """The aligner returns "AstroStacker" + "Pro" and the em dash as its own token. Matching on
+        the joined letters makes both invisible; matching token-by-token would miss entirely."""
+        from avp.stages import _phrase_start
+        words = self._words([("The", 0.0), ("sky", 0.4), ("waits.", 0.8),
+                             ("Get", 1.5), ("AstroStacker", 1.8), ("Pro", 2.4),
+                             ("—", 2.6), ("link", 2.7), ("in", 3.0), ("bio.", 3.2)])
+        self.assertAlmostEqual(_phrase_start(words, "Get AstroStackerPro — link in bio."), 1.5)
+
+    def test_a_phrase_that_is_not_spoken_is_not_invented(self):
+        from avp.stages import _phrase_start
+        self.assertIsNone(_phrase_start(self._words([("a", 0.0), ("b", 0.5)]), "totally absent"))
+        self.assertIsNone(_phrase_start(self._words([("a", 0.0)]), "—"))   # nothing but separators
+
+    def test_the_search_runs_from_the_right(self):
+        """The bridge can echo a word the hook also uses; the CTA's copy is the one that matters."""
+        from avp.stages import _phrase_start
+        words = self._words([("get", 0.0), ("closer.", 0.5), ("get", 2.0), ("closer.", 2.5)])
+        self.assertAlmostEqual(_phrase_start(words, "get closer"), 2.0)
+
+    def _fixture(self, tmp, narration_words, hook_at):
+        """A project whose captions place the app hook at `hook_at` seconds."""
+        import json
+        from avp.models import Script, Segment
+        root = Path(tmp)
+        (root / "captions.kokoro.json").write_text(json.dumps(
+            [{"text": w, "start": t, "end": t + 0.2} for w, t in narration_words]))
+        script = Script(title="t", topic="test", segments=[
+            Segment(index=1, narration="Body.", visual="v", keywords=[]),
+            Segment(index=2, narration="The sky waits. Get AstroStackerPro — link in bio.",
+                    visual="App endcard", keywords=[], kind="cta")])
+        script.cta_bridge = "The sky waits."
+        script.bridge_kind = "shoot"
+        return script, hook_at
+
+    def test_the_card_starts_a_beat_before_the_app_is_named(self):
+        from avp import stages
+        cfg = Config.load(None)
+        cfg.funnel.app_name = "AstroStackerPro"
+        words = [("Body.", 0.0),
+                 ("The", 5.0), ("sky", 5.4), ("waits.", 5.8),
+                 ("Get", 8.0), ("AstroStacker", 8.3), ("Pro", 8.9),
+                 ("—", 9.1), ("link", 9.2), ("in", 9.5), ("bio.", 9.7)]
+        with tempfile.TemporaryDirectory() as tmp:
+            script, _ = self._fixture(tmp, words, 8.0)
+            project = mock.Mock(root=Path(tmp))
+            render = 6.5          # CTA speech is 5.0s→9.9s plus a silent tail
+            card = stages._card_seconds(project, cfg, script, "kokoro", render)
+            # hook lands 3.0s into the CTA's speech, so the card owns everything from 2.7s on
+            self.assertAlmostEqual(card, render - 3.0 + stages.CARD_LEAD, places=3)
+            durs = stages._cta_split(render, 2, card)
+            self.assertAlmostEqual(sum(durs), render, places=3)
+            self.assertAlmostEqual(durs[0], 3.0 - stages.CARD_LEAD, places=3)
+
+    def test_a_cta_that_never_names_the_app_keeps_the_short_tail(self):
+        """`bridge_policy: honest` on a topic with no honest link closes on the sky and lets the card
+        sign off silently. There is no hook to sync to, and a short tail is exactly right."""
+        from avp import stages
+        cfg = Config.load(None)
+        cfg.funnel.app_name = "AstroStackerPro"
+        cfg.funnel.bridge_policy = "honest"
+        with tempfile.TemporaryDirectory() as tmp:
+            script, _ = self._fixture(tmp, [("The", 5.0), ("sky", 5.4), ("waits.", 5.8)], 0)
+            script.bridge_kind = "none"
+            project = mock.Mock(root=Path(tmp))
+            self.assertAlmostEqual(stages._card_seconds(project, cfg, script, "kokoro", 8.0),
+                                   stages.ENDCARD_SECONDS, places=3)
+
+    def test_no_captions_means_the_old_fixed_tail(self):
+        """captions is a stage that can be skipped. Assemble must still produce a sane card."""
+        from avp import stages
+        with tempfile.TemporaryDirectory() as tmp:
+            script, _ = self._fixture(tmp, [], 0)
+            (Path(tmp) / "captions.kokoro.json").unlink()
+            project = mock.Mock(root=Path(tmp))
+            self.assertAlmostEqual(stages._card_seconds(project, Config.load(None), script, "kokoro", 8.0),
+                                   stages.ENDCARD_SECONDS, places=3)
+
+    def test_the_bridge_always_keeps_a_readable_slice(self):
+        """Even if the hook is nearly the whole CTA, the picture under the bridge must register."""
+        from avp import stages
+        durs = stages._cta_split(6.0, 2, card=99.0)
+        self.assertAlmostEqual(sum(durs), 6.0, places=3)
+        self.assertGreaterEqual(durs[0], stages.MIN_BRIDGE_SECONDS - 1e-9)
+
+
 class ArchiveFirstRouting(unittest.TestCase):
     """Nebulae and the Sun must reach the archives BEFORE the generator, because this image model
     renders them as the wrong object entirely (imagegen.ARCHIVE_FIRST documents the measurements)."""
