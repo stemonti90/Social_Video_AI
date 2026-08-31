@@ -68,6 +68,7 @@ If the topic is a specific MISSION, PROBE, OBJECT, PERSON, or EVENT, EXPLAIN it 
 For each segment provide:
 - "narration": about {wseg} words — one or two short spoken sentences,
 - "visual": a short cue for the ideal footage or image OF THIS TOPIC. Name the SHOT SCALE explicitly — "extreme close-up of ...", "wide shot, the object tiny against ...", "the object filling the frame". Consecutive segments must NOT use the same scale: the video is cut from these, and two identical scales in a row read as one long static shot.
+  It must describe something a CAMERA COULD PHOTOGRAPH. Never ask for a diagram, chart, cutaway, infographic, labelled figure, arrow, split-screen or side-by-side comparison: these are drawn, not shot, and the image generator renders them as garbled pseudo-text. When the narration explains a MECHANISM, film its consequence instead — for "Mars has no plate tectonics" show the unbroken volcanic plain, not a tectonic diagram.
 - "keywords": 2-4 ENGLISH search keywords for space archives (they are English-indexed).
 
 Also provide a punchy "title", plus the BRIDGE to astrophotography — this channel exists to make people
@@ -115,6 +116,10 @@ Return JSON exactly like:
 # EN (af_heart) 2.37-2.46 · IT (if_sara) 2.60-2.65. A single 2.5 made English scripts overshoot
 # (a 50s target came out 60s of speech), so the budget is language-aware — slightly conservative
 # so the video lands UNDER the target rather than over it.
+# The writer's terseness, measured: median 88% of the per-segment word budget it is asked for,
+# across eleven builds. Asking for the target itself therefore lands short every time.
+ASK_INFLATION = 1.14
+
 _WPS = {"en": 2.35, "it": 2.60}
 
 # How long one image holds the screen. This single number is the cut rhythm, and both ends of the
@@ -370,8 +375,14 @@ def generate_script(cfg: LLMConfig, topic: str, seconds: int = 60, language: str
     # back into the territory viewers read as sped up.
     nseg = max(3, round(seconds / (SECONDS_PER_IMAGE * max(1, images_per_segment))))
     nseg2 = nseg + 1
-    wseg = max(8, round(words / nseg))       # per-segment budget, so the total still lands on target
-    user = USER_TMPL.format(topic=topic, seconds=seconds, words=words,
+    # ASK for more than the target, because the writer reliably delivers less. Measured across eleven
+    # real builds it returns a MEDIAN 88% of the per-segment budget it is given (range 67-108%), so
+    # asking for exactly the target ships a video that is systematically short: Olympus Mons came
+    # back at 82% and rendered 42.7s against a 58s target. 1/0.88 is the compensation, and it is
+    # applied ONLY to what the writer is told — `words` stays the true target, so the length guards
+    # below still measure the draft against the length we actually want.
+    wseg = max(8, round(words * ASK_INFLATION / nseg))
+    user = USER_TMPL.format(topic=topic, seconds=seconds, words=round(words * ASK_INFLATION),
                             nseg=nseg, nseg2=nseg2, wseg=wseg)
     name = LANG_NAME.get(language, "English")
     system = SYSTEM + f"\n- Write ALL narration in {name}."
@@ -436,7 +447,11 @@ def generate_script(cfg: LLMConfig, topic: str, seconds: int = 60, language: str
                 data = cand
         except Exception as e:  # noqa: BLE001 — a failed trim just keeps the longer draft
             log.warning("Length guard (trim) failed (%s) — keeping the draft.", e)
-    if _nwords(data) < words * 0.8:
+    # The two thresholds must be SYMMETRIC, and they were not: trim fired 12% over, expand only 20%
+    # under. Olympus Mons came in at 81.7% of target — inside that dead band — so nothing fired and
+    # the video rendered at 42.7s against a 58s target. Short is the worse failure here: over-length
+    # is caught again by the 60s ceiling downstream, while short just quietly ships a thin video.
+    if _nwords(data) < words * 0.88:
         cur = _nwords(data)
         try:
             expand_user = (

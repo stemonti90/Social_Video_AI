@@ -10,10 +10,12 @@ versus 9.8 GB / 74s from the saved Q4 model (measured 2026-08-27).
 """
 from __future__ import annotations
 
+import re
 import shutil
 import subprocess
 from pathlib import Path
 
+from .llm import SECONDS_PER_IMAGE
 from .log import get_logger
 from .models import Script, Segment
 
@@ -74,11 +76,28 @@ STILE = (
 # sitting in the positive prompt are a large part of why every video came out orange.
 NEGATIVI = ("illustration, 3d render, cgi, digital art, cartoon, anime, painting, oversaturated neon, "
             "false color, infrared look, x-ray palette, monochrome orange, fantasy, people, faces, "
-            "text, watermark, captions, logos, ui elements, lens flare")
+            "text, watermark, captions, logos, ui elements, lens flare, "
+            # "people, faces" reads as portrait scale. The model kept adding the tiny silhouette
+            # that landscape photography conventionally puts in for scale — three of the eight
+            # Olympus Mons frames had a figure standing on a ridge, on a planet nobody has visited.
+            "person, human figure, silhouette of a person, hiker, climber, tourist, astronaut, "
+            "figure for scale, footprints, "
+            # A writer who asks for a "diagram" gets garbled pseudo-text from this model, and under
+            # footage_source: generate_only there is no archive left to rescue the frame.
+            "diagram, chart, infographic, schematic, cutaway, labels, arrows, annotations, "
+            "split screen, side by side comparison, collage, multi-panel")
 
 # Keyword → registry bucket. First match wins; order matters (surface before planet).
 _BUCKETS = (
-    # Dusty worlds first: "Martian surface" must not fall into the airless-Moon bucket.
+    # ORBITAL FIRST. A cue can name a world and still be a shot of it from space — "the planet Mars
+    # in the dark void" was matching `mars` and coming back with "rusty ochre soil under a hazy
+    # butterscotch sky", so the registry described a desert while the shot asked for a globe against
+    # black. The model obeyed the registry, which is the more concrete of the two. These phrases say
+    # "we are outside the atmosphere looking in", whatever world follows.
+    ("planet", ("in the dark void", "from space", "from orbit", "against the blackness",
+                "against black space", "hanging in space", "seen from space", "full disc",
+                "full disk", "the whole planet", "the globe of")),
+    # Dusty worlds next: "Martian surface" must not fall into the airless-Moon bucket.
     ("dusty_surface", ("mars", "martian", "titan", "venus", "venusian", "dust storm", "sand dune")),
     ("surface", ("surface", "crater", "terrain", "dune", "canyon", "regolith", "landscape", "ice sheet")),
     ("spacecraft", ("probe", "spacecraft", "satellite", "rover", "telescope", "mission", "lander",
@@ -99,6 +118,68 @@ def _bucket(text: str) -> str:
     return "default"
 
 
+_DRAWN = re.compile(
+    r"\b(diagram|chart|graph|infographic|schematic|cutaway|cross[- ]section|illustration|"
+    r"annotated|labell?ed|side[- ]by[- ]side|split[- ]screen|comparison)\b", re.IGNORECASE)
+_VS = re.compile(r"\s+(?:vs\.?|versus)\s+", re.IGNORECASE)
+_SCALE = re.compile(r"^([^,]*\b(?:shot|frame|angle|close[- ]up)\b[^,]*),\s*(.+)$", re.IGNORECASE)
+_DANGLING = re.compile(r"^(?:of|and|with|between|showing)\s+", re.IGNORECASE)
+
+
+def _photographable(visual: str) -> str:
+    """The part of a visual cue a camera could actually shoot. Empty if none of it is.
+
+    The writer is told to describe a photographable scene, but a prompt is advice: it still
+    occasionally asks for "medium shot, tectonic plate movement diagram vs static Martian crust". A
+    negative prompt alone does not save that — the model is still handed "diagram" as the subject it
+    must depict, and under `footage_source: generate_only` there is no archive left to rescue the
+    frame. So it comes out of the positive prompt too:
+
+    * "X vs Y" is a split-screen request in disguise; keep whichever side is not a drawn figure
+      (here "static Martian crust" — the real photograph), preserving the shot scale that prefixes
+      the whole cue,
+    * the drawn-figure words themselves are removed from whatever remains,
+    * a preposition left dangling by the removal goes with it ("annotated cutaway OF the magma
+      chamber" must not become "of the magma chamber").
+    """
+    raw = (visual or "").strip()
+    if not raw:
+        return ""
+    prefix, body = "", raw
+    m = _SCALE.match(raw)                 # "wide shot, …" belongs to the cue, not to either side
+    if m:
+        prefix, body = m.group(1) + ", ", m.group(2)
+    sides = _VS.split(body)
+    if len(sides) > 1:
+        shootable = [x for x in sides if not _DRAWN.search(x)]
+        body = (shootable or sides)[0]
+    body = _DANGLING.sub("", _DRAWN.sub("", body).strip(" ,;:-"))
+    body = re.sub(r"\s{2,}", " ", body).strip(" ,;:-").strip()
+    return f"{prefix}{body}" if body else ""
+
+
+def images_for_segment(seg: Segment, cfg) -> int:
+    """How many stills this segment is cut across, from its MEASURED narration length.
+
+    This used to be a flat 2 for every segment, which made the cut rhythm a hostage of how the
+    writer happened to split the text. Measured across twelve builds, the writer delivers anywhere
+    from 4 to 8 segments for the same 50s target, so "2 images each" landed between 2.4s and 5.7s
+    per image — the 2.4s end is the "everything flies past, I cannot even read it" the channel owner
+    reported. The voice stage has already measured every segment by the time footage runs, so the
+    editor can simply ask for the number of images that puts each one near SECONDS_PER_IMAGE, and
+    the writer's segmentation stops mattering.
+
+    Rounding to nearest is deliberate: a 5.5s segment holds ONE still for 5.5s rather than cutting
+    to two at 2.75s, because 5.5s is the closer miss and a slow shot reads far better than a flash.
+    """
+    per = SECONDS_PER_IMAGE
+    cap = max(1, int(getattr(cfg.video, "max_images_per_segment", 3) or 3))
+    dur = float(getattr(seg, "duration", 0) or 0)
+    if dur <= 0:                      # voice stage skipped — fall back to the planning assumption
+        return max(1, min(cap, int(getattr(cfg.video, "images_per_segment", 2) or 2)))
+    return max(1, min(cap, round(dur / per)))
+
+
 def build_prompt(seg: Segment, script: Script, shot: str = "") -> str:
     """A generation prompt for one segment: its own visual intent, in the channel's house style.
 
@@ -108,7 +189,8 @@ def build_prompt(seg: Segment, script: Script, shot: str = "") -> str:
 
     Returns the POSITIVE prompt only. What to avoid goes to --negative-prompt (see NEGATIVI)."""
     kw = " ".join(str(k) for k in (seg.keywords or []) if k)
-    subject = (seg.visual or kw or script.topic or "deep space").strip()
+    # Falls through to the keywords when the visual was nothing but a drawn-figure request.
+    subject = _photographable(seg.visual or "") or kw or (script.topic or "").strip() or "deep space"
     context = REGISTRO[_bucket(f"{subject} {kw}")]
     return f"{shot}{subject}, {context}. {STILE}."
 
@@ -261,7 +343,7 @@ def generate_for_segment(seg: Segment, script: Script, cfg, dest: Path,
     taking a slice of the segment's duration. Returns a report dict, or None if nothing generated."""
     if not available(cfg):
         return None
-    keep = max(1, int(getattr(cfg.video, "images_per_segment", 1) or 1))
+    keep = images_for_segment(seg, cfg)
     n = max(keep, int(getattr(cfg.video, "image_candidates", 2)))
     base_seed = int(getattr(cfg.video, "image_seed", 100))
     work = work_dir or (dest.parent / "_gen")

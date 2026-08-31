@@ -129,6 +129,10 @@ class VideoConfig:
     # 1 image per ~10s segment read as slow; 2 halves the shot length at zero extra generation cost
     # (the runner-up was already generated and thrown away).
     images_per_segment: int = 2
+    # The RENDER-time ceiling, separate from the planning number above: how many stills one segment
+    # may be cut across. The actual count comes from the segment's measured length so every shot
+    # lands near llm.SECONDS_PER_IMAGE — see imagegen.images_for_segment.
+    max_images_per_segment: int = 3
     image_steps: int = 8                    # z-image-turbo is a turbo model: 8 is its sweet spot
     image_width: int = 720                  # 720x1280 ≈ 74s/image; 512x896 ≈ 25s (upscaled at render)
     image_height: int = 1280

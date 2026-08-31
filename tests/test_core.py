@@ -2,6 +2,7 @@
 
 Run: PYTHONPATH=src .venv/bin/python -m unittest discover -s tests -v
 """
+import inspect
 import json
 import subprocess
 import requests
@@ -2083,6 +2084,195 @@ class StaleImagesAreNotManualOverrides(unittest.TestCase):
         with tempfile.TemporaryDirectory() as tmp:
             p = self._project(tmp, [{"index": 1, "segment": long[:120], "outcome": "generated"}])
             self.assertFalse(_stale_from_a_previous_script(p, self._seg(long)))
+
+
+class ScriptLandsNearTheTarget(unittest.TestCase):
+    """Videos have to run just under 60s — "quasi 60 secondi, altrimenti diventa turbo compresso".
+    Olympus Mons rendered 42.7s against a 58s target: the writer returned 82% of the words it was
+    asked for, which sat inside the dead band between the two length guards, so neither fired."""
+
+    def _asked(self, seconds=50, lang="en", ipseg=2):
+        """The word budget actually handed to the writer, and the target the guards check."""
+        from avp import llm
+        wps = llm._WPS[lang]
+        words = round(seconds * wps)
+        nseg = max(3, round(seconds / (llm.SECONDS_PER_IMAGE * ipseg)))
+        return words, max(8, round(words * llm.ASK_INFLATION / nseg)) * nseg
+
+    def test_the_writer_is_asked_for_more_than_the_target(self):
+        """It delivers a measured median 88%, so asking for exactly the target lands short."""
+        target, asked = self._asked()
+        self.assertGreater(asked, target)
+
+    def test_a_typical_delivery_now_lands_on_target(self):
+        """88% of the inflated ask should be within a few percent of what we actually want."""
+        target, asked = self._asked()
+        self.assertAlmostEqual(asked * 0.88 / target, 1.0, delta=0.06)
+
+    def test_the_guards_still_measure_against_the_real_target(self):
+        """Inflating the ask must not drag the guards with it, or a 58s target ships a 64s video."""
+        from avp import llm
+        src = inspect.getsource(llm.generate_script)
+        self.assertIn("words * 0.88", src)      # expand below
+        self.assertIn("words * 1.12", src)      # trim above
+        self.assertNotIn("words * ASK_INFLATION * 0.88", src)
+
+    def test_the_two_guards_are_symmetric(self):
+        """They were 12% over / 20% under, and Olympus Mons fell in the gap at 82%."""
+        from avp import llm
+        src = inspect.getsource(llm.generate_script)
+        self.assertAlmostEqual(1.12 - 1.0, 1.0 - 0.88, places=6)
+        self.assertNotIn("words * 0.8:", src)   # the old one-sided threshold is gone
+
+
+class RegistryMustNotContradictTheShot(unittest.TestCase):
+    """The lighting registry is appended to the prompt, and the model obeys it over the shot cue —
+    it is the more concrete of the two. So a cue asking for a world seen from space must not be
+    handed surface lighting: "wide shot, the planet Mars in the dark void" came back as an ochre
+    desert under a butterscotch sky, because it matched `mars` before anything read "dark void"."""
+
+    def test_an_orbital_cue_beats_the_surface_bucket(self):
+        from avp.imagegen import _bucket
+        for cue in ("wide shot, the planet Mars in the dark void",
+                    "Titan seen from space",
+                    "Venus from orbit, full disc",
+                    "the globe of Mars against the blackness"):
+            self.assertEqual(_bucket(cue), "planet", cue)
+
+    def test_a_genuine_surface_shot_still_gets_surface_lighting(self):
+        """The dusty bucket exists so Mars does not come back with the Moon's airless black sky."""
+        from avp.imagegen import _bucket
+        for cue in ("wide shot, the Martian surface at dawn",
+                    "extreme close-up of volcanic flow textures, Martian surface",
+                    "the peak against a dusty horizon, Mars horizon"):
+            self.assertEqual(_bucket(cue), "dusty_surface", cue)
+
+    def test_the_registry_reaches_the_prompt(self):
+        """Guards the actual failure: a black-sky cue must not carry a butterscotch-sky registry."""
+        from avp.imagegen import build_prompt
+        seg = Segment(index=1, narration="n", visual="wide shot, the planet Mars in the dark void",
+                      keywords=["Mars planet"])
+        prompt = build_prompt(seg, Script(title="t", topic="Mars", segments=[]))
+        self.assertIn("black", prompt)
+        self.assertNotIn("butterscotch", prompt)
+
+
+class NoPeopleInTheFrame(unittest.TestCase):
+    """Faceless channel, and nobody has stood on Mars. Three of the eight Olympus Mons frames came
+    back with a human silhouette on a ridge — landscape photography puts a figure in for scale, and
+    "people, faces" reads as portrait scale, so it never suppressed them."""
+
+    def test_the_negative_prompt_covers_a_distant_figure_too(self):
+        from avp.imagegen import NEGATIVI
+        for w in ("person", "human figure", "silhouette of a person", "astronaut", "figure for scale"):
+            self.assertIn(w, NEGATIVI)
+
+    def test_it_is_a_negative_prompt_not_appended_text(self):
+        """These words in the POSITIVE prompt would ask for exactly what they forbid — the mistake
+        that once made every video orange ("false color" sitting in the positive prompt)."""
+        from avp.imagegen import build_prompt, NEGATIVI
+        seg = Segment(index=1, narration="n", visual="wide shot, a volcanic ridge", keywords=["Mars"])
+        prompt = build_prompt(seg, Script(title="t", topic="Mars", segments=[]))
+        for w in ("person", "astronaut", "watermark"):
+            self.assertNotIn(w, prompt)
+        self.assertIn("person", NEGATIVI)
+
+
+class CutRhythmFollowsTheSegment(unittest.TestCase):
+    """The cut rhythm used to be `segments x 2` stills, which made it a hostage of how the writer
+    split the text. Across twelve real builds the writer delivered 4 to 8 segments for the same 50s
+    target, so the same rule produced anything from 2.37s to 5.94s per image — the fast end being the
+    "everything flies past, I cannot even read it" the channel owner reported. The number now comes
+    from each segment's MEASURED narration length instead."""
+
+    def _cfg(self, cap=3):
+        cfg = Config.load(None)
+        cfg.video.max_images_per_segment = cap
+        cfg.video.images_per_segment = 2
+        return cfg
+
+    def _seg(self, dur):
+        return Segment(index=1, narration="n", visual="v", keywords=[], duration=dur)
+
+    def test_every_shot_lands_near_the_target(self):
+        from avp.imagegen import images_for_segment
+        from avp.llm import SECONDS_PER_IMAGE
+        cfg = self._cfg()
+        for dur in (4.3, 5.6, 7.3, 9.0, 11.5):
+            n = images_for_segment(self._seg(dur), cfg)
+            self.assertLessEqual(abs(dur / n - SECONDS_PER_IMAGE), 1.5,
+                                 f"{dur}s cut into {n} holds {dur / n:.2f}s per image")
+
+    def test_a_short_segment_holds_one_still_instead_of_flashing_two(self):
+        """The regression that mattered: eight 4.7s segments used to become sixteen 2.37s shots."""
+        from avp.imagegen import images_for_segment
+        self.assertEqual(images_for_segment(self._seg(4.74), self._cfg()), 1)
+
+    def test_a_long_segment_gets_cut_more(self):
+        from avp.imagegen import images_for_segment
+        self.assertEqual(images_for_segment(self._seg(11.9), self._cfg()), 3)
+
+    def test_the_ceiling_is_respected(self):
+        from avp.imagegen import images_for_segment
+        self.assertEqual(images_for_segment(self._seg(60.0), self._cfg(cap=2)), 2)
+
+    def test_never_zero_images(self):
+        """round(1.0/4.3) is 0, and a segment with no picture is a black frame."""
+        from avp.imagegen import images_for_segment
+        self.assertEqual(images_for_segment(self._seg(1.0), self._cfg()), 1)
+
+    def test_an_unvoiced_segment_falls_back_to_the_planning_number(self):
+        """`avp footage` can be run before `avp voice`; there is no measurement to use yet."""
+        from avp.imagegen import images_for_segment
+        cfg = self._cfg()
+        self.assertEqual(images_for_segment(self._seg(0), cfg), cfg.video.images_per_segment)
+        self.assertEqual(images_for_segment(Segment(index=1, narration="n", visual="v",
+                                                    keywords=[]), cfg), 2)
+
+
+class VisualsMustBePhotographable(unittest.TestCase):
+    """This image model renders a requested "diagram" as garbled pseudo-text, and with the archives
+    switched off (`generate_only`) there is nothing left to rescue that frame. The Olympus Mons
+    script asked for "tectonic plate movement diagram vs static Martian crust"."""
+
+    def test_it_keeps_the_side_of_a_vs_that_a_camera_could_shoot(self):
+        from avp.imagegen import _photographable
+        self.assertEqual(
+            _photographable("medium shot, tectonic plate movement diagram vs static Martian crust"),
+            "medium shot, static Martian crust")
+
+    def test_a_good_visual_is_left_exactly_alone(self):
+        from avp.imagegen import _photographable
+        for v in ("wide shot, the peak against a dusty horizon",
+                  "extreme close-up of volcanic flow textures",
+                  "the object filling the frame, a massive volcanic peak"):
+            self.assertEqual(_photographable(v), v)
+
+    def test_a_preposition_left_dangling_goes_too(self):
+        """Removing "annotated cutaway" must not leave the prompt starting with "of"."""
+        from avp.imagegen import _photographable
+        self.assertEqual(_photographable("annotated cutaway of the volcano's magma chamber"),
+                         "the volcano's magma chamber")
+
+    def test_a_cue_that_is_only_a_drawn_figure_yields_nothing(self):
+        from avp.imagegen import _photographable
+        self.assertEqual(_photographable("diagram"), "")
+        self.assertEqual(_photographable(""), "")
+
+    def test_the_prompt_falls_through_to_the_keywords_when_nothing_survives(self):
+        """An empty subject would be a worse prompt than the segment's own search terms."""
+        from avp.imagegen import build_prompt
+        seg = Segment(index=1, narration="n", visual="labelled schematic",
+                      keywords=["Olympus Mons", "Mars"])
+        prompt = build_prompt(seg, Script(title="t", topic="Olympus Mons", segments=[]))
+        self.assertIn("Olympus Mons", prompt)
+        self.assertNotIn("schematic", prompt)
+
+    def test_drawn_figures_are_also_in_the_negative_prompt(self):
+        """Belt and braces: stripped from what we ask for, and steered away from on top."""
+        from avp.imagegen import NEGATIVI
+        for w in ("diagram", "chart", "infographic", "split screen"):
+            self.assertIn(w, NEGATIVI)
 
 
 class GenerateOnlyNeverTouchesTheArchives(unittest.TestCase):
