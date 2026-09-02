@@ -3,7 +3,10 @@
 Run: PYTHONPATH=src .venv/bin/python -m unittest discover -s tests -v
 """
 import inspect
+import os
+import sys
 import json
+import re
 import subprocess
 import requests
 import tempfile
@@ -1067,8 +1070,10 @@ class MetadataClean(unittest.TestCase):
                                  "tiktok": {"caption": "e   f"}, "instagram": {"caption": "g  h"}})
         self.assertEqual(d["youtube"]["title"], "a b")
         self.assertEqual(d["youtube"]["description"], "c d")
-        self.assertEqual(d["tiktok"]["caption"], "e f")
-        self.assertEqual(d["instagram"]["caption"], "g h")
+        # Captions now also carry the mandatory brand tag (see BrandTagOnEveryPost); the whitespace
+        # tidy-up is checked on the body, before the tag block.
+        self.assertTrue(d["tiktok"]["caption"].startswith("e f"))
+        self.assertTrue(d["instagram"]["caption"].startswith("g h"))
 
 
 class AutoPipeline(unittest.TestCase):
@@ -1570,7 +1575,9 @@ class ScriptLengthBudget(unittest.TestCase):
     def test_word_budget_is_language_aware(self):
         en, it = llm._words_for(50, "en"), llm._words_for(50, "it")
         self.assertLess(en, it)                       # English is spoken slower (words/sec)
-        self.assertEqual(en, 118)                     # 50s × 2.35 w/s (measured EN pace)
+        # 2.33, the SLOWEST delivery measured (the range is 2.33-2.61). Budgeting at the average makes
+        # half the videos longer than planned, and long is the failure that breaks the 60s rule.
+        self.assertEqual(en, 116)                     # 50s × 2.33 = 116.5, banker's rounding → 116
         self.assertEqual(it, 130)                     # 50s × 2.60 w/s (measured IT pace)
         self.assertEqual(llm._words_for(50, None), llm._words_for(50, "en"))   # safe default
         self.assertEqual(llm._words_for(50, "de"), 120)                        # unknown → 2.4
@@ -1580,10 +1587,15 @@ class ScriptLengthBudget(unittest.TestCase):
         self.assertLessEqual(llm._words_for(50, "en") / 2.37, 50.0)
         self.assertLessEqual(llm._words_for(50, "it") / 2.60, 50.0)
 
-    def test_generate_script_has_a_trim_guard(self):
+    def test_generate_script_guards_length_in_both_directions(self):
+        """Both rewrites must exist, and neither may be reachable without the other — the two used to
+        be one-shot passes in a fixed order, so an expansion that overshot was never trimmed back."""
         src = Path("src/avp/llm.py").read_text()
-        self.assertIn("TOO LONG", src)                # symmetric with the expand guard
-        self.assertIn("words * 1.12", src)
+        self.assertIn("TOO LONG", src)
+        self.assertIn("TOO SHORT", src)
+        from avp.llm import length_verdict
+        self.assertEqual(length_verdict(200, 118), "long")
+        self.assertEqual(length_verdict(60, 118), "short")
 
 
 class SocialPolishFixes(unittest.TestCase):
@@ -1970,10 +1982,12 @@ class CardMeetsTheVoice(unittest.TestCase):
         root = Path(tmp)
         (root / "captions.kokoro.json").write_text(json.dumps(
             [{"text": w, "start": t, "end": t + 0.2} for w, t in narration_words]))
+        # Durations matter: the CTA's start is computed from the MEASURED length of everything before
+        # it, which is what the voice stage records on every real build.
         script = Script(title="t", topic="test", segments=[
-            Segment(index=1, narration="Body.", visual="v", keywords=[]),
+            Segment(index=1, narration="Body.", visual="v", keywords=[], duration=5.0),
             Segment(index=2, narration="The sky waits. Get AstroStackerPro — link in bio.",
-                    visual="App endcard", keywords=[], kind="cta")])
+                    visual="App endcard", keywords=[], kind="cta", duration=5.3)])
         script.cta_bridge = "The sky waits."
         script.bridge_kind = "shoot"
         return script, hook_at
@@ -1991,11 +2005,33 @@ class CardMeetsTheVoice(unittest.TestCase):
             project = mock.Mock(root=Path(tmp))
             render = 6.5          # CTA speech is 5.0s→9.9s plus a silent tail
             card = stages._card_seconds(project, cfg, script, "kokoro", render)
-            # hook lands 3.0s into the CTA's speech, so the card owns everything from 2.7s on
-            self.assertAlmostEqual(card, render - 3.0 + stages.CARD_LEAD, places=3)
+            # The CTA's speech starts after the content audio PLUS its trailing gap, which the
+            # captions timeline includes; the hook then lands `into` seconds later.
+            into = 8.0 - (5.0 + cfg.video.segment_gap)
+            self.assertAlmostEqual(card, render - into + stages.CARD_LEAD, places=3)
             durs = stages._cta_split(render, 2, card)
             self.assertAlmostEqual(sum(durs), render, places=3)
-            self.assertAlmostEqual(durs[0], 3.0 - stages.CARD_LEAD, places=3)
+            self.assertAlmostEqual(durs[0], into - stages.CARD_LEAD, places=3)
+
+    def test_one_misheard_word_no_longer_loses_the_sync(self):
+        """The regression that shipped: the aligner heard "Deimos" as "Dimos", one word inside a
+        20-word CTA, so searching the transcript for the CTA's full text failed and the card fell
+        back to its blind fixed tail. The CTA's start now comes from measured durations instead."""
+        from avp import stages
+        cfg = Config.load(None)
+        cfg.funnel.app_name = "AstroStackerPro"
+        words = [("Body.", 0.0),
+                 ("The", 5.0), ("sky", 5.4), ("waits", 5.8), ("Dimos.", 6.2),   # <- misheard
+                 ("Get", 8.0), ("AstroStacker", 8.3), ("Pro,", 8.9),            # <- and a stray comma
+                 ("link", 9.2), ("in", 9.5), ("bio.", 9.7)]
+        with tempfile.TemporaryDirectory() as tmp:
+            script, _ = self._fixture(tmp, words, 8.0)
+            script.segments[1].narration = ("The sky waits Deimos. Get AstroStackerPro — link in bio.")
+            project = mock.Mock(root=Path(tmp))
+            card = stages._card_seconds(project, cfg, script, "kokoro", 6.5)
+            self.assertNotAlmostEqual(card, stages.ENDCARD_SECONDS, places=3)   # NOT the blind tail
+            into = 8.0 - (5.0 + cfg.video.segment_gap)
+            self.assertAlmostEqual(card, 6.5 - into + stages.CARD_LEAD, places=3)
 
     def test_a_cta_that_never_names_the_app_keeps_the_short_tail(self):
         """`bridge_policy: honest` on a topic with no honest link closes on the sky and lets the card
@@ -2027,6 +2063,76 @@ class CardMeetsTheVoice(unittest.TestCase):
         durs = stages._cta_split(6.0, 2, card=99.0)
         self.assertAlmostEqual(sum(durs), 6.0, places=3)
         self.assertGreaterEqual(durs[0], stages.MIN_BRIDGE_SECONDS - 1e-9)
+
+
+class EditedLinesAreReVoiced(unittest.TestCase):
+    """The voice cache was keyed by segment INDEX, so a corrected line kept its old audio forever.
+    A factual fix went into script.md, the stage logged "cached", and the video went on saying that
+    Venera 4 took the first photograph of Venus — which it never did. `--force` did not help: it
+    re-runs the stage, and the stage was skipping the file."""
+
+    def test_the_wav_records_the_words_it_says(self):
+        from avp import stages
+        src = inspect.getsource(stages.stage_voice)
+        self.assertIn("with_suffix(\".txt\")", src)
+        self.assertIn("spoken_before == seg.narration", src)
+
+    def test_matching_text_is_a_cache_hit_and_changed_text_is_not(self):
+        """The decision itself, on the two cases that matter."""
+        with tempfile.TemporaryDirectory() as tmp:
+            wav = Path(tmp) / "01.wav"
+            wav.write_bytes(b"RIFF")
+            stamp = wav.with_suffix(".txt")
+            stamp.write_text("The old line.")
+
+            def reuse(narration):
+                before = stamp.read_text() if stamp.exists() else None
+                return wav.exists() and before == narration
+
+            self.assertTrue(reuse("The old line."))
+            self.assertFalse(reuse("The corrected line."))
+
+    def test_audio_without_a_stamp_is_kept_but_flagged(self):
+        """Projects built before the stamp existed must not all be re-voiced on upgrade — but the
+        log has to say the words could not be verified, rather than claiming a clean cache hit."""
+        from avp import stages
+        src = inspect.getsource(stages.stage_voice)
+        self.assertIn("cached, unverified", src)
+
+
+class BrandTagOnEveryPost(unittest.TestCase):
+    """#astrostackerpro goes on every post, on every platform, by construction — the channel exists
+    to funnel viewers to the app, and a prompt asking the model for the tag is advice it can ignore."""
+
+    def test_instagram_gets_the_tag_whether_or_not_the_model_included_it(self):
+        from avp.llm import _clean_metadata, BRAND_TAG
+        for tags in (["#space", BRAND_TAG], ["#space"], ["#SPACE", "#AstroStackerPro"]):
+            out = _clean_metadata({"instagram": {"caption": "x"}, "instagram_hashtags": list(tags)})
+            got = out["instagram"]["hashtags"]
+            self.assertIn(BRAND_TAG, got)
+            self.assertEqual(got.count(BRAND_TAG), 1, got)       # never twice
+            self.assertIn(BRAND_TAG, out["instagram"]["caption"])
+
+    def test_it_is_appended_last_so_it_never_displaces_a_narrow_tag(self):
+        from avp.llm import _clean_metadata, BRAND_TAG
+        out = _clean_metadata({"instagram": {"caption": "x"},
+                               "instagram_hashtags": [f"#t{i}" for i in range(29)]})
+        got = out["instagram"]["hashtags"]
+        self.assertEqual(len(got), 30)
+        self.assertEqual(got[-1], BRAND_TAG)
+
+    def test_a_model_that_returned_no_tag_list_still_gets_it(self):
+        from avp.llm import _clean_metadata, BRAND_TAG
+        out = _clean_metadata({"instagram": {"caption": "A line. #mars"}})
+        self.assertIn(BRAND_TAG, out["instagram"]["hashtags"])
+        self.assertIn("#mars", out["instagram"]["hashtags"])       # inline tags were salvaged
+
+    def test_tiktok_and_youtube_carry_it_too(self):
+        from avp.llm import _clean_metadata, BRAND_TAG
+        out = _clean_metadata({"tiktok": {"caption": "y #space"}, "youtube": {"tags": ["space"]}})
+        self.assertIn(BRAND_TAG, out["tiktok"]["hashtags"])
+        self.assertIn(BRAND_TAG, out["tiktok"]["caption"])
+        self.assertIn("astrostackerpro", out["youtube"]["tags"])    # YouTube tags carry no '#'
 
 
 class StaleImagesAreNotManualOverrides(unittest.TestCase):
@@ -2105,24 +2211,192 @@ class ScriptLandsNearTheTarget(unittest.TestCase):
         self.assertGreater(asked, target)
 
     def test_a_typical_delivery_now_lands_on_target(self):
-        """88% of the inflated ask should be within a few percent of what we actually want."""
+        """The compensation must match the rate MEASURED ON THE CURRENT PROMPT — ~70%, not the 88%
+        read off builds that predate the hook and photographable-visual rules. Getting the first
+        draft near target is the only length lever that works: asked to lengthen, this model ignores
+        the target and doubles what it has, and asked to cut a quarter it shaves 1-3%."""
+        from avp.llm import length_verdict
         target, asked = self._asked()
-        self.assertAlmostEqual(asked * 0.88 / target, 1.0, delta=0.06)
+        self.assertEqual(length_verdict(round(asked * 0.70), target), "ok")
 
-    def test_the_guards_still_measure_against_the_real_target(self):
-        """Inflating the ask must not drag the guards with it, or a 58s target ships a 64s video."""
-        from avp import llm
-        src = inspect.getsource(llm.generate_script)
-        self.assertIn("words * 0.88", src)      # expand below
-        self.assertIn("words * 1.12", src)      # trim above
-        self.assertNotIn("words * ASK_INFLATION * 0.88", src)
+    def test_a_draft_inside_the_band_is_left_alone(self):
+        from avp.llm import length_verdict
+        for n in (105, 112, 116):
+            self.assertEqual(length_verdict(n, 112), "ok", n)
 
-    def test_the_two_guards_are_symmetric(self):
-        """They were 12% over / 20% under, and Olympus Mons fell in the gap at 82%."""
+    def test_the_dead_band_that_shipped_a_42_second_video_is_closed(self):
+        """The original guards trimmed 12% over but expanded only 20% under, so a draft at 81.7% of
+        target sat between them untouched and rendered 42.7s against a 58s target."""
+        from avp.llm import length_verdict
+        self.assertEqual(length_verdict(int(118 * 0.817), 118), "short")
+
+    def test_the_ceiling_is_tighter_than_the_floor(self):
+        """Deliberately asymmetric, and NOT the symmetry an earlier pass here enforced: making the
+        band ±12% closed the dead band but put the ceiling at 132 words, which renders 64s. Short is
+        a weaker video; long is a video that breaks the 60s rule, so they cannot share a tolerance."""
+        from avp.llm import length_verdict, LENGTH_FLOOR, LENGTH_HEADROOM_S
+        target = 112
+        over = target + LENGTH_HEADROOM_S * 2.33
+        under = target * LENGTH_FLOOR
+        self.assertLess(over - target, target - under)
+        self.assertEqual(length_verdict(132, 112), "long")
+
+    def test_the_ceiling_keeps_the_video_under_sixty_seconds(self):
+        """The ceiling is not a taste parameter. At the SLOWEST delivery measured (2.33 words/s) and
+        the LONGEST CTA measured (8.9s), plus ~0.8s of gaps, a script at the ceiling must still fit."""
+        from avp.llm import length_verdict
+        target = 112
+        ceiling = max(w for w in range(target, target * 2) if length_verdict(w, target) == "ok")
+        worst_case = ceiling / 2.33 + 8.9 + 0.8
+        self.assertLess(worst_case, 60.0, f"{ceiling} words renders {worst_case:.1f}s")
+
+    def test_an_expansion_that_overshoots_is_rejected(self):
+        """The real failure: asked to lengthen 92 words toward 118, the model returned 222 and the
+        old test — merely `new > cur` — accepted it. That is a 93s narration on a 58s target."""
+        from avp.llm import moves_closer
+        self.assertFalse(moves_closer(222, 92, 118))
+        self.assertTrue(moves_closer(110, 92, 118))
+
+    def test_a_trim_that_undershoots_is_rejected_too(self):
+        """Same rule in the other direction, which is the point of stating it as distance: a trim
+        from 200 down to 20 has overshot the 118 target by further than it started."""
+        from avp.llm import moves_closer
+        self.assertFalse(moves_closer(20, 200, 118))
+        self.assertTrue(moves_closer(130, 200, 118))
+
+    def test_a_rewrite_that_does_not_move_is_rejected(self):
+        from avp.llm import moves_closer
+        self.assertFalse(moves_closer(92, 92, 118))
+
+
+class AHungStageIsKilled(unittest.TestCase):
+    """A script stage sat 12h50m on an Ollama call that never answered — the client's own 10-minute
+    read timeout did not fire, because the Mac had slept and a socket blocked across a suspend does
+    not re-arm it. For an unattended 2-a-day run that is the worst possible failure: no error, no
+    output, the channel simply stops. Per-request timeouts cannot be the only defence."""
+
+    def test_every_stage_has_a_watchdog(self):
+        from avp.pipeline import BUILD_STAGES, STAGE_TIMEOUTS, DEFAULT_STAGE_TIMEOUT
+        for stage in list(BUILD_STAGES) + ["script"]:
+            self.assertGreater(STAGE_TIMEOUTS.get(stage, DEFAULT_STAGE_TIMEOUT), 0, stage)
+
+    def test_the_limits_leave_room_for_a_slow_but_working_stage(self):
+        """They exist to catch a hang, never to hurry real work: footage genuinely runs ~25 min."""
+        from avp.pipeline import STAGE_TIMEOUTS
+        self.assertGreaterEqual(STAGE_TIMEOUTS["footage"], 2 * 25 * 60)
+        self.assertGreaterEqual(STAGE_TIMEOUTS["script"], 2 * 16 * 60)
+
+    def test_a_hanging_stage_is_killed_and_reported_as_timed_out(self):
+        from avp import pipeline
+        slept = subprocess.Popen([sys.executable, "-c", "import time; time.sleep(60)"],
+                                 start_new_session=True)
+        try:
+            with mock.patch.object(pipeline.subprocess, "Popen", return_value=slept), \
+                 mock.patch.dict(pipeline.STAGE_TIMEOUTS, {"script": 0}):
+                rc = pipeline._run_stage_subprocess("script", "slug", "config.yaml", False)
+            self.assertEqual(rc, 124)                       # conventional "timed out"
+            self.assertIsNotNone(slept.poll(), "the hung stage must actually be dead")
+        finally:
+            if slept.poll() is None:
+                slept.kill()
+
+    def test_the_kill_reaches_the_whole_group_not_just_the_child(self):
+        """A stage spawns mflux and ffmpeg. Signalling only the direct child leaves those running
+        against the project directory — which is exactly how two builds once raced over one folder."""
+        from avp.pipeline import _kill_tree
+        parent = subprocess.Popen(
+            [sys.executable, "-c",
+             "import subprocess,sys,time;"
+             "c=subprocess.Popen([sys.executable,'-c','import time;time.sleep(60)']);"
+             "print(c.pid,flush=True);time.sleep(60)"],
+            stdout=subprocess.PIPE, text=True, start_new_session=True)
+        child_pid = int(parent.stdout.readline().strip())
+        _kill_tree(parent)
+        self.assertIsNotNone(parent.poll())
+        time.sleep(0.3)
+        with self.assertRaises(OSError):                   # the grandchild is gone too
+            os.kill(child_pid, 0)
+
+
+class LengthLoopConvergesOnTheRealModel(unittest.TestCase):
+    """End-to-end over the length loop, with a stub that reproduces what gemma actually does: asked to
+    LENGTHEN it overshoots by ~90% every time (measured 90 -> 172, 175, 181 across three re-rolls, so
+    a bias rather than noise), and asked to SHORTEN it lands accurately (142 -> 134, 140 -> 136).
+
+    The loop must therefore reach the band by expanding and THEN trimming. An earlier version rejected
+    the overshoot to protect the draft, which blocked that route and shipped 90 words as a 35s video."""
+
+    def _script(self, n_words, nseg=6):
+        per = max(1, n_words // nseg)
+        segs, left = [], n_words
+        for i in range(nseg):
+            take = left if i == nseg - 1 else min(per, left)
+            # Every token distinct: dedupe_segments drops a segment at >=0.9 similarity, and filler
+            # that differs by one word in fifteen collapses the whole script into a single segment.
+            segs.append({"narration": " ".join(f"w{i}x{j}" for j in range(max(1, take))),
+                         "visual": f"wide shot number {i}", "keywords": ["mars"]})
+            left -= take
+        return {"title": "t", "bridge_kind": "shoot", "cta_bridge": "b", "segments": segs}
+
+    def _client(self, start):
+        """A stub gemma: overshoots every expansion, trims accurately, records what it was asked."""
+        calls = []
+
+        class Stub:
+            def __init__(self, *a, **k):
+                pass
+
+            def chat(inner, system, user, **kw):  # noqa: N805
+                if "TOO SHORT" in user:
+                    calls.append("expand")
+                    cur = len(re.findall(r"\bword\b", user)) // 1
+                    prev = int(re.search(r"~(\d+) spoken words", user).group(1))
+                    return json.dumps(self._script(int(prev * 1.9)))
+                if "TOO LONG" in user:
+                    calls.append("trim")
+                    target = int(re.search(r"target is ~(\d+)", user).group(1))
+                    return json.dumps(self._script(target + 3))     # accurate, slightly over
+                calls.append("draft")
+                return json.dumps(self._script(start))
+
+        return Stub, calls
+
+    def test_it_expands_then_trims_into_the_band(self):
         from avp import llm
-        src = inspect.getsource(llm.generate_script)
-        self.assertAlmostEqual(1.12 - 1.0, 1.0 - 0.88, places=6)
-        self.assertNotIn("words * 0.8:", src)   # the old one-sided threshold is gone
+        Stub, calls = self._client(90)
+        with mock.patch.object(llm, "OllamaClient", Stub), \
+             mock.patch.object(llm, "_judge_best", lambda c, d, t, l: d[0]):
+            sc = llm.generate_script(llm.LLMConfig(), "Venus", seconds=48,
+                                     refine_passes=0, best_of=1)
+        words = sum(len(s.narration.split()) for s in sc.segments)
+        self.assertEqual(llm.length_verdict(words, 112), "ok", f"{words} words, calls={calls}")
+        self.assertEqual(calls.count("expand"), 1)      # one overshoot...
+        self.assertEqual(calls.count("trim"), 1)        # ...then one trim, not three re-rolls
+
+    def test_a_draft_already_in_band_is_not_touched(self):
+        from avp import llm
+        Stub, calls = self._client(112)
+        with mock.patch.object(llm, "OllamaClient", Stub), \
+             mock.patch.object(llm, "_judge_best", lambda c, d, t, l: d[0]):
+            llm.generate_script(llm.LLMConfig(), "Venus", seconds=48, refine_passes=0, best_of=1)
+        self.assertEqual(calls, ["draft"])              # no length pass at all
+
+    def test_it_never_ships_a_draft_worse_than_it_started_with(self):
+        """If every pass makes things worse, the closest draft seen must still be the one returned."""
+        from avp import llm
+
+        class AlwaysWorse:
+            def __init__(self, *a, **k):
+                pass
+
+            def chat(inner, system, user, **kw):  # noqa: N805
+                return json.dumps(self._script(400 if "TOO SHORT" in user or "TOO LONG" in user else 90))
+
+        with mock.patch.object(llm, "OllamaClient", AlwaysWorse), \
+             mock.patch.object(llm, "_judge_best", lambda c, d, t, l: d[0]):
+            sc = llm.generate_script(llm.LLMConfig(), "Venus", seconds=48, refine_passes=0, best_of=1)
+        words = sum(len(s.narration.split()) for s in sc.segments)
+        self.assertEqual(words, 90, "the 400-word drafts must never win")
 
 
 class RegistryMustNotContradictTheShot(unittest.TestCase):

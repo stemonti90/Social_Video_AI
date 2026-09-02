@@ -136,7 +136,9 @@ def stage_script(project: VideoProject, cfg: Config, topic: str | None) -> Scrip
     # target_seconds is the length of the WHOLE video. The spoken CTA + its silent tail take ~8s,
     # so the content budget hands them back — otherwise a 50s target lands at ~58s+ and a long draft
     # blows the 60s ceiling.
-    content_target = cfg.script.target_seconds - (8 if cfg.funnel.enabled else 0)
+    # 9, not 8: the spoken CTA plus its silent tail was measured at 6.4-8.9s across builds, and the
+    # budget has to hold at the WORST case or the video crosses 60s exactly when the bridge runs long.
+    content_target = cfg.script.target_seconds - (9 if cfg.funnel.enabled else 0)
     script = llm.generate_script(cfg.llm, topic, max(30, content_target),
                                  language=cfg.script.language, refine_passes=cfg.script.refine_passes,
                                  best_of=getattr(cfg.llm, "best_of", 1),
@@ -181,8 +183,20 @@ def stage_voice(project: VideoProject, cfg: Config) -> Script:
             do_trim = getattr(cfg.video, "trim_silence", True)
             for seg in script.segments:
                 out = adir / f"{seg.index:02d}.wav"   # canonical, edge-trimmed segment audio
-                if out.exists():   # idempotent: reuse cached audio (delete audio/ to re-synth)
+                # The cache is keyed by segment INDEX, so an edited line used to be spoken in the old
+                # words forever: a factual correction went into script.md, the stage logged "cached",
+                # and the wrong sentence stayed in the video. `--force` did not help — it re-runs the
+                # stage, and the stage skipped the file. So the words that were actually synthesised
+                # are recorded next to the audio, and the audio is reused only when they still match.
+                stamp = out.with_suffix(".txt")
+                spoken_before = stamp.read_text() if stamp.exists() else None
+                if out.exists() and spoken_before == seg.narration:
                     log.info("[%s] segment %d/%d (cached)", prov.name, seg.index, len(script.segments))
+                elif out.exists() and spoken_before is None:
+                    # Audio from before this stamp existed: keep it (re-voicing a whole back catalogue
+                    # on upgrade would be worse), but say so, because it cannot be verified.
+                    log.info("[%s] segment %d/%d (cached, unverified — no text stamp)",
+                             prov.name, seg.index, len(script.segments))
                 elif seg.kind == "cta":
                     # SPOKEN endcard: the bridge line is voiced, then a short silent tail keeps the
                     # card on screen long enough to read the button (a silent card felt glued-on).
@@ -217,6 +231,12 @@ def stage_voice(project: VideoProject, cfg: Config) -> Script:
                             raw.replace(out)
                     else:
                         raw.replace(out)
+                # Record the exact words this wav says, so an edited line is re-voiced next time
+                # instead of being served from cache in its old wording.
+                try:
+                    out.with_suffix(".txt").write_text(seg.narration)
+                except Exception as e:  # noqa: BLE001 — a failed stamp must not fail the build
+                    log.debug("Could not stamp %s (%s)", out.name, e)
                 seg_paths.append(out)
             ffmpeg.concat_audio(seg_paths, adir / "narration.wav", gap=cfg.video.segment_gap)
             engines.append(prov.name)
@@ -404,8 +424,16 @@ def _card_seconds(project: VideoProject, cfg: Config, script: Script, eng: str,
     if not words:
         return fallback
     t_hook = _phrase_start(words, _cta_hook(cfg))
-    t_cta = _phrase_start(words, _cta_narration(script, cfg))
-    if t_hook is None or t_cta is None or t_hook < t_cta:
+    # Where the CTA's own speech begins, from the MEASURED durations of everything before it rather
+    # than by finding the CTA's text in the transcript. Searching for the text was brittle in a way
+    # that only shows up on real audio: the aligner heard "Deimos" as "Dimos", one word inside a
+    # 20-word CTA, and the whole match failed — dropping the card back to its blind fixed tail, which
+    # is the exact defect this function exists to fix. The arithmetic cannot mishear anything, and it
+    # agrees with a successful text match to 0.05s (48.75 vs 48.80 on a real build).
+    gap = cfg.video.segment_gap or 0.0
+    content = [s for s in script.segments if s.kind != "cta"]
+    t_cta = sum((s.duration or 0) for s in content) + gap * len(content)
+    if t_hook is None or not t_cta or t_hook < t_cta:
         return fallback
     card = render_dur - (t_hook - t_cta) + CARD_LEAD
     # Clamped at both ends: long enough to read, but never so long it eats the bridge it belongs to.

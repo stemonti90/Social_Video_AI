@@ -19,7 +19,7 @@ log = get_logger("avp.llm")
 
 SYSTEM = """You are an elite scriptwriter for a faceless short-form video channel about \
 astronomy and space (TikTok / Reels / YouTube Shorts). These craft rules separate gripping from mediocre:
-- HOOK: the first 6-8 words must be a concrete, counterintuitive or NUMBER-led statement that stops the scroll. NEVER open with a question, "Imagine", "Have you ever", "Picture this", or "In the vast expanse".
+- HOOK: the first 6-8 words must RENAME the subject as something unsettling, not measure it. Across this channel's own videos the openers that worked all did that — Saturn's rings as "a graveyard of shattered moons", Cassini as "a suicide mission into Saturn's crushing atmosphere", a dead rover "still screaming into the void" — while every flat one was a measurement that happened to be large ("A human habitat travels at 28,000 kilometres per hour", "A single mountain towers over Everest by a factor of three"). A number is not a hook; it is evidence, and it belongs in segment 2 where it can land on a reader you have already stopped. Give the thing a violent, wrong, or too-human name and make the rest of the video earn it. NEVER open with a question, "Imagine", "Have you ever", "Picture this", or "In the vast expanse".
 - Exactly ONE new, specific, verifiable fact per content segment (a named object, a number, a comparison, a scale) — then LAND it: a second sentence that gives the consequence, the scale, or a vivid concrete image. State-and-move-on is too thin.
 - LENGTH: each content segment is ONE or TWO short spoken sentences, around the per-segment word count given below. Short beats are deliberate: each segment becomes its own shot, and a segment that runs long forces a single image to sit on screen too many seconds. HIT the requested total word count and segment count — coming in SHORT or running LONG are both failures.
 - DRAMATURGY, not exposition. A short-form script is not "what it is → what it did → why it matters" — that is a documentary and it loses the scroll. Build instead: a fact that shouldn't be possible → why it shouldn't be possible → how it is possible anyway → what that means. Explain, never list disconnected trivia, but let the explanation ARRIVE as the answer to a tension you opened, not as a lecture delivered up front.
@@ -116,11 +116,22 @@ Return JSON exactly like:
 # EN (af_heart) 2.37-2.46 · IT (if_sara) 2.60-2.65. A single 2.5 made English scripts overshoot
 # (a 50s target came out 60s of speech), so the budget is language-aware — slightly conservative
 # so the video lands UNDER the target rather than over it.
-# The writer's terseness, measured: median 88% of the per-segment word budget it is asked for,
-# across eleven builds. Asking for the target itself therefore lands short every time.
-ASK_INFLATION = 1.14
+# The writer's terseness, measured on THIS prompt: it returns ~70% of the word budget it is asked for
+# (77, 90, 92, 97 words against an ask of 128). An earlier reading of 88% came from builds before the
+# hook and photographable-visual rules went in — those rules made it terser, so the compensation had
+# to be re-measured rather than carried over.
+#
+# This is the only length lever that works. Editing does not: asked to LENGTHEN, this model ignores
+# the target and simply doubles what it already has (77->152, 90->172, 92->177, 100->211, all ~2.0x),
+# and asked to shorten by a quarter it shaves 1-3%. So there is no route from a 77-word draft to 112
+# — the guards below can only reject the overshoot and keep the short draft. Getting the FIRST draft
+# near target is therefore the whole game, and generation is where the model actually complies.
+ASK_INFLATION = 1.45
 
-_WPS = {"en": 2.35, "it": 2.60}
+# The SLOWEST delivery measured, not the average (2.33-2.61 en across builds). Budgeting at the
+# average makes half of all videos longer than planned, and long is the failure that breaks
+# the 60s rule.
+_WPS = {"en": 2.33, "it": 2.60}
 
 # How long one image holds the screen. This single number is the cut rhythm, and both ends of the
 # range were found by shipping the mistake: ~7s (four segments in a 50s video) reads as a television
@@ -325,7 +336,7 @@ def _draft_script_json(client: "OllamaClient", system: str, user: str,
 JUDGE_SYSTEM = (
     "You are the editor-in-chief of a top astronomy/space Shorts channel. You receive several candidate "
     "scripts for the SAME video and must pick the SINGLE best one to publish, judging in this order: "
-    "(1) HOOK — the first line stops the scroll with a concrete, number-led or counterintuitive fact "
+    "(1) HOOK — the first line renames the subject as something unsettling rather than measuring it "
     "(NOT a question, NOT 'imagine'); (2) exactly one DISTINCT verifiable fact per segment, zero "
     "repetition or filler; (3) a curiosity loop opened early and paid off; (4) escalation to a single "
     "peak 'wow'; (5) concrete nouns over adjectives and ZERO cliche; (6) factual plausibility — penalise "
@@ -353,6 +364,37 @@ def _judge_best(client: "OllamaClient", drafts: list[dict], topic: str, language
     except Exception as e:  # noqa: BLE001 — a bad judge must never lose a usable draft
         log.warning("Draft judge failed (%s) — keeping draft 1.", e)
     return drafts[0]
+
+
+LENGTH_FLOOR = 0.88          # below this the video is thin
+LENGTH_HEADROOM_S = 2.0      # seconds of slack above the target before a draft counts as too long
+
+
+def length_verdict(words_now: int, target: int, wps: float = 2.33) -> str:
+    """"ok" | "long" | "short" — whether a draft needs a length pass at all.
+
+    The band is DELIBERATELY not symmetric, and the reason is measured. A short script is a weaker
+    video; a long one is a video that breaks the 60s rule the channel publishes under, so the two
+    failures do not cost the same and must not get the same tolerance. A symmetric ±12% band put the
+    ceiling at 132 words, which renders 64s.
+
+    Above the floor it is expressed in SECONDS, not percent, because that is the thing the ceiling is
+    really about: `LENGTH_HEADROOM_S` past the target, converted at the SLOWEST rate observed, since
+    underestimating duration is the direction that breaks the ceiling. Measured across three builds
+    the delivery runs 2.33-2.61 words/s — a ~6% spread the word count cannot see, which is why the
+    target aims below the limit instead of at it."""
+    if target <= 0:
+        return "ok"
+    if words_now < target * LENGTH_FLOOR:
+        return "short"
+    return "long" if words_now > target + LENGTH_HEADROOM_S * wps else "ok"
+
+
+def moves_closer(new: int, cur: int, target: int) -> bool:
+    """Whether a rewrite is worth keeping. "Longer than before" is not progress: asked to lengthen a
+    92-word draft toward 118, the model returned 222 — further from the target than it started, and
+    accepted anyway, because the old test was only `new > cur`."""
+    return abs(new - target) < abs(cur - target)
 
 
 def generate_script(cfg: LLMConfig, topic: str, seconds: int = 60, language: str = "en",
@@ -421,53 +463,72 @@ def generate_script(cfg: LLMConfig, topic: str, seconds: int = 60, language: str
             log.warning("Script refine pass %d failed (%s) — keeping current draft.", n + 1, e)
             break
 
-    # Length guard: the model tends to write terse, so a script can land well under the target length
-    # (a 75-90s target coming in at ~40s). If so, run ONE expand pass that lengthens it with richer
-    # narration + more DISTINCT facts. Never regresses (kept only if it parses and is genuinely longer).
     def _nwords(d: dict) -> int:
         return sum(len(str(s.get("narration", "")).split()) for s in _segment_dicts(d))
-    # Symmetric guard. The old code only EXPANDED a short draft, so an over-budget draft sailed
-    # through and the video ran past the 60s ceiling (a 50s target produced 60.3s of speech). Trim
-    # first, then expand — a script is never both.
-    if _nwords(data) > words * 1.12:
+    # Bring the draft into the band [0.88, 1.12] x target. This used to be two one-shot guards, trim
+    # then expand, on the theory that a script is never both. It becomes both the moment an expansion
+    # overshoots: asked to lengthen a 92-word draft toward 118, the model returned 222, and with trim
+    # already behind it nothing pulled it back — a 93s narration against a 58s target.
+    #
+    # So: loop, and accept a rewrite ONLY when it moves TOWARD the target. "Longer than before" is not
+    # progress if it overshoots by more than the original undershot, and that test is what the old
+    # `_nwords(expanded) > cur` was missing. Two passes is enough to go long-then-short or the reverse;
+    # Three attempts, not two: a rejected rewrite now re-rolls instead of giving up, so the budget has
+    # to cover "overshoot, re-roll, land" without letting a hopeless draft burn the whole night.
+    best = data
+    for _ in range(3):
         cur = _nwords(data)
-        try:
-            trim_user = (
+        verdict = length_verdict(cur, words)
+        if verdict == "ok":
+            best = data
+            break
+        long_draft = verdict == "long"
+        if long_draft:
+            fix_user = (
                 f"This script is TOO LONG: ~{cur} spoken words, but the target is ~{words} words across "
                 f"{nseg}-{nseg2} segments. Tighten it to the target WITHOUT losing facts: cut filler, "
                 f"redundant qualifiers and any restated idea, and shorten sentences. Keep the hook, keep "
                 f"every distinct fact, keep the same JSON shape.\n\nCurrent JSON:\n"
-                + json.dumps(data, ensure_ascii=False)
-            )
-            raw = client.chat(system, trim_user, temperature=0.4, num_predict=script_cap)
-            cand = _extract_json(raw) if raw else None
-            if isinstance(cand, dict) and _segment_dicts(cand) and _nwords(cand) < cur:
-                log.info("Length guard: trimmed %d → %d words (target ~%d).",
-                         cur, _nwords(cand), words)
-                data = cand
-        except Exception as e:  # noqa: BLE001 — a failed trim just keeps the longer draft
-            log.warning("Length guard (trim) failed (%s) — keeping the draft.", e)
-    # The two thresholds must be SYMMETRIC, and they were not: trim fired 12% over, expand only 20%
-    # under. Olympus Mons came in at 81.7% of target — inside that dead band — so nothing fired and
-    # the video rendered at 42.7s against a 58s target. Short is the worse failure here: over-length
-    # is caught again by the 60s ceiling downstream, while short just quietly ships a thin video.
-    if _nwords(data) < words * 0.88:
-        cur = _nwords(data)
-        try:
-            expand_user = (
+                + json.dumps(data, ensure_ascii=False))
+        else:
+            fix_user = (
                 f"This script is TOO SHORT: ~{cur} spoken words, but the target is ~{words} words across "
-                f"{nseg}-{nseg2} segments. Lengthen it to hit the target: extend each narration to two full "
+                f"{nseg}-{nseg2} segments. Land BETWEEN {int(words * LENGTH_FLOOR)} and "
+                f"{int(words + LENGTH_HEADROOM_S * 2.33)} words — a draft above that ceiling is rejected exactly "
+                f"like one below the floor, and overshooting is the more common failure. Aim for "
+                f"~{words}. Extend each narration to two full "
                 f"sentences (the fact + its consequence/scale/image) and/or add segments with NEW distinct "
                 f"real facts (history, mechanism, scale, discovery, what's next). Keep the same hook, zero "
-                f"repetition, zero filler. Return the longer STRICT JSON only.\n\nCurrent draft:\n"
-                f"{json.dumps(data, ensure_ascii=False)}")
-            expanded = _extract_json(client.chat(system, expand_user, temperature=0.6, num_predict=script_cap))
-            if _segment_dicts(expanded) and _nwords(expanded) > cur:
-                log.info("Length guard: expanded script %d → %d words (target ~%d).",
-                         cur, _nwords(expanded), words)
-                data = expanded
-        except Exception as e:  # noqa: BLE001 — must never break a usable script
-            log.warning("Length expand failed (%s) — keeping current.", e)
+                f"repetition, zero filler. Return the STRICT JSON only.\n\nCurrent draft:\n"
+                + json.dumps(data, ensure_ascii=False))
+        try:
+            cand = _extract_json(client.chat(system, fix_user,
+                                             temperature=0.4 if long_draft else 0.6,
+                                             num_predict=script_cap))
+        except Exception as e:  # noqa: BLE001 — a failed pass just keeps the draft we have
+            log.warning("Length guard (%s) failed (%s) — keeping the closest draft.",
+                        "trim" if long_draft else "expand", e)
+            break
+        if not (isinstance(cand, dict) and _segment_dicts(cand)):
+            log.warning("Length guard returned nothing usable — keeping the closest draft.")
+            break
+        # ALWAYS feed the candidate forward, even when it overshot, and keep the closest draft seen
+        # separately. Rejecting an overshoot outright was the mistake: measured over three re-rolls
+        # this model expands 90 words to 172, 175, 181 — a consistent ~+90% bias, not noise, so
+        # re-rolling never lands in band. But it TRIMS accurately (142→134, 140→136), so the route
+        # that works is expand-then-trim, and refusing the overshoot is exactly what blocked it.
+        # `best` is the safety net: a pass that makes things worse can never be what we ship.
+        new = _nwords(cand)
+        log.info("Length guard: %s %d → %d words (target ~%d).",
+                 "trimmed" if long_draft else "expanded", cur, new, words)
+        data = cand
+        if moves_closer(new, _nwords(best), words):
+            best = cand
+
+    data = best
+    if length_verdict(_nwords(data), words) != "ok":
+        log.warning("Length guard: settled at %d words against a target of ~%d — the video will be "
+                    "off-length.", _nwords(data), words)
 
     segments = [
         Segment(
@@ -529,8 +590,22 @@ Return JSON exactly:
 {{
   "youtube": {{"title": "punchy title <=80 chars", "description": "2-3 sentence summary, then a new line: 'Get {app}: {url}'", "tags": ["10-15 short lowercase tags"]}},
   "tiktok": {{"caption": "one-line hook + 4-6 hashtags including #astronomy #space"}},
-  "instagram": {{"caption": "one-line hook + 5-8 hashtags"}}
-}}"""
+  "instagram": {{"caption": "one-line hook, then a blank line, then the hashtags"}},
+  "instagram_hashtags": ["12-15 tags, LAYERED, see below"]
+}}
+
+The Instagram hashtags decide whether anyone outside the followers ever sees the reel, and a flat
+list of huge generic tags is the one arrangement that guarantees they will not: a new account cannot
+rank in #space, so those tags are decoration. Build FOUR tiers instead, in this order:
+  - 2-3 BROAD (#astronomy #space) — context for the algorithm, not reach,
+  - 4-5 MID, specific to this video's subject and sized where an account can actually place
+    (#planetaryscience #marsexploration #solarsystem),
+  - 4-5 NARROW, the exact object and mission by name (#vallesmarineris #marsreconnaissanceorbiter) —
+    small audiences, but this is the only tier where the reel can reach the top of a feed,
+  - 1-2 COMMUNITY where the people who own telescopes actually gather (#astrophotography
+    #backyardastronomy), because this channel exists to reach them.
+All lowercase, no spaces, no duplicates, no banned or engagement-bait tags (#followforfollow, #f4f,
+#viral, #fyp). Every NARROW tag must name something the narration actually discussed."""
 
 
 # A stray apostrophe INSIDE a word that isn't a real English contraction (gemma once wrote "Earth'ally"
@@ -569,7 +644,71 @@ def _clean_metadata(data: dict) -> dict:
         d = data.get(plat)
         if isinstance(d, dict) and "caption" in d:
             d["caption"] = _clean_text(d["caption"])
+    _merge_instagram_hashtags(data)
+    _ensure_brand_tag(data)
     return data
+
+
+_TAG = re.compile(r"#\w+")
+
+
+BRAND_TAG = "#astrostackerpro"
+
+
+def _ensure_brand_tag(data: dict) -> None:
+    """Every platform's tag list carries the brand, whatever the model produced."""
+    tt = data.get("tiktok")
+    if isinstance(tt, dict):
+        tags = [str(t).strip().lower() for t in (tt.get("hashtags") or []) if str(t).strip()]
+        cap = tt.get("caption", "") or ""
+        if BRAND_TAG not in tags and BRAND_TAG not in cap.lower():
+            tags.append(BRAND_TAG)
+            tt["caption"] = f"{cap.rstrip()} {BRAND_TAG}".strip()
+        tt["hashtags"] = tags
+    yt = data.get("youtube")
+    if isinstance(yt, dict):
+        tags = [str(t).strip().lower() for t in (yt.get("tags") or []) if str(t).strip()]
+        if BRAND_TAG.lstrip("#") not in tags:
+            tags.append(BRAND_TAG.lstrip("#"))          # YouTube tags carry no '#'
+        yt["tags"] = tags
+
+
+def _merge_instagram_hashtags(data: dict) -> None:
+    """Fold the layered tag list into the Instagram caption, deterministically.
+
+    The model returns the tiers as their own JSON array, which is the shape it gets right; asking it
+    to also lay them out inside the caption is the part it does not. So the layout is done here —
+    caption, blank line, tags — and publish.py keeps reading a single `caption` field.
+
+    Any tags the model put inline anyway are stripped first, so a tag cannot appear twice, and the
+    list is deduplicated case-insensitively while keeping tier order: the narrow tags are the ones
+    that can actually rank, and they must not be the ones dropped at the 30-tag ceiling.
+    """
+    ig = data.get("instagram")
+    tags = data.pop("instagram_hashtags", None)
+    if not isinstance(ig, dict):
+        return
+    if not isinstance(tags, list):
+        tags = _TAG.findall(ig.get("caption", "") or "")   # salvage whatever it put inline
+    seen, ordered = set(), []
+    for t in tags:
+        t = str(t).strip().lower()
+        if not t:
+            continue
+        t = "#" + _TAG.sub("", t).lstrip("#").strip() if not t.startswith("#") else t
+        t = "#" + "".join(ch for ch in t[1:] if ch.isalnum() or ch == "_")
+        if len(t) > 1 and t not in seen:
+            seen.add(t)
+            ordered.append(t)
+    # The brand tag is a hard requirement on every post and is added HERE, not asked of the model:
+    # a prompt is advice and this must not depend on it. Appended last so it never displaces a
+    # narrow tag at the 30-tag ceiling, and skipped if the model already put it in.
+    if BRAND_TAG not in seen:
+        ordered.append(BRAND_TAG)
+    body = _TAG.sub("", ig.get("caption", "")).strip()          # drop any inline tags
+    body = re.sub(r"\s{2,}", " ", body).strip(" \n")
+    ig["caption"] = f"{body}\n\n{' '.join(ordered[:30])}"      # Instagram's own ceiling is 30
+    ig["hashtags"] = ordered[:30]
 
 
 BRAINSTORM_SYSTEM = (
