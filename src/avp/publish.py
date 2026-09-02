@@ -214,7 +214,7 @@ def stage_publish(project: VideoProject, cfg: Config, go: bool = False,
         "platform": _canon(p),
         "video": str(video),
         "caption": _caption_for(p, meta),
-        "schedule": when or "now",
+        "schedule": (when or "now") if (cfg.publish.backend or "native").lower() != "native" else "now",
         "disclose_ai": disclose_ai,
         "settings": _settings_for(p, meta, cfg.publish, disclose_ai),
     } for p in plats]
@@ -230,6 +230,15 @@ def stage_publish(project: VideoProject, cfg: Config, go: bool = False,
         return plan
 
     if (cfg.publish.backend or "native").lower() == "native":
+        # `when` is honoured by Postiz, which holds a queue. The native path has nowhere to hold one:
+        # Instagram's Content Publishing API creates a container and publishes it, with no "publish
+        # at" — so a caller that asked for a slot gets an immediate post instead. Say so out loud
+        # rather than logging "scheduled" over a post that already went out; the way to space posts
+        # on this backend is to run the pipeline twice, not to ask it to wait.
+        if when:
+            log.warning("Native backend posts IMMEDIATELY — the requested slot (%s) cannot be "
+                        "honoured, because Instagram's API has no scheduled publish. Run the "
+                        "pipeline at the time you want the post to go out.", when)
         return _publish_native(plan, video, meta, cfg, disclose_ai, project)
 
     client = PostizClient(cfg.publish)

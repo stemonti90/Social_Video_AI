@@ -4,12 +4,23 @@
 set -euo pipefail
 
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
-HOUR="${1:-8}"; MINUTE="${2:-0}"
+# Fire times as HH:MM arguments, one per video. Two runs a day beats one run making two videos,
+# and the reason is the publisher: the native backend posts IMMEDIATELY (Instagram's API has no
+# scheduled publish), so a single batch would push both videos out back to back. Spacing has to come
+# from WHEN the pipeline runs. Generation takes ~25 min, so aim each run ~40 min before the slot.
+TIMES=("${@:-12:20 18:20}")
+[ $# -gt 0 ] && TIMES=("$@")
 LABEL="com.astrostacker.auto"
 PLIST="$HOME/Library/LaunchAgents/$LABEL.plist"
 
 mkdir -p "$HOME/Library/LaunchAgents" "$ROOT/projects/_auto"
 chmod +x "$ROOT/deploy/auto/run.sh"
+
+INTERVALS=""
+for t in "${TIMES[@]}"; do
+  h="${t%%:*}"; m="${t##*:}"
+  INTERVALS="$INTERVALS<dict><key>Hour</key><integer>$((10#$h))</integer><key>Minute</key><integer>$((10#$m))</integer></dict>"
+done
 
 cat > "$PLIST" <<PL
 <?xml version="1.0" encoding="UTF-8"?>
@@ -17,7 +28,7 @@ cat > "$PLIST" <<PL
 <plist version="1.0"><dict>
   <key>Label</key><string>$LABEL</string>
   <key>ProgramArguments</key><array><string>$ROOT/deploy/auto/run.sh</string></array>
-  <key>StartCalendarInterval</key><dict><key>Hour</key><integer>$HOUR</integer><key>Minute</key><integer>$MINUTE</integer></dict>
+  <key>StartCalendarInterval</key><array>$INTERVALS</array>
   <key>StandardOutPath</key><string>$ROOT/projects/_auto/launchd.out.log</string>
   <key>StandardErrorPath</key><string>$ROOT/projects/_auto/launchd.err.log</string>
   <key>RunAtLoad</key><false/>
@@ -26,7 +37,7 @@ PL
 
 launchctl unload "$PLIST" 2>/dev/null || true
 launchctl load "$PLIST"
-printf '✓ installed %s — runs daily at %02d:%02d local\n' "$LABEL" "$HOUR" "$MINUTE"
+printf '✓ installed %s — runs daily at %s local\n' "$LABEL" "${TIMES[*]}"
 echo "  test now:  $ROOT/deploy/auto/run.sh"
 echo "  logs:      $ROOT/projects/_auto/launchd.{out,err}.log"
 echo "  uninstall: launchctl unload \"$PLIST\" && rm \"$PLIST\""
