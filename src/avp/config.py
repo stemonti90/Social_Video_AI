@@ -141,6 +141,14 @@ class VideoConfig:
     image_width: int = 720                  # 720x1280 ≈ 74s/image; 512x896 ≈ 25s (upscaled at render)
     image_height: int = 1280
     image_seed: int = 100
+    # People in the frame. The generator puts a lone figure on a ridge "for scale" in ~1/4 of its
+    # landscapes and no prompt wording removes it (measured). Candidates are screened with
+    # torchvision's COCO detector and the peopled ones excluded; if that leaves too few, up to
+    # `image_people_retries` extra candidates are generated. Threshold from measurement: real figures
+    # scored >= 0.991, clean frames <= 0.637.
+    image_reject_people: bool = True
+    image_people_threshold: float = 0.9
+    image_people_retries: int = 2
     image_timeout: int = 900                # per-image cap, so a hung generator can't stall a build
 
 

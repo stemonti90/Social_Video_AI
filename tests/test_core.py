@@ -6,6 +6,7 @@ import inspect
 import os
 import sys
 import json
+import pathlib
 import re
 import subprocess
 import requests
@@ -2566,6 +2567,70 @@ class SegmentwiseFit(unittest.TestCase):
         src = inspect.getsource(llm.generate_script)
         self.assertIn('fit or "whole"', src)
         self.assertIn("fit_segments(client, data, words, language)", src)
+
+
+class NoPeopleAmongTheCandidates(unittest.TestCase):
+    """The generator puts a lone figure on a ridge "for scale" in ~1/4 of its landscapes, and no
+    prompt wording removes it (measured: negative and positive phrasing, same seeds, same figures).
+    A clean candidate existed in every pair generated, so the fix is to LOOK — torchvision's COCO
+    detector, measured to separate perfectly (figures >= 0.991, clean <= 0.637) — and pick it."""
+
+    def _run(self, people_by_index, n_cands=2, keep=1, retries=2, reject=True, detector=True):
+        from avp import imagegen
+        made = []
+
+        def fake_mflux(prompt, out, seed, cfg):
+            out.write_bytes(b"png"); made.append(out.name); return True
+
+        def fake_people(paths):
+            if not detector:
+                return None
+            return [people_by_index.get(int(pathlib.Path(x).stem.split("_c")[1]), 0.0) for x in paths]
+
+        cfg = Config.load(None)
+        cfg.video.image_candidates = n_cands
+        cfg.video.image_people_retries = retries
+        cfg.video.image_reject_people = reject
+        cfg.video.max_images_per_segment = 3
+        with tempfile.TemporaryDirectory() as tmp, \
+             mock.patch.object(imagegen, "available", return_value=True), \
+             mock.patch.object(imagegen, "_run_mflux", side_effect=fake_mflux), \
+             mock.patch.object(imagegen, "person_scores", side_effect=fake_people), \
+             mock.patch.object(imagegen, "clip_scores", return_value=None), \
+             mock.patch.object(imagegen, "images_for_segment", return_value=keep):
+            seg = Segment(index=1, narration="n", visual="wide shot, a ridge", keywords=["mars"], duration=5.0)
+            res = imagegen.generate_for_segment(seg, Script(title="t", topic="Mars", segments=[]),
+                                                cfg, pathlib.Path(tmp) / "01.png")
+        return res, made
+
+    def test_a_peopled_candidate_is_dropped_when_a_clean_one_exists(self):
+        res, made = self._run({0: 0.99, 1: 0.0})
+        self.assertEqual(res["candidates"], 1)                 # the peopled one is gone
+        self.assertEqual(len(made), 2)                          # no extra generation was needed
+        self.assertTrue(all(x < 0.9 for x in res["people"]))
+
+    def test_when_every_candidate_has_a_person_another_is_generated(self):
+        res, made = self._run({0: 0.99, 1: 0.98, 2: 0.0})
+        self.assertEqual(len(made), 3)                          # one extra candidate
+        self.assertEqual(res["candidates"], 1)
+        self.assertEqual(res["people"], [0.0])
+
+    def test_after_the_retries_the_least_peopled_is_kept_with_a_warning(self):
+        with self.assertLogs("avp.imagegen", level="WARNING") as cm:
+            res, made = self._run({0: 0.99, 1: 0.95, 2: 0.97, 3: 0.93}, retries=2)
+        self.assertEqual(len(made), 4)                          # 2 initial + 2 retries, then stop
+        self.assertEqual(res["people"][0], 0.93)               # least peopled first
+        self.assertTrue(any("every candidate shows a person" in m for m in cm.output))
+
+    def test_screening_can_be_switched_off(self):
+        res, made = self._run({0: 0.99, 1: 0.99}, reject=False)
+        self.assertEqual(len(made), 2)
+        self.assertIsNone(res["people"])
+
+    def test_no_detector_means_no_screening_and_no_failure(self):
+        res, made = self._run({0: 0.99}, detector=False)
+        self.assertEqual(res["candidates"], 2)
+        self.assertIsNone(res["people"])
 
 
 class RegistryMustNotContradictTheShot(unittest.TestCase):

@@ -270,6 +270,57 @@ def prefers_archive(seg: Segment, script: Script) -> bool:
     return _bucket(f"{subject} {kw}") in ARCHIVE_FIRST
 
 
+# --------------------------------------------------------------------------- people in the frame
+_DET: dict = {}
+PEOPLE_THRESHOLD = 0.9    # measured: every real figure scored >= 0.991, every clean frame <= 0.637
+
+
+def _person_detector():
+    """torchvision's COCO Faster R-CNN — already installed, BSD-licensed, no new dependency. Loaded
+    lazily and cached on success (a failure is not cached: see _clip for why). min_size is large
+    because the figures we chase are ~15px tall in a 1280px frame; at that size CLIP could not see
+    them at all (measured at four tile grids), this model separates them perfectly."""
+    if "model" in _DET:
+        return _DET["model"], _DET["person"]
+    try:
+        from torchvision.models import detection as D
+        w = D.FasterRCNN_ResNet50_FPN_V2_Weights.DEFAULT
+        model = D.fasterrcnn_resnet50_fpn_v2(weights=w, box_score_thresh=0.05,
+                                             min_size=1280, max_size=1600).eval()
+        _DET["model"], _DET["person"] = model, w.meta["categories"].index("person")
+        return model, _DET["person"]
+    except Exception as e:  # noqa: BLE001 — no detector means no filtering, never a failed build
+        log.warning("Person detector unavailable (%s) — candidates will not be screened for people.", e)
+        return None, None
+
+
+def person_scores(paths: list) -> list[float] | None:
+    """Highest 'person' confidence in each image (0..1), or None when the detector is unavailable.
+
+    Why this exists: this image model puts a lone figure on a ridge "for scale" in roughly a quarter
+    of its landscape frames — on a faceless channel, about worlds nobody has stood on. Nothing in the
+    prompt removes it (negative and positive phrasing both measured at zero effect, same seeds, same
+    figures). But a clean candidate existed in every pair generated, so the fix is not to ask
+    better; it is to LOOK, and pick the candidate without the person."""
+    model, person = _person_detector()
+    if model is None:
+        return None
+    try:
+        import torch
+        from PIL import Image
+        from torchvision.transforms.functional import to_tensor
+        out: list[float] = []
+        with torch.no_grad():
+            for p in paths:
+                res = model([to_tensor(Image.open(p).convert("RGB"))])[0]
+                sc = [float(s) for s, l in zip(res["scores"], res["labels"]) if int(l) == person]
+                out.append(max(sc) if sc else 0.0)
+        return out
+    except Exception as e:  # noqa: BLE001
+        log.warning("Person screening failed (%s) — candidates not screened.", e)
+        return None
+
+
 # --------------------------------------------------------------------------- CLIP selection
 _CLIP: dict = {}
 _CLIP_TRIES = 3          # give up ranking only after this many genuine load failures
@@ -366,6 +417,43 @@ def generate_for_segment(seg: Segment, script: Script, cfg, dest: Path,
     if not cands:
         return None
 
+    # Screen for people BEFORE ranking. A candidate with a figure in it is not "a bit worse" — on a
+    # faceless channel about uninhabited worlds it is wrong — so it is excluded, and if that leaves
+    # too few, more candidates are generated with fresh seeds (measured: a clean one existed in
+    # every pair). Only if every attempt has a person do we fall back to the least-peopled one,
+    # and say so loudly.
+    people: list[float] = []
+    if getattr(cfg.video, "image_reject_people", True):
+        thr = float(getattr(cfg.video, "image_people_threshold", PEOPLE_THRESHOLD))
+        retries = int(getattr(cfg.video, "image_people_retries", 2))
+        people = person_scores(cands) or []
+        extra = 0
+        while people and sum(1 for x in people if x < thr) < keep and extra < retries:
+            j = n + extra
+            c = work / f"{seg.index:02d}_c{j}.png"
+            shot = SHOTS[(j + seg.index) % len(SHOTS)]
+            log.info("Segment %d: %d of %d candidates show a person — generating another",
+                     seg.index, sum(1 for x in people if x >= thr), len(cands))
+            if _run_mflux(build_prompt(seg, script, shot), c, base_seed + j * 977 + seg.index * 31, cfg):
+                cands.append(c)
+                people += person_scores([c]) or [0.0]
+            extra += 1
+        if people:
+            clean = [i for i, x in enumerate(people) if x < thr]
+            if len(clean) >= keep:
+                if len(clean) < len(cands):
+                    log.info("Segment %d: dropped %d candidate(s) with a person in frame.",
+                             seg.index, len(cands) - len(clean))
+                cands = [cands[i] for i in clean]
+                people = [people[i] for i in clean]
+            else:
+                order_p = sorted(range(len(cands)), key=lambda i: people[i])
+                log.warning("Segment %d: every candidate shows a person (best p=%.2f) — keeping the "
+                            "least peopled; consider regenerating this segment.",
+                            seg.index, people[order_p[0]])
+                cands = [cands[i] for i in order_p]
+                people = [people[i] for i in order_p]
+
     # Score against the segment's MEANING (visual intent + keywords), not the styled prompt: every
     # candidate shares the style tail, so it carries no signal for choosing between them.
     meaning = (seg.visual or "") + " " + " ".join(str(k) for k in (seg.keywords or []) if k)
@@ -383,4 +471,5 @@ def generate_for_segment(seg: Segment, script: Script, cfg, dest: Path,
              seg.index, len(kept), "" if len(kept) == 1 else "s", len(cands), method,
              f", best {scores[kept[0]]:.3f}" if scores else "")
     return {"prompt": prompt, "candidates": len(cands), "kept": len(kept),
-            "selection": method, "scores": scores, "chosen": kept[0]}
+            "selection": method, "scores": scores, "chosen": kept[0],
+            "people": people or None}
