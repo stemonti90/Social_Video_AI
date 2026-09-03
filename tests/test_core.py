@@ -2130,6 +2130,15 @@ class NativeTargetsAndTikTokSelfUnblock(unittest.TestCase):
             self.assertEqual(auto.connected_platforms(self._cfg(["instagram", "tiktok"])),
                              {"instagram", "tiktok"})
 
+    def test_the_operator_may_choose_to_stock_tiktok_while_restricted(self):
+        """auto.tiktok_restricted_ok: post now at SELF_ONLY and flip later, rather than wait."""
+        from avp import auto
+        cfg = self._cfg(["instagram", "tiktok"])
+        cfg.auto.tiktok_restricted_ok = True
+        with mock.patch("avp.social.tokens.get", lambda p: {"access_token": "t"}), \
+             mock.patch.object(auto, "tiktok_can_post_publicly", return_value=False):
+            self.assertEqual(auto.connected_platforms(cfg), {"instagram", "tiktok"})
+
     def test_public_posting_is_read_from_creator_info(self):
         """The decision is TikTok's own privacy_level_options, nothing inferred."""
         from avp import auto

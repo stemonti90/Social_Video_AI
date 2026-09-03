@@ -189,9 +189,19 @@ def _native_connected(cfg: Config) -> set[str]:
         if not rec:
             continue
         if canon == "tiktok" and not tiktok_can_post_publicly(cfg, rec):
-            log.info("TikTok is connected but may not post publicly yet (app in review or account "
-                     "private) — leaving it out of today's targets.")
-            continue
+            # While the app is in review TikTok accepts the post but forces SELF_ONLY — visible to
+            # the account owner alone, flippable to public in the app after approval. Whether that
+            # is worth doing is the operator's call: `auto.tiktok_restricted_ok` says "yes, stock
+            # the account now". Off, TikTok waits for PUBLIC_TO_EVERYONE. Either way the log says
+            # which happened, because a hidden post that looks published is the failure to avoid.
+            if getattr(cfg.auto, "tiktok_restricted_ok", False):
+                log.warning("TikTok cannot post publicly yet — posting anyway at the most open level "
+                            "it allows (SELF_ONLY until the app clears review). Flip visibility in "
+                            "the app after approval.")
+            else:
+                log.info("TikTok is connected but may not post publicly yet (app in review or "
+                         "account private) — leaving it out of today's targets.")
+                continue
         found.add(canon)
     return found
 

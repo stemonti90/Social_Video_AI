@@ -204,6 +204,10 @@ class AutoConfig:
     refill_threshold: int = 6            # refill the queue when it holds fewer than this many topics
     refill_batch: int = 12               # how many topics the LLM proposes per refill
     theme: str = "space and astronomy"   # editorial theme the LLM brainstorms topics within
+    # While the TikTok app is in review, TikTok accepts posts but forces SELF_ONLY (owner-only).
+    # True = post anyway and stock the account, flipping each to public in the app after approval;
+    # False = leave TikTok out until creator_info offers PUBLIC_TO_EVERYONE.
+    tiktok_restricted_ok: bool = False
 
 
 @dataclass
