@@ -2201,7 +2201,7 @@ class TranslatedSubtitlesAreClauses(unittest.TestCase):
         from avp import stages
         src = inspect.getsource(stages._assemble_engine)
         i = src.index("want_translated and sub_json")
-        block = src[i:i + 1200]
+        block = src[i:src.index("elif cap_json.exists()", i)]    # the translated branch, whole
         self.assertIn("render_phrase_pngs", block)
         self.assertNotIn("distribute_words", block)
 
