@@ -22,12 +22,16 @@ for t in "${TIMES[@]}"; do
   INTERVALS="$INTERVALS<dict><key>Hour</key><integer>$((10#$h))</integer><key>Minute</key><integer>$((10#$m))</integer></dict>"
 done
 
+# /bin/bash FIRST, the script as its argument — never the script as the program. launchd running a
+# file that lives under ~/Desktop directly fails with "Operation not permitted" (exit 32256): the
+# first scheduled run of the channel died that way and no video went out. The worker agent has run
+# from this same folder for days, and the only difference was exactly this. Mirror it.
 cat > "$PLIST" <<PL
 <?xml version="1.0" encoding="UTF-8"?>
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
 <plist version="1.0"><dict>
   <key>Label</key><string>$LABEL</string>
-  <key>ProgramArguments</key><array><string>$ROOT/deploy/auto/run.sh</string></array>
+  <key>ProgramArguments</key><array><string>/bin/bash</string><string>$ROOT/deploy/auto/run.sh</string></array>
   <key>StartCalendarInterval</key><array>$INTERVALS</array>
   <key>StandardOutPath</key><string>$ROOT/projects/_auto/launchd.out.log</string>
   <key>StandardErrorPath</key><string>$ROOT/projects/_auto/launchd.err.log</string>
