@@ -1463,7 +1463,10 @@ class ClipFailureIsRetried(unittest.TestCase):
         calls = {"n": 0}
 
         def boom(*a, **k):
-            calls["n"] += 1
+            # Each attempt now tries the local cache first and the network second; count ATTEMPTS
+            # (the online call), not raw calls, so the cap under test stays what it means.
+            if not k.get("local_files_only"):
+                calls["n"] += 1
             raise RuntimeError("out of memory")
 
         with mock.patch.dict("sys.modules", {"transformers": mock.Mock(
@@ -2567,6 +2570,19 @@ class SegmentwiseFit(unittest.TestCase):
         src = inspect.getsource(llm.generate_script)
         self.assertIn('fit or "whole"', src)
         self.assertIn("fit_segments(client, data, words, language)", src)
+
+
+class CachedModelsLoadWithoutTheNetwork(unittest.TestCase):
+    """CLIP's weights were on disk and transformers still asked HuggingFace for a safetensors variant;
+    the connection hung at 0% CPU for ten minutes. A build must not depend on a server to load a
+    model it already has: the cache is tried first, the network only when the cache is empty."""
+
+    def test_clip_is_loaded_from_the_local_cache_first(self):
+        from avp import imagegen
+        src = inspect.getsource(imagegen._clip)
+        first_online = src.index("CLIPModel.from_pretrained(name)")
+        offline = src.index("local_files_only=True")
+        self.assertLess(offline, first_online)
 
 
 class NoPeopleAmongTheCandidates(unittest.TestCase):

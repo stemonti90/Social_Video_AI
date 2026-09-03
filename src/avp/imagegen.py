@@ -343,8 +343,17 @@ def _clip():
         import torch
         from transformers import CLIPModel, CLIPProcessor
         name = "openai/clip-vit-base-patch32"
-        model = CLIPModel.from_pretrained(name)
-        proc = CLIPProcessor.from_pretrained(name)
+        # Cache FIRST, network only if the cache is empty. With the weights already on disk,
+        # transformers still phoned HuggingFace to look for a safetensors variant, and one night the
+        # connection simply hung: 0% CPU, ten minutes, a build that would have sat there until the
+        # stage watchdog shot it. A model that is on disk must never depend on a server to load.
+        try:
+            model = CLIPModel.from_pretrained(name, local_files_only=True)
+            proc = CLIPProcessor.from_pretrained(name, local_files_only=True)
+        except Exception:  # noqa: BLE001 — not cached yet: the one time the network is allowed
+            log.info("CLIP not in the local cache — downloading once.")
+            model = CLIPModel.from_pretrained(name)
+            proc = CLIPProcessor.from_pretrained(name)
         dev = "mps" if getattr(torch.backends, "mps", None) and torch.backends.mps.is_available() else "cpu"
         model = model.to(dev).eval()
         _CLIP["state"] = (model, proc, dev, torch)
