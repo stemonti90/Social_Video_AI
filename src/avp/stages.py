@@ -640,8 +640,9 @@ def _assemble_engine(project: VideoProject, cfg: Config, script: Script, eng: st
             if seg.kind != "cta":
                 phrases += captions_mod.split_phrases(trans.get(seg.index) or seg.narration, t0, t0 + dur)
             t0 += dur
-        for png, s, e in captions_mod.render_phrase_pngs(
-                phrases, project.root / f"subs_png_{eng}_{sub_lang}", cfg.captions, cfg.video):
+        sub_dir = project.root / f"subs_png_{eng}_{sub_lang}"
+        shutil.rmtree(sub_dir, ignore_errors=True)     # cards from a previous render must not linger
+        for png, s, e in captions_mod.render_phrase_pngs(phrases, sub_dir, cfg.captions, cfg.video):
             items.append({"path": png, "start": s, "end": e, "x": "(main_w-overlay_w)/2", "y": cap_y})
     elif cap_json.exists():
         from .stt import Word
