@@ -2160,6 +2160,52 @@ class NativeTargetsAndTikTokSelfUnblock(unittest.TestCase):
             self.assertFalse(auto.tiktok_can_post_publicly(self._cfg(["tiktok"]), {"access_token": "t"}))
 
 
+class TranslatedSubtitlesAreClauses(unittest.TestCase):
+    """A translation cannot follow the voice word by word — different order, different count — and
+    pushing it through the karaoke renderer made 111 three-word cards for a 47s video, median 0.32s,
+    the amber highlight on words unrelated to what was being said. Translations are now cut into
+    readable clauses that each hold a share of the segment's audio window."""
+
+    def test_a_long_sentence_becomes_two_readable_cards(self):
+        from avp.captions import split_phrases, PHRASE_MAX_WORDS
+        t = ("Una cicatrice planetaria ha spaccato la crosta di Marte abbastanza da inghiottire "
+             "un intero continente.")
+        out = split_phrases(t, 0.0, 6.2)
+        self.assertEqual(len(out), 2)
+        for txt, a, b in out:
+            self.assertLessEqual(len(txt.split()), PHRASE_MAX_WORDS)
+        self.assertAlmostEqual(out[-1][2], 6.2, places=3)       # the window is fully covered
+        self.assertAlmostEqual(out[0][2], out[1][1], places=3)  # no gap between cards
+
+    def test_a_card_never_ends_on_a_dangling_preposition(self):
+        from avp.captions import split_phrases
+        t = ("Una cicatrice planetaria ha spaccato la crosta di Marte abbastanza da inghiottire "
+             "un intero continente.")
+        first = split_phrases(t, 0.0, 6.2)[0][0]
+        self.assertNotRegex(first, r"\b(di|da|la|il|un|e)$")
+
+    def test_sentence_ends_are_preferred_cut_points(self):
+        from avp.captions import split_phrases
+        out = split_phrases("Prima frase breve. Seconda frase breve.", 0.0, 4.0)
+        self.assertEqual([x[0] for x in out], ["Prima frase breve.", "Seconda frase breve."])
+
+    def test_a_flash_is_merged_into_its_neighbour(self):
+        """A 0.4s card is a flash: time is shared by word count, so a 2-word tail after a sentence
+        end gets folded into the previous card rather than blinking."""
+        from avp.captions import split_phrases, PHRASE_MIN_SECONDS
+        out = split_phrases("Una frase lunga che riempie la carta intera. Fine.", 0.0, 3.0)
+        self.assertEqual(len(out), 1)
+        self.assertGreaterEqual(out[0][2] - out[0][1], PHRASE_MIN_SECONDS)
+
+    def test_the_translated_path_no_longer_uses_the_karaoke_renderer(self):
+        from avp import stages
+        src = inspect.getsource(stages._assemble_engine)
+        i = src.index("want_translated and sub_json")
+        block = src[i:i + 1200]
+        self.assertIn("render_phrase_pngs", block)
+        self.assertNotIn("distribute_words", block)
+
+
 class BrandTagOnEveryPost(unittest.TestCase):
     """#astrostackerpro goes on every post, on every platform, by construction — the channel exists
     to funnel viewers to the app, and a prompt asking the model for the tag is advice it can ignore."""

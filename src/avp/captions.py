@@ -193,6 +193,84 @@ def render_caption_pngs(words: list[Word], out_dir: Path, style: CaptionStyle, v
     return items
 
 
+# --- translated subtitles: whole clauses, not karaoke chunks --------------------------------------
+PHRASE_MAX_WORDS = 8      # a clause longer than this is split; a phone screen holds ~2 lines
+PHRASE_MIN_SECONDS = 1.1  # below this a subtitle is a flash, not something you can read
+
+
+def split_phrases(text: str, start: float, end: float,
+                  max_words: int = PHRASE_MAX_WORDS, min_seconds: float = PHRASE_MIN_SECONDS):
+    """Cut one segment's translated text into subtitle clauses, each with its share of the segment's
+    audio window. Cuts fall at sentence ends first, then commas, then a hard split — never mid-idea
+    when a natural break exists. Time is shared by word count, and a piece that would be on screen
+    for less than `min_seconds` is merged with its neighbour.
+
+    This replaced the karaoke path for translations. That path spread the Italian words across the
+    English audio and flashed them three at a time, highlight and all — 111 cards for a 47s video,
+    median 0.32s each, the amber landing on words that had nothing to do with what was being said.
+    A translation cannot follow the voice word by word; it can only follow it clause by clause."""
+    import re
+    text = " ".join((text or "").split())
+    if not text:
+        return []
+    pieces = [x.strip() for x in re.split(r"(?<=[.!?;:])\s+", text) if x.strip()]
+    out = []
+    for piece in pieces:                       # long sentences: try commas, then hard-split
+        if len(piece.split()) <= max_words:
+            out.append(piece); continue
+        parts = [x.strip() for x in re.split(r"(?<=,)\s+", piece) if x.strip()]
+        buf = ""
+        for part in parts:
+            trial = f"{buf} {part}".strip()
+            if buf and len(trial.split()) > max_words:
+                out.append(buf); buf = part
+            else:
+                buf = trial
+        if buf:
+            out.append(buf)
+    final = []
+    for piece in out:                          # anything still too long: hard split by words
+        w = piece.split()
+        while len(w) > max_words:
+            cut = _best_cut(w, max_words)
+            final.append(" ".join(w[:cut])); w = w[cut:]
+        if w:
+            final.append(" ".join(w))
+    total_words = sum(len(x.split()) for x in final) or 1
+    window = max(0.0, end - start)
+    timed, t = [], start
+    for piece in final:
+        d = window * len(piece.split()) / total_words
+        timed.append([piece, t, t + d]); t += d
+    # merge flashes into a neighbour (shorter side first), keeping order
+    changed = True
+    while changed and len(timed) > 1:
+        changed = False
+        for i, (txt, a, b) in enumerate(timed):
+            if b - a < min_seconds:
+                j = i - 1 if i > 0 else i + 1
+                timed[j] = [f"{timed[j][0]} {txt}" if j < i else f"{txt} {timed[j][0]}",
+                            min(timed[j][1], a), max(timed[j][2], b)]
+                del timed[i]; changed = True
+                break
+    return [(txt, a, b) for txt, a, b in timed]
+
+
+_DANGLING = {"di", "da", "a", "in", "su", "per", "con", "tra", "fra", "e", "o", "che", "il", "lo",
+             "la", "i", "gli", "le", "un", "una", "uno", "del", "della", "dei", "delle", "al", "alla",
+             "the", "a", "an", "of", "to", "in", "on", "at", "and", "or", "that", "with", "for"}
+
+
+def _best_cut(words: list[str], max_words: int) -> int:
+    """Where to hard-split an over-long clause: the latest position within the limit whose last word
+    is not an article, preposition or conjunction, so a card never ends on "la crosta di" with
+    "Marte" stranded on the next one. Falls back to the plain limit."""
+    for cut in range(max_words, max(2, max_words // 2), -1):
+        if words[cut - 1].strip(",;:").lower() not in _DANGLING:
+            return cut
+    return max_words
+
+
 def render_phrase_pngs(phrases, out_dir: Path, style: CaptionStyle, video: VideoConfig):
     """phrases = [(text, start, end)] → one wrapped subtitle PNG per phrase on a legibility plate.
     Used for translated subtitles (e.g. English audio + Italian subs); timing is the per-segment
