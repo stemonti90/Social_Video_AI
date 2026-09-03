@@ -153,8 +153,20 @@ def post_slots(now: datetime, times: list[str], tz: str, count: int) -> list[dat
 
 # --------------------------------------------------------------------------- channels
 def connected_platforms(cfg: Config) -> set[str]:
-    """Which target platforms actually have a channel connected in Postiz (empty on any error)."""
+    """Which target platforms can actually be posted to right now (empty on any error).
+
+    Native backend: a platform counts when its OAuth token is in the store — and TikTok counts only
+    once the account may post PUBLICLY. That second test is what turns "remember to add TikTok when
+    it gets unblocked" into something that needs no remembering: while the app is in review,
+    creator_info offers FOLLOWER_OF_CREATOR / SELF_ONLY and a post would go out hidden, so TikTok
+    stays off; the run after approval sees PUBLIC_TO_EVERYONE and switches it on by itself.
+
+    This used to ask Postiz regardless of backend. Under the native backend that call failed, the
+    target list came back empty, and the daily run would have BUILT every video and posted none —
+    the warning said so, to a log nobody was reading at 07:20."""
     from . import publish as publish_mod
+    if (cfg.publish.backend or "native").lower() == "native":
+        return _native_connected(cfg)
     try:
         client = publish_mod.PostizClient(cfg.publish)
         if not client.token:
@@ -165,6 +177,41 @@ def connected_platforms(cfg: Config) -> set[str]:
     except Exception as e:  # noqa: BLE001 — unreachable Postiz just means "publish nothing yet"
         log.warning("Could not check Postiz channels (%s) — will generate only.", e)
         return set()
+
+
+def _native_connected(cfg: Config) -> set[str]:
+    from . import publish as publish_mod
+    from .social import tokens as token_store
+    found: set[str] = set()
+    for plat in cfg.auto.platforms:
+        canon = publish_mod._canon(plat)
+        rec = token_store.get(canon)
+        if not rec:
+            continue
+        if canon == "tiktok" and not tiktok_can_post_publicly(cfg, rec):
+            log.info("TikTok is connected but may not post publicly yet (app in review or account "
+                     "private) — leaving it out of today's targets.")
+            continue
+        found.add(canon)
+    return found
+
+
+def tiktok_can_post_publicly(cfg: Config, rec: dict) -> bool:
+    """True only when TikTok's own creator_info lists PUBLIC_TO_EVERYONE. Refreshes the token if it
+    has gone stale (access tokens last a day; the refresh token a year). Any error means "not yet":
+    a wrong answer here posts a video nobody can see, so the safe default is to wait."""
+    try:
+        from .social import tokens as token_store
+        from .social.tiktok import TikTok
+        tt = TikTok()
+        if not token_store.is_fresh(rec):
+            rec = tt.refresh(rec, cfg)
+            token_store.put("tiktok", rec)
+        opts = tt.creator_info(rec["access_token"]).get("privacy_level_options") or []
+        return "PUBLIC_TO_EVERYONE" in opts
+    except Exception as e:  # noqa: BLE001 — never let a status probe abort the daily run
+        log.warning("Could not check TikTok posting privileges (%s) — treating as not unblocked.", e)
+        return False
 
 
 # --------------------------------------------------------------------------- the daily run
@@ -183,7 +230,7 @@ def run_daily(cfg: Config, count: int | None = None, dry_run: bool = False,
     connected = connected_platforms(cfg) if (publish and not dry_run) else set()
     targets = [p for p in cfg.auto.platforms if publish_mod._canon(p) in connected]
     if publish and not dry_run and not targets:
-        log.warning("No connected Postiz channel for %s yet — videos will be BUILT but not posted.",
+        log.warning("Nothing in %s can be posted to right now — videos will be BUILT but not posted.",
                     cfg.auto.platforms)
 
     report: list[dict] = []

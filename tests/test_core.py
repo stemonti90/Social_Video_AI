@@ -2100,6 +2100,57 @@ class EditedLinesAreReVoiced(unittest.TestCase):
         self.assertIn("cached, unverified", src)
 
 
+class NativeTargetsAndTikTokSelfUnblock(unittest.TestCase):
+    """auto.connected_platforms used to ask Postiz whatever the backend. Under the native backend
+    that call failed, the target list came back empty, and the daily run would have BUILT every
+    video and posted none. It now reads the token store — and TikTok joins only when TikTok itself
+    says the account may post publicly, so the day the app clears review it switches on unaided."""
+
+    def _cfg(self, platforms):
+        cfg = Config.load(None)
+        cfg.publish.backend = "native"
+        cfg.auto.platforms = platforms
+        return cfg
+
+    def test_a_platform_with_a_token_is_a_target(self):
+        from avp import auto
+        with mock.patch("avp.social.tokens.get", lambda p: {"access_token": "t"} if p == "instagram" else None):
+            self.assertEqual(auto.connected_platforms(self._cfg(["instagram", "tiktok"])), {"instagram"})
+
+    def test_tiktok_stays_out_while_it_cannot_post_publicly(self):
+        from avp import auto
+        with mock.patch("avp.social.tokens.get", lambda p: {"access_token": "t"}), \
+             mock.patch.object(auto, "tiktok_can_post_publicly", return_value=False):
+            self.assertEqual(auto.connected_platforms(self._cfg(["instagram", "tiktok"])), {"instagram"})
+
+    def test_tiktok_joins_by_itself_once_public_posting_is_offered(self):
+        from avp import auto
+        with mock.patch("avp.social.tokens.get", lambda p: {"access_token": "t"}), \
+             mock.patch.object(auto, "tiktok_can_post_publicly", return_value=True):
+            self.assertEqual(auto.connected_platforms(self._cfg(["instagram", "tiktok"])),
+                             {"instagram", "tiktok"})
+
+    def test_public_posting_is_read_from_creator_info(self):
+        """The decision is TikTok's own privacy_level_options, nothing inferred."""
+        from avp import auto
+        cfg = self._cfg(["tiktok"])
+        for opts, want in ((["FOLLOWER_OF_CREATOR", "SELF_ONLY"], False),
+                           (["PUBLIC_TO_EVERYONE", "SELF_ONLY"], True), ([], False)):
+            fake = mock.Mock()
+            fake.creator_info.return_value = {"privacy_level_options": opts}
+            with mock.patch("avp.social.tiktok.TikTok", return_value=fake), \
+                 mock.patch("avp.social.tokens.is_fresh", return_value=True):
+                self.assertEqual(auto.tiktok_can_post_publicly(cfg, {"access_token": "t"}), want, opts)
+
+    def test_a_failing_probe_means_not_yet_never_yes(self):
+        """A wrong "yes" posts a video nobody can see; the safe default on any error is to wait."""
+        from avp import auto
+        fake = mock.Mock(); fake.creator_info.side_effect = RuntimeError("boom")
+        with mock.patch("avp.social.tiktok.TikTok", return_value=fake), \
+             mock.patch("avp.social.tokens.is_fresh", return_value=True):
+            self.assertFalse(auto.tiktok_can_post_publicly(self._cfg(["tiktok"]), {"access_token": "t"}))
+
+
 class BrandTagOnEveryPost(unittest.TestCase):
     """#astrostackerpro goes on every post, on every platform, by construction — the channel exists
     to funnel viewers to the app, and a prompt asking the model for the tag is advice it can ignore."""
