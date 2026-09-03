@@ -2459,6 +2459,69 @@ class LengthLoopConvergesOnTheRealModel(unittest.TestCase):
         self.assertEqual(words, 90, "the 400-word drafts must never win")
 
 
+class SegmentwiseFit(unittest.TestCase):
+    """Whole-script editing drifted videos across 47-64s: this model doubles when asked to lengthen
+    and shaves 1-3% when asked to cut a quarter. Small local edits are where it complies, so the
+    script is brought to length one segment at a time, each reply counted before it is accepted."""
+
+    class _Compliant:
+        """A stub that does what gemma does on a SMALL edit: hits the exact count it was asked for."""
+        def __init__(self):
+            self.calls = []
+
+        def chat(self, system, user, **kw):
+            n = int(re.search(r"EXACTLY (\d+) words", user).group(1))
+            self.calls.append(n)
+            return json.dumps({"narration": " ".join(f"w{i}" for i in range(n))})
+
+    def _script(self, counts):
+        return {"title": "t", "segments": [
+            {"narration": " ".join(f"s{i}x{j}" for j in range(c)), "visual": f"v{i}", "keywords": []}
+            for i, c in enumerate(counts)]}
+
+    def test_budgets_sum_to_the_target_and_keep_the_hook_short(self):
+        from avp.llm import segment_budgets
+        b = segment_budgets(112, 6)
+        self.assertEqual(sum(b), 112)
+        self.assertEqual(min(b), b[0])                 # the hook lands in a breath
+        self.assertEqual(max(b), b[-2])                # the penultimate 'wow' gets the room
+
+    def test_only_segments_outside_tolerance_are_touched(self):
+        from avp import llm
+        client = self._Compliant()
+        # budgets for 112/6 are [15,18,19,19,22,19]; 16 and 18 are within ±20%, 8 and 40 are not
+        out = llm.fit_segments(client, self._script([16, 18, 8, 19, 40, 19]), 112, "en")
+        counts = [llm._seg_words(x) for x in out["segments"]]
+        self.assertEqual(len(client.calls), 2, client.calls)     # exactly the two outliers
+        self.assertEqual(counts[2], 19)
+        self.assertEqual(counts[4], 22)
+        self.assertEqual(counts[0], 16)                           # the hook was left alone
+
+    def test_the_total_lands_on_target_from_a_short_draft(self):
+        """The real case: a 77-word draft against 112, which no whole-script pass could fix."""
+        from avp import llm
+        out = llm.fit_segments(self._Compliant(), self._script([13] * 6), 112, "en")
+        total = sum(llm._seg_words(x) for x in out["segments"])
+        self.assertEqual(llm.length_verdict(total, 112), "ok", total)
+
+    def test_a_reply_that_is_no_closer_is_discarded(self):
+        """The count is verified: a model that ignores the number cannot make a segment worse."""
+        from avp import llm
+
+        class Stubborn:
+            def chat(self, system, user, **kw):
+                return json.dumps({"narration": " ".join(["w"] * 60)})   # always 60, whatever asked
+
+        out = llm.fit_segments(Stubborn(), self._script([8, 18, 19, 19, 22, 19]), 112, "en")
+        self.assertEqual(llm._seg_words(out["segments"][0]), 8)        # kept, not replaced by 60
+
+    def test_the_whole_script_loop_is_skipped_in_segmentwise_mode(self):
+        from avp import llm
+        src = inspect.getsource(llm.generate_script)
+        self.assertIn('fit or "whole"', src)
+        self.assertIn("fit_segments(client, data, words, language)", src)
+
+
 class RegistryMustNotContradictTheShot(unittest.TestCase):
     """The lighting registry is appended to the prompt, and the model obeys it over the shot cue —
     it is the more concrete of the two. So a cue asking for a world seen from space must not be

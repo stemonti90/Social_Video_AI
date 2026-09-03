@@ -142,6 +142,7 @@ def stage_script(project: VideoProject, cfg: Config, topic: str | None) -> Scrip
     script = llm.generate_script(cfg.llm, topic, max(30, content_target),
                                  language=cfg.script.language, refine_passes=cfg.script.refine_passes,
                                  best_of=getattr(cfg.llm, "best_of", 1),
+                                 fit=getattr(cfg.script, "fit", "whole"),
                                  # the cut rhythm is seconds-per-IMAGE, so the writer needs to know
                                  # how many images each segment will be given
                                  images_per_segment=int(getattr(cfg.video, "images_per_segment", 2) or 2))

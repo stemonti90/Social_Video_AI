@@ -397,8 +397,104 @@ def moves_closer(new: int, cur: int, target: int) -> bool:
     return abs(new - target) < abs(cur - target)
 
 
+# --------------------------------------------------------------------------- per-segment fit
+SEGMENT_FIT_SYSTEM = (
+    "You are the line editor of a faceless astronomy short-form channel. You rewrite ONE segment of "
+    "a script to an exact spoken length. Keep its single fact, its tense, its numbers and its role "
+    "in the story (what it sets up for the next segment). Keep it spoken, concrete, no filler, no "
+    "banned words (mind-blowing, incredible, literally, breathtaking, journey, unlock, delve, "
+    "'did you know'). If it is segment 1 it is the HOOK: it must rename the subject as something "
+    "unsettling in its first words and must not open with a number or the subject's name. "
+    "Return STRICT JSON only: {\"narration\": \"...\"}."
+)
+SEGMENT_FIT_TOLERANCE = 0.20     # a segment within ±20% of its budget is left alone
+SEGMENT_FIT_ATTEMPTS = 2
+
+
+def _seg_words(seg: dict) -> int:
+    return len(str(seg.get("narration", "")).split())
+
+
+def segment_budgets(words: int, nseg: int) -> list[int]:
+    """Per-segment word budgets summing to `words`. The hook (segment 1) is kept a touch shorter —
+    it has to land in a breath — and the difference goes to the penultimate 'wow' segment."""
+    if nseg <= 0:
+        return []
+    base = words // nseg
+    out = [base] * nseg
+    for i in range(words - base * nseg):          # spread the remainder from the end
+        out[-1 - (i % nseg)] += 1
+    if nseg >= 3:
+        shave = max(1, base // 6)
+        out[0] -= shave
+        out[-2] += shave
+    return out
+
+
+def _fit_one(client: "OllamaClient", seg: dict, budget: int, index: int, nseg: int,
+             prev_line: str, next_line: str, language: str) -> dict:
+    """Rewrite one segment to `budget` words. Local, exact, verified: the model is asked for a
+    NUMBER of words, given the neighbours so the hand-off survives, and the reply is counted. Up to
+    SEGMENT_FIT_ATTEMPTS tries; the closest reply wins, and the original stays if nothing beats it."""
+    best, best_d = seg, abs(_seg_words(seg) - budget)
+    name = LANG_NAME.get(language, "English")
+    for _ in range(SEGMENT_FIT_ATTEMPTS):
+        cur = _seg_words(best)
+        user = (f"Segment {index} of {nseg}. It has {cur} words; rewrite it to EXACTLY {budget} words "
+                f"({'longer' if budget > cur else 'shorter'} by {abs(budget - cur)}). Count them.\n"
+                f"Write in {name}.\n"
+                f"Previous segment: {prev_line or '(none — this is the opening hook)'}\n"
+                f"Next segment: {next_line or '(none — this is the last content segment)'}\n"
+                f"Segment to rewrite: {best.get('narration', '')}")
+        try:
+            data = _extract_json(client.chat(SEGMENT_FIT_SYSTEM, user, temperature=0.5,
+                                             num_predict=256))
+            line = str(data.get("narration", "")).strip() if isinstance(data, dict) else ""
+        except Exception as e:  # noqa: BLE001 — a failed fit keeps what we have
+            log.debug("segment %d fit failed (%s)", index, e)
+            line = ""
+        if not line:
+            continue
+        cand = {**best, "narration": line}
+        d = abs(_seg_words(cand) - budget)
+        if d < best_d:
+            best, best_d = cand, d
+        if d <= max(1, round(budget * SEGMENT_FIT_TOLERANCE)):
+            break
+    return best
+
+
+def fit_segments(client: "OllamaClient", data: dict, words: int, language: str) -> dict:
+    """Bring a script to length ONE SEGMENT AT A TIME.
+
+    Whole-script editing does not work on this model — measured: asked to lengthen it ignores the
+    target and doubles what it has (77->152, 90->172, 100->211), asked to cut a quarter it shaves
+    1-3%. So the total drifted anywhere from 47s to 64s of video. Small local edits are where a
+    language model actually complies, and a total that is the sum of verified parts cannot drift:
+    each segment gets a budget, the ones outside ±20% are rewritten to an exact count with their
+    neighbours in view, and the reply is counted before it is accepted."""
+    segs = _segment_dicts(data)
+    if not segs:
+        return data
+    budgets = segment_budgets(words, len(segs))
+    out, before = [], sum(_seg_words(x) for x in segs)
+    for i, seg in enumerate(segs):
+        budget = budgets[i]
+        prev_line = str(segs[i - 1].get("narration", "")) if i else ""
+        next_line = str(segs[i + 1].get("narration", "")) if i + 1 < len(segs) else ""
+        if abs(_seg_words(seg) - budget) <= max(1, round(budget * SEGMENT_FIT_TOLERANCE)):
+            out.append(seg)
+            continue
+        out.append(_fit_one(client, seg, budget, i + 1, len(segs), prev_line, next_line, language))
+    data = {**data, "segments": out}
+    log.info("Per-segment fit: %d → %d words (target ~%d, %d segments).",
+             before, sum(_seg_words(x) for x in out), words, len(out))
+    return data
+
+
 def generate_script(cfg: LLMConfig, topic: str, seconds: int = 60, language: str = "en",
-                    refine_passes: int = 1, best_of: int = 1, images_per_segment: int = 2) -> Script:
+                    refine_passes: int = 1, best_of: int = 1, images_per_segment: int = 2,
+                    fit: str = "whole") -> Script:
     words = _words_for(seconds, language)
     # One segment ≈ one shot, and this number is the whole cut rhythm. A tight upper bound (nseg+1)
     # keeps the model from padding to twice the length.
@@ -475,8 +571,10 @@ def generate_script(cfg: LLMConfig, topic: str, seconds: int = 60, language: str
     # `_nwords(expanded) > cur` was missing. Two passes is enough to go long-then-short or the reverse;
     # Three attempts, not two: a rejected rewrite now re-rolls instead of giving up, so the budget has
     # to cover "overshoot, re-roll, land" without letting a hopeless draft burn the whole night.
+    if (fit or "whole").lower() == "segmentwise":
+        data = fit_segments(client, data, words, language)
     best = data
-    for _ in range(3):
+    for _ in range(3 if (fit or "whole").lower() != "segmentwise" else 0):
         cur = _nwords(data)
         verdict = length_verdict(cur, words)
         if verdict == "ok":

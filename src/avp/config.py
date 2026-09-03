@@ -34,6 +34,10 @@ class ScriptConfig:
     language: str = "en"         # en | it — language of the spoken narration
     subtitle_language: str | None = None   # if set & != language → translated phrase subtitles (e.g. EN audio, IT subs)
     refine_passes: int = 2       # critique→refine rounds on the ONE script (quality via depth, never regresses)
+    # How the script is brought to length. "whole" = rewrite the whole script (this model doubles
+    # on expand and barely trims — videos drifted 47-64s). "segmentwise" = rewrite only the segments
+    # outside their word budget, one at a time, counting the reply — see llm.fit_segments.
+    fit: str = "whole"
     normalize_numbers: bool = True   # rewrite digits → spoken words for TTS ("85%"→"ottantacinque per cento")
     # Adversarial fact-check by a stronger model before anything is rendered. The local writer is
     # fluent and unreliable — it invents mechanisms and writes about dead missions in the present
