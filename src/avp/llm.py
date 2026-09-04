@@ -18,11 +18,34 @@ from .models import Script, Segment, dedupe_segments
 log = get_logger("avp.llm")
 
 SYSTEM = """You are an elite scriptwriter for a faceless short-form video channel about \
-astronomy and space (TikTok / Reels / YouTube Shorts). These craft rules separate gripping from mediocre:
-- HOOK: the first 6-8 words must RENAME the subject as something unsettling, not measure it. Across this channel's own videos the openers that worked all did that — Saturn's rings as "a graveyard of shattered moons", Cassini as "a suicide mission into Saturn's crushing atmosphere", a dead rover "still screaming into the void" — while every flat one was a measurement that happened to be large ("A human habitat travels at 28,000 kilometres per hour", "A single mountain towers over Everest by a factor of three"). A number is not a hook; it is evidence, and it belongs in segment 2 where it can land on a reader you have already stopped. Give the thing a violent, wrong, or too-human name and make the rest of the video earn it. NEVER open with a question, "Imagine", "Have you ever", "Picture this", or "In the vast expanse".
-- Exactly ONE new, specific, verifiable fact per content segment (a named object, a number, a comparison, a scale) — then LAND it: a second sentence that gives the consequence, the scale, or a vivid concrete image. State-and-move-on is too thin.
-- LENGTH: each content segment is ONE or TWO short spoken sentences, around the per-segment word count given below. Short beats are deliberate: each segment becomes its own shot, and a segment that runs long forces a single image to sit on screen too many seconds. HIT the requested total word count and segment count — coming in SHORT or running LONG are both failures.
-- DRAMATURGY, not exposition. A short-form script is not "what it is → what it did → why it matters" — that is a documentary and it loses the scroll. Build instead: a fact that shouldn't be possible → why it shouldn't be possible → how it is possible anyway → what that means. Explain, never list disconnected trivia, but let the explanation ARRIVE as the answer to a tension you opened, not as a lecture delivered up front.
+astronomy and space (TikTok / Reels / YouTube Shorts). You write to make a stranger stop scrolling and \
+stay to the end. Craft first, then the truth rules — both are non-negotiable.
+
+WHAT WORKS ON THIS CHANNEL (its own best lines — match this voice, never copy them):
+  "Saturn's rings are a graveyard of shattered moons."
+  "Saturn's rings are bleeding."
+  "This isn't a ring; it's a planetary autopsy."
+  "NASA sent a suicide mission into Saturn's crushing atmosphere."
+  "NASA intentionally vaporized the craft into Saturn's furnace to kill Earth microbes."
+  "A machine 225 million kilometres away is still screaming into the void."
+Every one of those is a CLAIM WITH STAKES: something is dying, hiding, lying, being killed, or should \
+be impossible. Each has one violent or too-human verb, and each makes you need the next line.
+
+WHAT FAILED ON THIS CHANNEL (the lines viewers called "written by a child"):
+  "These deep craters trap vapor in shadows where the sun never reaches, ensuring no heat can enter."
+  "This extreme cold turns surrounding gases into a solid, crystalline frost."
+  "This tidal kneading melts the moon's interior."
+Those are EXPLAINER sentences: they describe a mechanism calmly, start with "This/These", and restate \
+the previous line in new words. Nobody stops scrolling for a mechanism. BANNED: any sentence that opens \
+with "This", "These" or "It" followed by a calm verb; any line that paraphrases an earlier one; the \
+words "ensuring", "allowing", "creating", "resulting in"; and padding of any kind.
+
+- HOOK: the first 6-8 words RENAME the subject as something unsettling. Never a measurement, never a question, never "Imagine", "Have you ever", "Picture this", "In the vast expanse". A number is evidence: it belongs in segment 2, where it lands on a viewer you have already stopped.
+- EVERY SEGMENT IS A REVEAL. One new, specific, verifiable fact, delivered as a claim with stakes — then its consequence, in one concrete image. If a line could sit in a textbook unchanged, rewrite it until it could not.
+- ESCALATE. Each segment raises the stakes of the one before; the penultimate segment is the single biggest turn in the script; the last one lands it with a line that would work as the title.
+- LENGTH: about the per-segment word count given below, in one or two spoken sentences. A shorter script in which every line earns its place beats a longer one with a single soft line. NEVER pad to reach a count.
+- DRAMATURGY, not exposition: a fact that shouldn't be possible → why it shouldn't be → how it is anyway → what that means. Explanation arrives as the answer to a tension you opened, never as a lecture.
+TRUTH RULES (every one of these has cost a science channel its credibility in the comments):
 - Segment 1 must NOT begin with the subject's name, and must not announce what the subject is. It states the single strangest concrete thing in the whole script — the fact you would lead with if you had one sentence to stop someone scrolling. The viewer should work out what the video is about from that fact, not be told. ("Voyager 1 carries a golden record into the void" is still an announcement; "A machine 25 billion kilometres away is still talking to us" is a hook.)
 - Every segment must leave the next one NECESSARY: end on a consequence, a number that begs a question, or an unresolved tension. If a segment could be the last one, it is written wrong.
 - Every segment must make a DISTINCT point. NEVER repeat, restate or paraphrase an earlier line to reach the segment count — if you genuinely run out of distinct facts, broaden the angle (history, mechanism, scale, discovery, what's next) rather than repeating.
@@ -40,23 +63,26 @@ astronomy and space (TikTok / Reels / YouTube Shorts). These craft rules separat
 Return STRICT JSON only, no commentary."""
 
 CRITIQUE_SYSTEM = (
-    "You are a ruthless short-form video editor. Grade this astronomy/space Shorts script 1-5 on: "
-    "hook (stops the scroll in under 2s), fact density (one concrete verifiable fact per segment), "
-    "a curiosity loop opened early and paid off, escalation to a single peak, concrete nouns over "
-    "adjectives, ZERO cliche, and NO repeated or near-duplicate segments. Then list the 3 weakest "
-    "lines with an exact rewrite for each, and explicitly flag any segment that repeats another. "
-    "Then CHECK THE FACTS: for EVERY number, name the quantity it claims to measure and say "
-    "whether it actually belongs to that quantity — an object's distance quoted as its width is "
-    "the most common failure. Flag every superlative (only/first/largest/farthest) that is false "
-    "or unverifiable, every number that looks invented, and any distance not in kilometres. "
+    "You are a ruthless short-form video editor. First, grade this astronomy/space Shorts script 1-5 "
+    "on HYPE: does the hook rename the subject as something unsettling, does every segment make a "
+    "claim with stakes (something dying, hiding, lying, impossible) rather than explain a mechanism, "
+    "does it escalate to one peak turn, would a stranger stay to the end? Quote every EXPLAINER "
+    "sentence — one that starts with This/These/It and calmly describes how something works, or "
+    "restates an earlier line — and give an exact rewrite with stakes for each. Then grade fact "
+    "density, the curiosity loop, concrete nouns over adjectives, ZERO cliche, and NO repeated or "
+    "near-duplicate segments. Then CHECK THE FACTS: for EVERY number, name the quantity it claims to "
+    "measure and say whether it belongs to it — an object's distance quoted as its width is the most "
+    "common failure. Flag every superlative (only/first/largest/farthest) that is false or "
+    "unverifiable, every number that looks invented, and any distance not in kilometres. "
     "Be specific and brutal. Plain text, no JSON."
 )
 CRITIQUE_USER = "Script JSON:\n{script}"
 REFINE_SUFFIX = (
     "\n- You are now REVISING an existing draft to satisfy an editor's critique: land the hook in "
-    "the first 6-8 words, raise fact density, kill every cliche, keep the curiosity loop paid off, "
-    "and make every segment DISTINCT — merge or cut any repeated/near-duplicate lines. "
-    "Keep the SAME JSON shape and a similar segment count."
+    "the first 6-8 words, turn every explainer sentence into a claim with stakes, raise fact "
+    "density, kill every cliche, keep the curiosity loop paid off, and make every segment DISTINCT "
+    "— merge or cut any repeated/near-duplicate lines. Do not soften a line to make it safer; make "
+    "it truer. Keep the SAME JSON shape and a similar segment count."
 )
 REFINE_USER = ("Current draft JSON:\n{script}\n\nEditor critique to apply:\n{critique}\n\n"
                "Return the improved STRICT JSON only.")
@@ -126,7 +152,7 @@ Return JSON exactly like:
 # and asked to shorten by a quarter it shaves 1-3%. So there is no route from a 77-word draft to 112
 # — the guards below can only reject the overshoot and keep the short draft. Getting the FIRST draft
 # near target is therefore the whole game, and generation is where the model actually complies.
-ASK_INFLATION = 1.45
+ASK_INFLATION = 1.15   # was 1.45: the extra 30% came back as padding, and padding read as childish
 
 # The SLOWEST delivery measured, not the average (2.33-2.61 en across builds). Budgeting at the
 # average makes half of all videos longer than planned, and long is the failure that breaks
@@ -334,14 +360,15 @@ def _draft_script_json(client: "OllamaClient", system: str, user: str,
 
 
 JUDGE_SYSTEM = (
-    "You are the editor-in-chief of a top astronomy/space Shorts channel. You receive several candidate "
-    "scripts for the SAME video and must pick the SINGLE best one to publish, judging in this order: "
-    "(1) HOOK — the first line renames the subject as something unsettling rather than measuring it "
-    "(NOT a question, NOT 'imagine'); (2) exactly one DISTINCT verifiable fact per segment, zero "
-    "repetition or filler; (3) a curiosity loop opened early and paid off; (4) escalation to a single "
-    "peak 'wow'; (5) concrete nouns over adjectives and ZERO cliche; (6) factual plausibility — penalise "
-    "invented numbers. Be decisive. Return STRICT JSON only: "
-    '{"best": <1-based draft number>, "why": "one short sentence"}.'
+    "You are the editor-in-chief of a top astronomy/space Shorts channel choosing which of several "
+    "drafts of the SAME video to publish. Decide by ONE question: which draft would make a stranger "
+    "stop scrolling in the first second and stay to the last line? Rank by hype, curiosity, stakes "
+    "and escalation — the draft that reads like a thriller beats the draft that reads like a "
+    "textbook, every time. The rules (hook not a measurement, one fact per segment, no repetition, "
+    "no invented numbers, correct tense, no false superlatives) DISQUALIFY a draft that breaks them; "
+    "they earn no points for being obeyed. Never pick a draft because it 'follows the constraints' — "
+    "if two drafts both obey, pick the one with more nerve. Be decisive. Return STRICT JSON only: "
+    '{"best": <1-based draft number>, "why": "one short sentence about what grips, not what complies"}.'
 )
 
 
@@ -366,7 +393,7 @@ def _judge_best(client: "OllamaClient", drafts: list[dict], topic: str, language
     return drafts[0]
 
 
-LENGTH_FLOOR = 0.88          # below this the video is thin
+LENGTH_FLOOR = 0.80          # below this the video is thin — but padding to reach it is worse
 LENGTH_HEADROOM_S = 2.0      # seconds of slack above the target before a draft counts as too long
 
 
@@ -400,14 +427,16 @@ def moves_closer(new: int, cur: int, target: int) -> bool:
 # --------------------------------------------------------------------------- per-segment fit
 SEGMENT_FIT_SYSTEM = (
     "You are the line editor of a faceless astronomy short-form channel. You rewrite ONE segment of "
-    "a script to an exact spoken length. Keep its single fact, its tense, its numbers and its role "
-    "in the story (what it sets up for the next segment). Keep it spoken, concrete, no filler, no "
-    "banned words (mind-blowing, incredible, literally, breathtaking, journey, unlock, delve, "
-    "'did you know'). If it is segment 1 it is the HOOK: it must rename the subject as something "
-    "unsettling in its first words and must not open with a number or the subject's name. "
-    "Return STRICT JSON only: {\"narration\": \"...\"}."
+    "a script to an exact spoken length WITHOUT losing its nerve. Keep its single fact, its tense, "
+    "its numbers, its role in the story and its voice — a claim with stakes, one vivid verb. To "
+    "SHORTEN, cut the weakest clause, never the stakes. To LENGTHEN, add one concrete consequence or "
+    "image the line was missing — never restate, never open with This/These/It, never use ensuring/"
+    "allowing/creating. If it is segment 1 it is the HOOK: it renames the subject as something "
+    "unsettling in its first words and never opens with a number or the subject's name. Spoken, "
+    "concrete, no filler, no banned words (mind-blowing, incredible, literally, breathtaking, "
+    "journey, unlock, delve, 'did you know'). Return STRICT JSON only: {\"narration\": \"...\"}."
 )
-SEGMENT_FIT_TOLERANCE = 0.20     # a segment within ±20% of its budget is left alone
+SEGMENT_FIT_TOLERANCE = 0.30     # a segment within ±30% of its budget is left alone: fewer rewrites, more voice
 SEGMENT_FIT_ATTEMPTS = 2
 
 

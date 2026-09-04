@@ -2323,24 +2323,29 @@ class ScriptLandsNearTheTarget(unittest.TestCase):
         self.assertGreater(asked, target)
 
     def test_a_typical_delivery_now_lands_on_target(self):
-        """The compensation must match the rate MEASURED ON THE CURRENT PROMPT — ~70%, not the 88%
-        read off builds that predate the hook and photographable-visual rules. Getting the first
-        draft near target is the only length lever that works: asked to lengthen, this model ignores
-        the target and doubles what it has, and asked to cut a quarter it shaves 1-3%."""
+        """The ask is inflated 15%, no more. It was 45%, calibrated to a measured 70% delivery — and
+        the extra words came back as padding ("This extreme cold turns surrounding gases into a
+        solid, crystalline frost"), which viewers called childish. A typical delivery lands in band;
+        a terse one comes in short and is left short, because a short script with nerve beats a
+        long one with one soft line."""
         from avp.llm import length_verdict
         target, asked = self._asked()
-        self.assertEqual(length_verdict(round(asked * 0.70), target), "ok")
+        self.assertEqual(length_verdict(round(asked * 0.88), target), "ok")
+        self.assertNotEqual(length_verdict(round(asked * 0.70), target), "long")
 
     def test_a_draft_inside_the_band_is_left_alone(self):
         from avp.llm import length_verdict
         for n in (105, 112, 116):
             self.assertEqual(length_verdict(n, 112), "ok", n)
 
-    def test_the_dead_band_that_shipped_a_42_second_video_is_closed(self):
-        """The original guards trimmed 12% over but expanded only 20% under, so a draft at 81.7% of
-        target sat between them untouched and rendered 42.7s against a 58s target."""
-        from avp.llm import length_verdict
-        self.assertEqual(length_verdict(int(118 * 0.817), 118), "short")
+    def test_the_floor_is_deliberately_low(self):
+        """The floor is 80%, not 88%. The 88% floor forced expansions, and this model expands by
+        padding — the padding read as childish. Below 80% a draft is genuinely thin and gets one
+        careful pass; at 80% and above it ships as written."""
+        from avp.llm import length_verdict, LENGTH_FLOOR
+        self.assertAlmostEqual(LENGTH_FLOOR, 0.80, places=6)
+        self.assertEqual(length_verdict(int(118 * 0.75), 118), "short")
+        self.assertEqual(length_verdict(int(118 * 0.82), 118), "ok")
 
     def test_the_ceiling_is_tighter_than_the_floor(self):
         """Deliberately asymmetric, and NOT the symmetry an earlier pass here enforced: making the
@@ -2475,7 +2480,7 @@ class LengthLoopConvergesOnTheRealModel(unittest.TestCase):
 
     def test_it_expands_then_trims_into_the_band(self):
         from avp import llm
-        Stub, calls = self._client(90)
+        Stub, calls = self._client(70)                  # 70/112 = 62%: below the 80% floor
         with mock.patch.object(llm, "OllamaClient", Stub), \
              mock.patch.object(llm, "_judge_best", lambda c, d, t, l: d[0]):
             sc = llm.generate_script(llm.LLMConfig(), "Venus", seconds=48,
@@ -2550,9 +2555,11 @@ class SegmentwiseFit(unittest.TestCase):
         self.assertEqual(counts[0], 16)                           # the hook was left alone
 
     def test_the_total_lands_on_target_from_a_short_draft(self):
-        """The real case: a 77-word draft against 112, which no whole-script pass could fix."""
+        """A 60-word draft against 112, which no whole-script pass could fix. (Segments within 30% of
+        their budget are left alone now — fewer rewrites, more of the writer's voice — so the draft
+        here is far enough off for every segment to be fitted.)"""
         from avp import llm
-        out = llm.fit_segments(self._Compliant(), self._script([13] * 6), 112, "en")
+        out = llm.fit_segments(self._Compliant(), self._script([10] * 6), 112, "en")
         total = sum(llm._seg_words(x) for x in out["segments"])
         self.assertEqual(llm.length_verdict(total, 112), "ok", total)
 
