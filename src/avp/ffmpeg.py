@@ -168,6 +168,47 @@ def _still_clip_via_pil(src: Path, w: int, h: int, duration: float, fps: int, ou
             pass
 
 
+KB_ZOOM_PER_FRAME = 0.0008   # the pace zoompan used: ~2.4%/s, imperceptible as motion, felt as life
+KB_ZOOM_MAX = 1.15
+
+
+def zoom_window(w: int, h: int, n: int, rate: float = KB_ZOOM_PER_FRAME,
+                zmax: float = KB_ZOOM_MAX) -> tuple[float, float, float, float]:
+    """The source window (x0, y0, cw, ch) for frame `n` of a centred push-in, in float pixels."""
+    z = min(1.0 + rate * n, zmax)
+    cw, ch = w / z, h / z
+    return (w - cw) / 2.0, (h - ch) / 2.0, cw, ch
+
+
+def _ken_burns_via_pil(pre, w: int, h: int, frames: int, fps: int, out: Path) -> None:
+    """Render the push-in frame by frame in PIL and stream raw RGB into one ffmpeg encode.
+
+    This replaced ffmpeg's zoompan, for two measured reasons. zoompan's motion judders: on a
+    textured still the frame-to-frame difference alternated high/low on 34% of frames (mean 3.27),
+    against 0% and 1.26 for a float-precision affine crop — 2.6x rougher, and visible as a shimmer
+    on rock and sand. And zoompan's default window is anchored at x=0,y=0, so every push-in drifted
+    toward the top-left corner instead of into the centre of the picture. Supersampling the input
+    did not help either (measured: unchanged), so the cure was not resolution but the resampler.
+    Frames go through a pipe, never to disk: ~0.13s each on CPU, one frame in memory at a time."""
+    from PIL import Image
+    W, H = pre.size
+    cmd = [_bin("ffmpeg"), "-y", "-loglevel", "error", "-f", "rawvideo", "-pix_fmt", "rgb24",
+           "-s", f"{w}x{h}", "-r", str(fps), "-i", "-",
+           "-frames:v", str(frames), "-c:v", "libx264", "-pix_fmt", "yuv420p", str(out)]
+    proc = subprocess.Popen(cmd, stdin=subprocess.PIPE)
+    try:
+        for n in range(frames):
+            x0, y0, cw, ch = zoom_window(W, H, n)
+            frame = pre.transform((w, h), Image.AFFINE, (cw / w, 0, x0, 0, ch / h, y0),
+                                  resample=Image.BICUBIC)
+            proc.stdin.write(frame.tobytes())
+    finally:
+        proc.stdin.close()
+        rc = proc.wait()
+    if rc != 0:
+        raise RuntimeError(f"ffmpeg exited {rc} while encoding the Ken Burns clip")
+
+
 def make_clip(src: Path, duration: float, w: int, h: int, fps: int,
               ken_burns: bool, out: Path, seek: float = 0.0) -> None:
     """Render one segment clip (image or video) scaled+cropped to w x h for `duration` s."""
@@ -189,7 +230,13 @@ def make_clip(src: Path, duration: float, w: int, h: int, fps: int,
         return
 
     if ken_burns:
-        frames = max(1, int(duration * fps))
+        # ROUND, and then emit exactly this many frames (-frames:v), never `-t`. zoompan produces
+        # `d` frames from the looped still and then starts OVER at zoom 1.0 on the next loop; with
+        # `-t` allowing one frame more than int(duration*fps) — 3.733s x 30 = 111.99 → 111 frames
+        # asked, 112 delivered — the last frame of every such clip snapped back to the unzoomed
+        # image: a one-frame pop before each cut, intermittent because it depends on the rounding.
+        # Measured: last frame differed 0.79 from the first and 32.9 from the one before it.
+        frames = max(1, round(duration * fps))
         uw, uh = int(w * 1.5), int(h * 1.5)
         # Pre-cover-crop to a 1.5x intermediate with PIL (low memory) so ffmpeg only has to zoom,
         # not decode+scale a huge NASA image — that scaling is what SIGSEGVs under memory pressure.
@@ -198,10 +245,8 @@ def make_clip(src: Path, duration: float, w: int, h: int, fps: int,
             from PIL import Image, ImageOps
             with Image.open(src) as im:
                 im.draft("RGB", (uw, uh))
-                ImageOps.fit(im.convert("RGB"), (uw, uh), method=Image.LANCZOS).save(pre)
-            vf = f"zoompan=z='min(zoom+0.0008,1.15)':d={frames}:s={w}x{h}:fps={fps},setsar=1"
-            run(["-loop", "1", "-i", str(pre), "-t", f"{duration:.3f}", "-vf", vf,
-                 "-r", str(fps), "-c:v", "libx264", "-pix_fmt", "yuv420p", str(out)])
+                fitted = ImageOps.fit(im.convert("RGB"), (uw, uh), method=Image.LANCZOS)
+            _ken_burns_via_pil(fitted, w, h, frames, fps, out)
             return
         except Exception as e:  # noqa: BLE001 — zoompan can still SIGSEGV under load; fall back
             log.warning("Ken Burns failed for %s (%s) — rendering a static clip instead.", src.name, e)

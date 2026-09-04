@@ -579,6 +579,11 @@ def _assemble_engine(project: VideoProject, cfg: Config, script: Script, eng: st
                                _card_seconds(project, cfg, script, eng, render_dur))
                     if seg.kind == "cta"
                     else [render_dur / len(srcs)] * len(srcs))
+            # A short dissolve between the stills of one segment. They used to hard-cut, for pace —
+            # but two renderings of the same subject jumping into each other read as a glitch, not a
+            # cut ("the transition barely works"). Each part is rendered `inner` longer and the
+            # crossfade eats it back, so the audio stays exactly where it was.
+            inner = min(0.3, min(durs) * 0.25) if len(srcs) > 1 else 0.0
             parts: list[Path] = []
             for j, (s2, dj) in enumerate(zip(srcs, durs)):
                 pc = work / f"clip_{seg.index:02d}_{j}.mp4"
@@ -587,10 +592,14 @@ def _assemble_engine(project: VideoProject, cfg: Config, script: Script, eng: st
                 # spoken bridge plays over.
                 is_card = seg.kind == "cta" and j == len(srcs) - 1
                 move = cfg.video.ken_burns and not is_card
-                ffmpeg.make_clip(s2, dj, cfg.video.width, cfg.video.height, cfg.video.fps,
+                tail = inner if j < len(srcs) - 1 else 0.0        # the last part needs no overlap
+                ffmpeg.make_clip(s2, dj + tail, cfg.video.width, cfg.video.height, cfg.video.fps,
                                  move, pc, seek=cfg.video.video_seek)
                 parts.append(pc)
-            ffmpeg.concat_videos(parts, clip)
+            if inner > 0:
+                ffmpeg.concat_videos_xfade(parts, list(durs), inner, clip)
+            else:
+                ffmpeg.concat_videos(parts, clip)
             log.info("[%s] segment %d: %d visuals (%s)", eng, seg.index, len(srcs),
                      ", ".join(f"{d:.1f}s" for d in durs))
         if seg.kind != "cta" and srcs:

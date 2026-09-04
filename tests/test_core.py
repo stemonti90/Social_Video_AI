@@ -794,24 +794,26 @@ class CliDelete(unittest.TestCase):
 class MakeClipFallback(unittest.TestCase):
     """Regression (2026-06-15): zoompan (Ken Burns) can SIGSEGV under memory pressure even after
     retries; make_clip must fall back to a static clip so the assemble stage never dies."""
-    def test_falls_back_to_static_on_zoompan_failure(self):
+    def test_falls_back_to_static_on_ken_burns_failure(self):
+        """The push-in is rendered in PIL and streamed to ffmpeg; if that encode dies (ffmpeg has
+        SIGSEGVed under memory pressure before), the segment must still get a static clip."""
         from PIL import Image
         calls = []
 
         def fake_run(args, retries=6):
             calls.append(args)
-            if any("zoompan" in str(a) for a in args):
-                raise subprocess.CalledProcessError(-11, ["ffmpeg"])   # simulate SIGSEGV
-            return None
+
+        def boom(*a, **k):
+            raise RuntimeError("ffmpeg exited -11 while encoding the Ken Burns clip")
 
         with tempfile.TemporaryDirectory() as td:
             src = Path(td) / "01.jpg"
             Image.new("RGB", (1200, 800), (20, 30, 60)).save(src)      # real image: PIL prep needs it
-            with mock.patch("avp.ffmpeg.run", fake_run):
+            with mock.patch("avp.ffmpeg.run", fake_run), \
+                 mock.patch("avp.ffmpeg._ken_burns_via_pil", boom):
                 ffmpeg.make_clip(src, 6.0, 1080, 1920, 30, True, Path(td) / "out.mp4")
-        self.assertEqual(len(calls), 2)                                  # zoompan try + static fallback
-        self.assertTrue(any("zoompan" in str(a) for a in calls[0]))      # first attempt = Ken Burns
-        self.assertFalse(any("zoompan" in str(a) for a in calls[1]))     # fallback = static (PIL-scaled)
+        self.assertEqual(len(calls), 1)                                  # the static fallback encode
+        self.assertTrue(any(".frame.png" in str(a) for a in calls[0]))    # = the PIL still path
 
 
 class ExportOutputs(unittest.TestCase):
@@ -2570,6 +2572,53 @@ class SegmentwiseFit(unittest.TestCase):
         src = inspect.getsource(llm.generate_script)
         self.assertIn('fit or "whole"', src)
         self.assertIn("fit_segments(client, data, words, language)", src)
+
+
+class KenBurnsIsSmoothCentredAndExact(unittest.TestCase):
+    """Three measured faults in the old zoompan push-in, all seen on the Mercury video:
+    (1) `-t` let one frame more than zoompan's `d` through, and that frame snapped back to zoom 1.0
+    — a pop before every cut (last frame differed 0.79 from the FIRST frame, 32.9 from the one
+    before it); (2) zoompan's window is anchored at x=0,y=0, so every push-in drifted top-left;
+    (3) its motion juddered — frame-to-frame difference alternated on 34% of frames (mean 3.27)
+    against 0% and 1.26 for a float-precision affine crop, and supersampling did not help."""
+
+    def test_the_window_is_centred_and_shrinks_monotonically(self):
+        from avp.ffmpeg import zoom_window
+        W, H = 1620, 2880
+        prev = None
+        for n in (0, 30, 60, 200, 1000):
+            x0, y0, cw, ch = zoom_window(W, H, n)
+            self.assertAlmostEqual(x0 * 2 + cw, W, places=6)     # centred horizontally
+            self.assertAlmostEqual(y0 * 2 + ch, H, places=6)     # centred vertically
+            if prev is not None:
+                self.assertLessEqual(cw, prev)
+            prev = cw
+        self.assertAlmostEqual(zoom_window(W, H, 10_000)[2], W / 1.15, places=6)   # capped
+
+    def test_the_clip_is_exactly_the_requested_frames(self):
+        from avp import ffmpeg
+        src = inspect.getsource(ffmpeg.make_clip)
+        self.assertIn("round(duration * fps)", src)
+        self.assertNotIn("zoompan=", src)                      # the filter, not the word in comments
+        self.assertIn('"-frames:v", str(frames)', inspect.getsource(ffmpeg._ken_burns_via_pil))
+
+    def test_a_tiny_real_render_has_the_right_frame_count(self):
+        from PIL import Image
+        from avp import ffmpeg
+        with tempfile.TemporaryDirectory() as tmp:
+            src = Path(tmp) / "s.png"
+            Image.effect_noise((300, 500), 80).convert("RGB").save(src)
+            out = Path(tmp) / "c.mp4"
+            ffmpeg.make_clip(src, 0.4, 108, 192, 30, True, out)     # 12 frames
+            n = subprocess.run(["ffprobe", "-v", "0", "-count_frames", "-select_streams", "v",
+                                "-show_entries", "stream=nb_read_frames", "-of", "csv=p=0", str(out)],
+                               capture_output=True, text=True).stdout.strip()
+            self.assertEqual(n, "12")
+
+    def test_stills_inside_a_segment_dissolve_instead_of_hard_cutting(self):
+        from avp import stages
+        src = inspect.getsource(stages._assemble_engine)
+        self.assertIn("concat_videos_xfade(parts, list(durs), inner, clip)", src)
 
 
 class CachedModelsLoadWithoutTheNetwork(unittest.TestCase):
