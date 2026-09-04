@@ -29,7 +29,12 @@ WHAT WORKS ON THIS CHANNEL (its own best lines — match this voice, never copy 
   "NASA intentionally vaporized the craft into Saturn's furnace to kill Earth microbes."
   "A machine 225 million kilometres away is still screaming into the void."
 Every one of those is a CLAIM WITH STAKES: something is dying, hiding, lying, being killed, or should \
-be impossible. Each has one violent or too-human verb, and each makes you need the next line.
+be impossible. Each has one violent or too-human verb, and each makes you need the next line. And \
+every one is A REAL FACT IN DISGUISE: under "graveyard of shattered moons" sits how the rings formed; \
+under "suicide mission" sits Cassini's deliberate final plunge; under "to kill Earth microbes" sits \
+planetary-protection policy. Before you write an image, name to yourself the checkable fact beneath \
+it. An image with no fact under it — "a planetary stomach swallows a moon" — is not bold, it is \
+false, and it is banned. These example lines are OFF-LIMITS verbatim: reuse the nerve, never the words.
 
 WHAT FAILED ON THIS CHANNEL (the lines viewers called "written by a child"):
   "These deep craters trap vapor in shadows where the sun never reaches, ensuring no heat can enter."
@@ -372,9 +377,27 @@ JUDGE_SYSTEM = (
 )
 
 
+EXEMPLAR_PHRASES = ("graveyard of shattered moons", "rings are bleeding", "planetary autopsy",
+                    "suicide mission", "kill earth microbes", "into the void")   # stems: scream/screaming
+
+
+def copied_exemplar(data: dict) -> str | None:
+    """The first exemplar phrase found verbatim in a draft, or None. The prompt shows the channel's
+    best lines as the voice to match and says never to copy them; within an hour the model had
+    written "waiting for a catalyst to scream into the void" about Titan. A copied line is not
+    voice, it is plagiarism of ourselves, and it is usually false for the new subject."""
+    text = " ".join(str(seg.get("narration", "")) for seg in _segment_dicts(data)).lower()
+    return next((ph for ph in EXEMPLAR_PHRASES if ph in text), None)
+
+
 def _judge_best(client: "OllamaClient", drafts: list[dict], topic: str, language: str) -> dict:
     """Pick the single best of several drafts by the channel rubric. Falls back to the first draft on
-    any failure — judging must never lose a usable script."""
+    any failure — judging must never lose a usable script. A draft that copied one of the exemplar
+    lines is disqualified before the judge sees it (unless every draft did)."""
+    clean = [d for d in drafts if not copied_exemplar(d)]
+    if clean and len(clean) < len(drafts):
+        log.info("Best-of: %d draft(s) copied an exemplar line — disqualified.", len(drafts) - len(clean))
+        drafts = clean
     if len(drafts) <= 1:
         return drafts[0]
     listing = "\n\n".join(f"DRAFT {i + 1}:\n{json.dumps(d, ensure_ascii=False)}"
@@ -507,11 +530,20 @@ def fit_segments(client: "OllamaClient", data: dict, words: int, language: str) 
         return data
     budgets = segment_budgets(words, len(segs))
     out, before = [], sum(_seg_words(x) for x in segs)
+    # Only move in the direction the WHOLE script needs. Fitting every segment to its own budget
+    # once turned a 115-word draft (in band) into 121 (over the ceiling): the under-budget segments
+    # were lengthened while the over-budget ones sat inside their tolerance. A script already in
+    # band is left alone; a short one only ever grows; a long one only ever shrinks.
+    verdict = length_verdict(before, words)
+    if verdict == "ok":
+        return data
     for i, seg in enumerate(segs):
         budget = budgets[i]
         prev_line = str(segs[i - 1].get("narration", "")) if i else ""
         next_line = str(segs[i + 1].get("narration", "")) if i + 1 < len(segs) else ""
-        if abs(_seg_words(seg) - budget) <= max(1, round(budget * SEGMENT_FIT_TOLERANCE)):
+        n = _seg_words(seg)
+        needs = (verdict == "short" and n < budget) or (verdict == "long" and n > budget)
+        if not needs or abs(n - budget) <= max(1, round(budget * SEGMENT_FIT_TOLERANCE)):
             out.append(seg)
             continue
         out.append(_fit_one(client, seg, budget, i + 1, len(segs), prev_line, next_line, language))

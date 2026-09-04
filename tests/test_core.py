@@ -2544,15 +2544,18 @@ class SegmentwiseFit(unittest.TestCase):
         self.assertEqual(max(b), b[-2])                # the penultimate 'wow' gets the room
 
     def test_only_segments_outside_tolerance_are_touched(self):
+        """A SHORT script (86 words against 112 — 90 would sit exactly on the 80% floor and count
+        as in band): only the under-budget segments beyond ±30% are lengthened; a segment already
+        over its budget is left exactly as written."""
         from avp import llm
         client = self._Compliant()
-        # budgets for 112/6 are [15,18,19,19,22,19]; 16 and 18 are within ±20%, 8 and 40 are not
-        out = llm.fit_segments(client, self._script([16, 18, 8, 19, 40, 19]), 112, "en")
+        # budgets for 112/6 are [15,18,19,19,22,19]; seg 3 (8 vs 19) and seg 5 (6 vs 22) are short
+        out = llm.fit_segments(client, self._script([16, 18, 8, 19, 6, 19]), 112, "en")
         counts = [llm._seg_words(x) for x in out["segments"]]
-        self.assertEqual(len(client.calls), 2, client.calls)     # exactly the two outliers
+        self.assertEqual(len(client.calls), 2, client.calls)     # exactly the two short outliers
         self.assertEqual(counts[2], 19)
         self.assertEqual(counts[4], 22)
-        self.assertEqual(counts[0], 16)                           # the hook was left alone
+        self.assertEqual(counts[0], 16)                           # over budget, untouched
 
     def test_the_total_lands_on_target_from_a_short_draft(self):
         """A 60-word draft against 112, which no whole-script pass could fix. (Segments within 30% of
@@ -2715,6 +2718,46 @@ class NoPeopleAmongTheCandidates(unittest.TestCase):
         res, made = self._run({0: 0.99}, detector=False)
         self.assertEqual(res["candidates"], 2)
         self.assertIsNone(res["people"])
+
+
+class VoiceWithoutPlagiarismOrPadding(unittest.TestCase):
+    """The first draft in the new voice copied an exemplar line verbatim ("scream into the void",
+    about Titan) and the per-segment fitter lengthened a script that was already in band."""
+
+    def test_a_draft_that_copies_an_exemplar_is_disqualified_when_another_is_clean(self):
+        from avp import llm
+        bad = {"segments": [{"narration": "Titan waits for a catalyst to scream into the void."}]}
+        good = {"segments": [{"narration": "Titan's rivers run with fuel, not water."}]}
+        self.assertEqual(llm.copied_exemplar(bad), "into the void")
+        self.assertIsNone(llm.copied_exemplar(good))
+        with mock.patch.object(llm, "OllamaClient"):
+            picked = llm._judge_best(mock.Mock(), [bad, good], "Titan", "en")
+        self.assertIs(picked, good)
+
+    def test_a_script_already_in_band_is_not_touched_by_the_fitter(self):
+        from avp import llm
+        calls = []
+        class Client:
+            def chat(self, *a, **k):
+                calls.append(1); return json.dumps({"narration": "x"})
+        segs = [{"narration": " ".join(f"w{i}x{j}" for j in range(n)), "visual": "v", "keywords": []}
+                for i, n in enumerate([10, 26, 19, 19, 22, 19])]          # 115 words, target 112
+        out = llm.fit_segments(Client(), {"segments": segs}, 112, "en")
+        self.assertEqual(calls, [])
+        self.assertEqual(sum(llm._seg_words(x) for x in out["segments"]), 115)
+
+    def test_a_long_script_only_ever_shrinks(self):
+        from avp import llm
+        class Client:
+            def chat(self, *a, **k):
+                n = int(re.search(r"EXACTLY (\d+) words", a[1]).group(1))
+                return json.dumps({"narration": " ".join(f"w{i}" for i in range(n))})
+        segs = [{"narration": " ".join(f"s{i}x{j}" for j in range(n)), "visual": "v", "keywords": []}
+                for i, n in enumerate([8, 40, 19, 19, 22, 40])]            # 148 words: long
+        out = llm.fit_segments(Client(), {"segments": segs}, 112, "en")
+        counts = [llm._seg_words(x) for x in out["segments"]]
+        self.assertEqual(counts[0], 8)                                     # short segment left short
+        self.assertLess(sum(counts), 148)
 
 
 class RegistryMustNotContradictTheShot(unittest.TestCase):
