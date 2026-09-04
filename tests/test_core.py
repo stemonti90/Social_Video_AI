@@ -2891,6 +2891,14 @@ class VisualsMustBePhotographable(unittest.TestCase):
         self.assertEqual(_photographable("annotated cutaway of the volcano's magma chamber"),
                          "the volcano's magma chamber")
 
+    def test_every_form_of_compare_is_a_drawn_request(self):
+        """"Split screen comparing a terrestrial volcano to an eruption on Io" got through: the filter
+        knew "comparison" but not "comparing"."""
+        from avp.imagegen import _photographable
+        out = _photographable("Split screen comparing a terrestrial volcano to a massive eruption on Io")
+        self.assertNotIn("Split", out); self.assertNotIn("comparing", out)
+        self.assertIn("eruption on Io", out)
+
     def test_a_cue_that_is_only_a_drawn_figure_yields_nothing(self):
         from avp.imagegen import _photographable
         self.assertEqual(_photographable("diagram"), "")

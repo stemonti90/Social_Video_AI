@@ -120,7 +120,7 @@ def _bucket(text: str) -> str:
 
 _DRAWN = re.compile(
     r"\b(diagram|chart|graph|infographic|schematic|cutaway|cross[- ]section|illustration|"
-    r"annotated|labell?ed|side[- ]by[- ]side|split[- ]screen|comparison)\b", re.IGNORECASE)
+    r"annotated|labell?ed|side[- ]by[- ]side|split[- ]screen|compar(?:ison|ing|ed|e))\b", re.IGNORECASE)
 _VS = re.compile(r"\s+(?:vs\.?|versus)\s+", re.IGNORECASE)
 _SCALE = re.compile(r"^([^,]*\b(?:shot|frame|angle|close[- ]up)\b[^,]*),\s*(.+)$", re.IGNORECASE)
 _DANGLING = re.compile(r"^(?:of|and|with|between|showing)\s+", re.IGNORECASE)
