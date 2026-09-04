@@ -378,7 +378,8 @@ JUDGE_SYSTEM = (
 
 
 EXEMPLAR_PHRASES = ("graveyard of shattered moons", "rings are bleeding", "planetary autopsy",
-                    "suicide mission", "kill earth microbes", "into the void")   # stems: scream/screaming
+                    "suicide mission", "kill earth microbes", "scream into the void",
+                    "screaming into the void")   # "into the void" alone matched honest lines
 
 
 def copied_exemplar(data: dict) -> str | None:
@@ -685,6 +686,8 @@ def generate_script(cfg: LLMConfig, topic: str, seconds: int = 60, language: str
             best = cand
 
     data = best
+    if (ph := copied_exemplar(data)):
+        log.warning("Script reuses the exemplar line %r after refinement — reword it in script.md.", ph)
     if length_verdict(_nwords(data), words) != "ok":
         log.warning("Length guard: settled at %d words against a target of ~%d — the video will be "
                     "off-length.", _nwords(data), words)

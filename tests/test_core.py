@@ -2728,8 +2728,10 @@ class VoiceWithoutPlagiarismOrPadding(unittest.TestCase):
         from avp import llm
         bad = {"segments": [{"narration": "Titan waits for a catalyst to scream into the void."}]}
         good = {"segments": [{"narration": "Titan's rivers run with fuel, not water."}]}
-        self.assertEqual(llm.copied_exemplar(bad), "into the void")
+        self.assertEqual(llm.copied_exemplar(bad), "scream into the void")
         self.assertIsNone(llm.copied_exemplar(good))
+        honest = {"segments": [{"narration": "Plumes are hurled 200 kilometres into the void."}]}
+        self.assertIsNone(llm.copied_exemplar(honest))          # "into the void" alone is not theft
         with mock.patch.object(llm, "OllamaClient"):
             picked = llm._judge_best(mock.Mock(), [bad, good], "Titan", "en")
         self.assertIs(picked, good)
