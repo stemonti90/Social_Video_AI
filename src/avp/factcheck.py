@@ -114,7 +114,16 @@ line, you do not know the claim is false: mark it "unsure" instead.
 
 Return STRICT JSON only, no commentary:
 {"findings": [{"segment": 1, "field": "narration|visual", "claim": "exact quoted text", \
-"verdict": "wrong|unsure", "why": "one sentence", "fix": "replacement, no longer than the original"}]}"""
+"verdict": "wrong|unsure", "why": "one sentence", "fix": "replacement, no longer than the original"}]}
+
+INVERTED CLAIMS AND SELF-CONTRADICTION — check these FIRST, they are the cheapest errors to catch and
+the most humiliating to publish. A script once opened with "a human could not fly here by flapping
+their arms; the atmosphere is too thin and gravity too weak" about TITAN — the one world where a human
+COULD, precisely because its atmosphere is dense and its gravity weak — and two segments later said
+"this dense atmosphere" and "surface pressure about 1.5 times Earth's". Every segment was individually
+plausible-sounding; together they were nonsense. So: read the whole script as ONE claim about ONE
+object, and flag as "wrong" (with a fix) any line whose direction is reversed (thin/dense, hot/cold,
+weak/strong, first/last, closer/farther), and any pair of segments that cannot both be true."""
 
 USER = """Script to check. For each segment: what is SAID, then the SHOT that will be generated.
 

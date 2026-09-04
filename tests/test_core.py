@@ -2628,6 +2628,18 @@ class KenBurnsIsSmoothCentredAndExact(unittest.TestCase):
         self.assertIn("concat_videos_xfade(parts, list(durs), inner, clip)", src)
 
 
+class FactCheckHuntsContradictions(unittest.TestCase):
+    """The automatic Titan video opened with an INVERTED claim (a human could not fly by flapping —
+    the atmosphere too thin) and contradicted itself two segments later ("this dense atmosphere",
+    "1.5 times Earth's pressure"). Each line passed on its own; together they were nonsense. The
+    checker now reads the script as one claim about one object and hunts reversals first."""
+
+    def test_the_checker_is_told_to_look_for_reversals_and_self_contradiction(self):
+        from avp import factcheck
+        self.assertIn("INVERTED CLAIMS", factcheck.SYSTEM)
+        self.assertIn("cannot both be true", factcheck.SYSTEM)
+
+
 class CachedModelsLoadWithoutTheNetwork(unittest.TestCase):
     """CLIP's weights were on disk and transformers still asked HuggingFace for a safetensors variant;
     the connection hung at 0% CPU for ten minutes. A build must not depend on a server to load a
