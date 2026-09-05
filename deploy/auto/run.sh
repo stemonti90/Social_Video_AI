@@ -25,6 +25,10 @@ fi
 # pinned awake after the run. Closing the lid still sleeps the machine — that needs `caffeinate -d`
 # plus an external power source, which is a decision for the operator, not a default.
 CAFFEINATE=""
-command -v caffeinate >/dev/null 2>&1 && CAFFEINATE="caffeinate -i -m"
+# -s as well as -i -m: a build died at 07:39 with no error because the lid was closed mid-footage.
+# -i/-m only stop IDLE and DISK sleep; -s also holds off system sleep while on AC power, which is
+# the case for a machine left running its daily job. It cannot stop a forced sleep, and does not
+# wake a sleeping Mac — that still needs `pmset repeat wakeorpoweron`.
+command -v caffeinate >/dev/null 2>&1 && CAFFEINATE="caffeinate -i -m -s"
 
 exec $CAFFEINATE "$ROOT/.venv/bin/avp" auto --config "$ROOT/config.yaml" -v
