@@ -2762,6 +2762,36 @@ class VoiceWithoutPlagiarismOrPadding(unittest.TestCase):
         self.assertLess(sum(counts), 148)
 
 
+class CopiedLinesAreRewordedNotJustFlagged(unittest.TestCase):
+    """A warning in an unattended run is a warning nobody reads: a Moon script reached the render with
+    "it's a planetary autopsy" in it. A copied exemplar line is now rewritten, same fact, own words."""
+
+    def test_the_offending_segment_is_rewritten_and_the_others_untouched(self):
+        from avp import llm
+
+        class Client:
+            def chat(self, system, user, **kw):
+                return json.dumps({"narration": "The far side is a record of every impact the Moon ever took."})
+
+        data = {"segments": [{"narration": "A mask worn for millennia."},
+                             {"narration": "The moon isn't a companion; it's a planetary autopsy of a dead world."}]}
+        out = llm._reword_copied(Client(), data, "planetary autopsy", "en")
+        self.assertEqual(out["segments"][0]["narration"], "A mask worn for millennia.")
+        self.assertNotIn("planetary autopsy", out["segments"][1]["narration"])
+        self.assertIsNone(llm.copied_exemplar(out))
+
+    def test_a_rewrite_that_still_copies_is_discarded(self):
+        from avp import llm
+
+        class Stubborn:
+            def chat(self, system, user, **kw):
+                return json.dumps({"narration": "Still a planetary autopsy, sadly."})
+
+        data = {"segments": [{"narration": "It's a planetary autopsy."}]}
+        out = llm._reword_copied(Stubborn(), data, "planetary autopsy", "en")
+        self.assertEqual(out["segments"][0]["narration"], "It's a planetary autopsy.")   # kept, warned by caller
+
+
 class RegistryMustNotContradictTheShot(unittest.TestCase):
     """The lighting registry is appended to the prompt, and the model obeys it over the shot cue —
     it is the more concrete of the two. So a cue asking for a world seen from space must not be

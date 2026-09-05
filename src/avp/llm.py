@@ -554,6 +554,27 @@ def fit_segments(client: "OllamaClient", data: dict, words: int, language: str) 
     return data
 
 
+def _reword_copied(client: "OllamaClient", data: dict, phrase: str, language: str) -> dict:
+    """Rewrite only the segment(s) containing a copied exemplar phrase, keeping their fact and length."""
+    segs = _segment_dicts(data)
+    out = []
+    for i, seg in enumerate(segs):
+        line = str(seg.get("narration", ""))
+        if phrase not in line.lower():
+            out.append(seg); continue
+        user = (f"This line copies a phrase from another video on the channel: \"{phrase}\". Rewrite the "
+                f"line in about {len(line.split())} words, keeping its fact, its stakes and its role, with "
+                f"an image of your own — the phrase itself must not appear. Write in "
+                f"{LANG_NAME.get(language, 'English')}.\nLine: {line}")
+        try:
+            cand = _extract_json(client.chat(SEGMENT_FIT_SYSTEM, user, temperature=0.7, num_predict=256))
+            new = str(cand.get("narration", "")).strip() if isinstance(cand, dict) else ""
+        except Exception as e:  # noqa: BLE001 — a failed rewrite keeps the line; the caller warns
+            log.debug("reword of segment %d failed (%s)", i + 1, e); new = ""
+        out.append({**seg, "narration": new} if new and phrase not in new.lower() else seg)
+    return {**data, "segments": out}
+
+
 def generate_script(cfg: LLMConfig, topic: str, seconds: int = 60, language: str = "en",
                     refine_passes: int = 1, best_of: int = 1, images_per_segment: int = 2,
                     fit: str = "whole") -> Script:
@@ -687,7 +708,15 @@ def generate_script(cfg: LLMConfig, topic: str, seconds: int = 60, language: str
 
     data = best
     if (ph := copied_exemplar(data)):
-        log.warning("Script reuses the exemplar line %r after refinement — reword it in script.md.", ph)
+        # A warning in an unattended run is a warning nobody reads: the Moon script went to render
+        # with "it's a planetary autopsy" in it. Repair it — one targeted rewrite of the offending
+        # segment(s), same fact, own words — and only warn if that also fails.
+        data = _reword_copied(client, data, ph, language)
+        if (ph2 := copied_exemplar(data)):
+            log.warning("Script still reuses the exemplar line %r after a rewrite — reword it in "
+                        "script.md before building.", ph2)
+        else:
+            log.info("Script had copied the exemplar line %r — reworded.", ph)
     if length_verdict(_nwords(data), words) != "ok":
         log.warning("Length guard: settled at %d words against a target of ~%d — the video will be "
                     "off-length.", _nwords(data), words)
