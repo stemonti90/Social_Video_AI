@@ -22,8 +22,8 @@ fi
 # on a waking machine took SEVEN HOURS overnight — the laptop slept and the render only crept forward
 # during brief DarkWake windows (segment 5→6 alone spanned 3h42m of wall clock for ~3 minutes of work).
 # -i blocks idle sleep, -m keeps the disk spinning; both end when the command exits, so nothing stays
-# pinned awake after the run. Closing the lid still sleeps the machine — that needs `caffeinate -d`
-# plus an external power source, which is a decision for the operator, not a default.
+# pinned awake after the run. Closing the lid still sleeps the machine unless it is on AC power AND
+# -s is set (see below); on battery, a closed lid ends the build — nothing here can prevent that.
 CAFFEINATE=""
 # -s as well as -i -m: a build died at 07:39 with no error because the lid was closed mid-footage.
 # -i/-m only stop IDLE and DISK sleep; -s also holds off system sleep while on AC power, which is
