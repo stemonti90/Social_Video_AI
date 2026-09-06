@@ -49,6 +49,11 @@ class ScriptConfig:
     factcheck: str = "off"
     factcheck_model: str = "deepseek-chat"
     factcheck_key: str = ""      # prefer the DEEPSEEK_API_KEY env var; this is the fallback
+    # A fact sheet from the fact-check model BEFORE the writer starts (see avp/brief.py). The local
+    # writer does not know less-travelled topics and fills the gap with atmosphere; the sheet is the
+    # only fact base it may use. "auto" = on whenever a fact-check key exists; "on" | "off".
+    brief: str = "auto"
+    brief_model: str = ""        # empty = factcheck_model
 
 
 @dataclass
@@ -186,6 +191,7 @@ class PublishConfig:
     # {"api_key": … (prefer env AVP_UPLOADPOST_KEY), "user": <profile id>, "subreddit": …,
     #  "privacy": "public", "tiktok_post_mode": "DIRECT_POST"}
     uploadpost: dict = field(default_factory=dict)
+    hashtags: dict = field(default_factory=dict)  # per-platform tag bank overrides, see avp/hashtags.py
     # Per-platform OAuth app credentials. Env wins (AVP_TIKTOK_CLIENT_KEY, AVP_META_APP_ID, …); this is
     # the fallback for a config-driven setup. config.yaml is gitignored, but prefer the environment.
     apps: dict = field(default_factory=dict)      # {"tiktok": {"client_id": …, "client_secret": …}}

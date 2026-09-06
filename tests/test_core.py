@@ -2581,7 +2581,7 @@ class SegmentwiseFit(unittest.TestCase):
         from avp import llm
         src = inspect.getsource(llm.generate_script)
         self.assertIn('fit or "whole"', src)
-        self.assertIn("fit_segments(client, data, words, language)", src)
+        self.assertIn("fit_segments(client, data, words, language, facts=facts)", src)
 
 
 class KenBurnsIsSmoothCentredAndExact(unittest.TestCase):
@@ -2876,6 +2876,8 @@ class ToneIsWonderNotTheMorgue(unittest.TestCase):
         from avp.llm import morbid_word
         self.assertEqual(morbid_word("A planetary Hemorrhage of grit"), "hemorrhage")
         self.assertEqual(morbid_word("a frozen corpse hides"), "corpse")
+        self.assertEqual(morbid_word("The Ghost-Soil of 67P"), "ghost")          # 6/9: the spooky reach too
+        self.assertEqual(morbid_word("a haunted, skeletal moon"), "haunted")
         self.assertIsNone(morbid_word("Saturn's rings are younger than the dinosaurs."))
         self.assertIsNone(morbid_word("the deadline for the mission"))      # not a whole word
 
@@ -2888,7 +2890,7 @@ class ToneIsWonderNotTheMorgue(unittest.TestCase):
     def test_the_bridge_is_checked_too(self):
         from avp.llm import morbid_in_script
         self.assertEqual(morbid_in_script({"segments": [{"narration": "fine"}],
-                                           "cta_bridge": "the ghost of a dying titan"}), "dying")
+                                           "cta_bridge": "the ghost of a dying titan"}), "ghost")   # first banned word in text order
 
     def test_a_morbid_line_and_bridge_are_reworded_with_the_fact_kept(self):
         from avp import llm
@@ -3628,3 +3630,136 @@ class FactCheck(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class FactBriefBeforeWriting(unittest.TestCase):
+    """The strong model researches first; the writer may use only what is on the sheet."""
+
+    def _cfg(self, key="k", brief="auto"):
+        from types import SimpleNamespace
+        return SimpleNamespace(script=SimpleNamespace(brief=brief, factcheck_key=key,
+                                                      factcheck_model="deepseek-chat", brief_model=""))
+
+    def test_render_lists_facts_angles_and_donts(self):
+        from avp import brief
+        text = brief.render({"facts": ["Philae bounced to about 1 km.", "Its battery lasted about 60 hours."],
+                             "wonder": ["A lander bounced off a comet."],
+                             "avoid": ["The surface is not grey."], "see_it": "Comets are visible in binoculars."})
+        self.assertIn("1. Philae bounced to about 1 km.", text)
+        self.assertIn("2. Its battery", text)
+        self.assertIn("SURPRISING ANGLES", text)
+        self.assertIn("DO NOT CLAIM", text)
+        self.assertIn("CAN THE VIEWER SEE IT: Comets", text)
+        self.assertEqual(brief.render({"facts": []}), "")
+
+    def test_no_key_means_no_sheet_and_no_network(self):
+        from avp import brief
+        with mock.patch.dict("os.environ", {"DEEPSEEK_API_KEY": ""}, clear=False), \
+             mock.patch("avp.brief.requests.post", side_effect=AssertionError("must not be called")):
+            self.assertIsNone(brief.build("Ceres", self._cfg(key="")))
+            self.assertIsNone(brief.build("Ceres", self._cfg(key="k", brief="off")))
+
+    def test_the_sheet_comes_from_the_strong_model_and_is_cached(self):
+        import json as _json, tempfile
+        from pathlib import Path
+        from avp import brief
+        calls = []
+
+        class R:
+            status_code = 200
+            text = ""
+            def json(self):
+                return {"choices": [{"message": {"content": _json.dumps(
+                    {"facts": ["Ceres is 940 km across."], "wonder": ["Salt shines on a dark world."],
+                     "avoid": ["It is not an asteroid belt planet."], "see_it": "Binoculars at opposition."})}}]}
+
+        def fake_post(url, headers=None, json=None, timeout=None):
+            calls.append(json)
+            return R()
+
+        with tempfile.TemporaryDirectory() as d, \
+             mock.patch.dict("os.environ", {"DEEPSEEK_API_KEY": ""}, clear=False), \
+             mock.patch("avp.brief.requests.post", fake_post):
+            text = brief.build("The bright salt deposits of Ceres", self._cfg(), out_dir=Path(d))
+            self.assertIn("Ceres is 940 km across.", text)
+            self.assertEqual(calls[0]["model"], "deepseek-chat")
+            self.assertIn("The bright salt deposits of Ceres", calls[0]["messages"][1]["content"])
+            self.assertTrue((Path(d) / "brief.json").exists() and (Path(d) / "brief.md").exists())
+            again = brief.build("The bright salt deposits of Ceres", self._cfg(), out_dir=Path(d))
+            self.assertEqual(again, text)
+            self.assertEqual(len(calls), 1, "a cached brief must not be researched twice")
+
+    def test_a_failed_call_never_blocks_the_writer(self):
+        from avp import brief
+        with mock.patch.dict("os.environ", {"DEEPSEEK_API_KEY": ""}, clear=False), \
+             mock.patch("avp.brief.requests.post", side_effect=OSError("offline")):
+            self.assertIsNone(brief.build("Ceres", self._cfg()))
+
+    def test_the_sheet_is_bound_to_the_system_prompt(self):
+        from avp import llm
+        self.assertEqual(llm.with_facts("BASE", None), "BASE")
+        self.assertEqual(llm.with_facts("BASE", "   "), "BASE")
+        bound = llm.with_facts("BASE", "FACT SHEET\n  1. x")
+        self.assertTrue(bound.startswith("BASE"))
+        self.assertIn("MUST come from it", bound)
+        self.assertTrue(bound.endswith("1. x"))
+
+
+class HashtagsFromTheBank(unittest.TestCase):
+    """Broad/mid/community tags are curated; the model's narrow tags survive only if the script says them."""
+
+    SCRIPT = ("The Storm That Once Swallowed Three Earths. The Great Red Spot is a storm on Jupiter seen "
+              "by the Juno spacecraft. KEYWORDS Jupiter Great Red Spot, Juno spacecraft")
+
+    def test_invented_tags_are_dropped_and_the_bank_is_used(self):
+        from avp import hashtags
+        data = {"instagram": {"caption": "A storm bigger than Earth is fading. #jupiterspot"},
+                "instagram_hashtags": ["#astronomy", "#jupiter", "#greatredspot", "#juno", "#stormsystems",
+                                       "#jupitersystem", "#iceanddust"],
+                "tiktok": {"caption": "The storm that swallowed three Earths. #space #greatredspot"}}
+        hashtags.finalize(data, self.SCRIPT)
+        ig = data["instagram"]["hashtags"]
+        self.assertIn("#greatredspot", ig)
+        self.assertIn("#juno", ig)
+        self.assertIn("#jupiter", ig)
+        for bad in ("#jupiterspot", "#stormsystems", "#jupitersystem", "#iceanddust"):
+            self.assertNotIn(bad, ig)
+        self.assertEqual(ig[0], "#astronomy")                    # broad first
+        self.assertIn("#astrophotography", ig)                   # community present
+        self.assertEqual(ig[-1], "#astrostackerpro")             # brand last
+        self.assertLessEqual(len(ig), 20)
+        self.assertEqual(len(set(t.lower() for t in ig)), len(ig))
+        self.assertTrue(data["instagram"]["caption"].startswith("A storm bigger than Earth is fading."))
+        self.assertNotIn("#jupiterspot", data["instagram"]["caption"])
+        self.assertIn("\n\n#astronomy", data["instagram"]["caption"])
+
+    def test_tiktok_gets_the_discovery_core_two_narrow_tags_and_the_brand(self):
+        from avp import hashtags
+        data = {"tiktok": {"caption": "The storm that swallowed three Earths. #space"},
+                "instagram": {"caption": "x"},
+                "instagram_hashtags": ["#greatredspot", "#juno", "#jupiter", "#fakeplanetzz"]}
+        hashtags.finalize(data, self.SCRIPT)
+        tt = data["tiktok"]["hashtags"]
+        self.assertEqual(tt[:3], ["#LearnOnTikTok", "#SpaceTok", "#ScienceTok"])
+        self.assertIn("#greatredspot", tt)
+        self.assertNotIn("#fakeplanetzz", tt)
+        self.assertEqual(tt[-1], "#astrostackerpro")
+        self.assertLessEqual(len(tt), 9)
+        self.assertEqual(data["tiktok"]["caption"].count("#space"), 1)   # inline duplicate removed
+        self.assertTrue(data["tiktok"]["caption"].startswith("The storm that swallowed three Earths. #LearnOnTikTok"))
+
+    def test_config_overrides_replace_a_tier(self):
+        from avp import hashtags
+        data = {"tiktok": {"caption": "hook"}, "instagram": {"caption": "hook"}}
+        hashtags.finalize(data, self.SCRIPT, {"tiktok": {"core": ["#fyp", "#space"], "max": 4}})
+        self.assertEqual(data["tiktok"]["hashtags"], ["#fyp", "#space", "#astrostackerpro"])
+
+    def test_clean_metadata_applies_the_bank_only_when_given_the_script(self):
+        from avp import llm
+        data = {"instagram": {"caption": "hook #madeuptag"}, "instagram_hashtags": ["#madeuptag"],
+                "tiktok": {"caption": "hook #madeuptag"}}
+        legacy = llm._clean_metadata(dict(data, instagram=dict(data["instagram"]), tiktok=dict(data["tiktok"])))
+        self.assertIn("#madeuptag", legacy["instagram"]["hashtags"])          # old behaviour kept for callers without a script
+        banked = llm._clean_metadata(data, script_text="Jupiter storm")
+        self.assertNotIn("#madeuptag", banked["instagram"]["hashtags"])
+        self.assertIn("#LearnOnTikTok", banked["tiktok"]["caption"])

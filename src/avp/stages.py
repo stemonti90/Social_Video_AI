@@ -139,7 +139,9 @@ def stage_script(project: VideoProject, cfg: Config, topic: str | None) -> Scrip
     # 9, not 8: the spoken CTA plus its silent tail was measured at 6.4-8.9s across builds, and the
     # budget has to hold at the WORST case or the video crosses 60s exactly when the bridge runs long.
     content_target = cfg.script.target_seconds - (9 if cfg.funnel.enabled else 0)
-    script = llm.generate_script(cfg.llm, topic, max(30, content_target),
+    from . import brief
+    facts = brief.build(topic, cfg, out_dir=project.root)      # None when off/unconfigured/failed
+    script = llm.generate_script(cfg.llm, topic, max(30, content_target), facts=facts,
                                  language=cfg.script.language, refine_passes=cfg.script.refine_passes,
                                  best_of=getattr(cfg.llm, "best_of", 1),
                                  fit=getattr(cfg.script, "fit", "whole"),
@@ -766,7 +768,8 @@ def export_outputs(project: VideoProject, cfg: Config) -> Path | None:
 # --------------------------------------------------------------------------- metadata
 def stage_metadata(project: VideoProject, cfg: Config) -> None:
     script = load_script(project)
-    meta = llm.generate_metadata(cfg.llm, script, cfg.funnel, cfg.script.language)
+    meta = llm.generate_metadata(cfg.llm, script, cfg.funnel, cfg.script.language,
+                                 hashtag_bank=getattr(cfg.publish, "hashtags", None) or None)
     meta["disclosure_ai"] = bool(project.manifest.data.get("disclosure_ai", False))
     (project.root / "metadata.json").write_text(_json(meta))
     _write_metadata_md(project, cfg, meta)

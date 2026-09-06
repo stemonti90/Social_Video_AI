@@ -8,6 +8,8 @@ llm:
   temperature: 0.7
 
 script:
+  brief: auto            # scheda fatti dal modello del fact-check PRIMA di scrivere (avp/brief.py): auto = quando c'e' la chiave; on | off
+  brief_model: ""        # vuoto = factcheck_model
   target_seconds: 50      # aim above the 60s TikTok Creator-Rewards minimum
   language: en            # en | it — language of the spoken narration + captions
 
@@ -75,6 +77,9 @@ captions:
   group: 3                # words shown per caption line
 
 publish:                  # share to socials via Postiz (open-source scheduler; TikTok/IG/YouTube + more)
+  # hashtags: banco per piattaforma; sostituisce le liste di default di avp/hashtags.py (il modello propone solo i tag STRETTI, validati sul copione)
+  #   instagram: {broad: ["#astronomy", "#space"], mid: ["#planetaryscience"], community: ["#astrophotography"], narrow_max: 6, max: 20}
+  #   tiktok: {core: ["#LearnOnTikTok", "#SpaceTok", "#ScienceTok", "#astronomy", "#space", "#nasa"], narrow_max: 2, max: 9}
   # Setup: run `deploy/postiz/setup.sh` (brings up Postiz via Docker), then in the UI at
   # http://localhost:4007 connect your TikTok/IG/YouTube channels and create an API key at Settings →
   # put it in postiz_token (or env AVP_POSTIZ_TOKEN). `avp publish <slug>` is a DRY RUN (writes

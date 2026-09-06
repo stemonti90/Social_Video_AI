@@ -398,7 +398,10 @@ EXEMPLAR_PHRASES = ("younger than the dinosaurs", "rains gasoline", "three earth
 MORBID_WORDS = ("corpse", "cadaver", "dead", "dying", "died", "death", "kill", "killed", "murder",
                 "tomb", "grave", "graveyard", "autopsy", "hemorrhage", "haemorrhage", "bleed", "bleeding",
                 "wound", "torture", "suicide", "hell", "hellscape", "nightmare", "scream", "screaming",
-                "butcher", "prison", "prisoner", "gutted", "rot", "rotting", "decay", "doom", "apocalypse")
+                "butcher", "prison", "prisoner", "gutted", "rot", "rotting", "decay", "doom", "apocalypse",
+                "ghost", "ghostly", "haunt", "haunted", "haunting", "phantom", "wraith", "specter",
+                "spectre", "coffin", "carcass", "skeleton", "skeletal", "funeral", "mourn", "mourning",
+                "entombed")
 _MORBID_RE = None
 
 
@@ -530,7 +533,7 @@ def segment_budgets(words: int, nseg: int) -> list[int]:
 
 
 def _fit_one(client: "OllamaClient", seg: dict, budget: int, index: int, nseg: int,
-             prev_line: str, next_line: str, language: str) -> dict:
+             prev_line: str, next_line: str, language: str, facts: str | None = None) -> dict:
     """Rewrite one segment to `budget` words. Local, exact, verified: the model is asked for a
     NUMBER of words, given the neighbours so the hand-off survives, and the reply is counted. Up to
     SEGMENT_FIT_ATTEMPTS tries; the closest reply wins, and the original stays if nothing beats it."""
@@ -544,6 +547,8 @@ def _fit_one(client: "OllamaClient", seg: dict, budget: int, index: int, nseg: i
                 f"Previous segment: {prev_line or '(none — this is the opening hook)'}\n"
                 f"Next segment: {next_line or '(none — this is the last content segment)'}\n"
                 f"Segment to rewrite: {best.get('narration', '')}")
+        if facts and budget > cur:      # lengthening is where a new "detail" gets invented
+            user += f"\nAny detail you add must come from this sheet and nowhere else:\n{facts}"
         try:
             data = _extract_json(client.chat(SEGMENT_FIT_SYSTEM, user, temperature=0.5,
                                              num_predict=256))
@@ -562,7 +567,8 @@ def _fit_one(client: "OllamaClient", seg: dict, budget: int, index: int, nseg: i
     return best
 
 
-def fit_segments(client: "OllamaClient", data: dict, words: int, language: str) -> dict:
+def fit_segments(client: "OllamaClient", data: dict, words: int, language: str,
+                 facts: str | None = None) -> dict:
     """Bring a script to length ONE SEGMENT AT A TIME.
 
     Whole-script editing does not work on this model — measured: asked to lengthen it ignores the
@@ -592,7 +598,8 @@ def fit_segments(client: "OllamaClient", data: dict, words: int, language: str) 
         if not needs or abs(n - budget) <= max(1, round(budget * SEGMENT_FIT_TOLERANCE)):
             out.append(seg)
             continue
-        out.append(_fit_one(client, seg, budget, i + 1, len(segs), prev_line, next_line, language))
+        out.append(_fit_one(client, seg, budget, i + 1, len(segs), prev_line, next_line, language,
+                            facts=facts))
     data = {**data, "segments": out}
     log.info("Per-segment fit: %d → %d words (target ~%d, %d segments).",
              before, sum(_seg_words(x) for x in out), words, len(out))
@@ -646,9 +653,22 @@ def _reword_copied(client: "OllamaClient", data: dict, phrase: str, language: st
     return {**data, "segments": out}
 
 
+FACTS_RULE = (
+    "\n\nA FACT SHEET follows. Every number, date, name, size, speed, duration and record in the script "
+    "MUST come from it. Choose the facts, order them, phrase them in your own images — but add nothing "
+    "that is not on the sheet and contradict nothing on it. Build the hook from one of its surprising "
+    "angles. The list of things NOT to claim is binding.\n\n"
+)
+
+
+def with_facts(system: str, facts: str | None) -> str:
+    """The system prompt with the fact sheet bound to it, or unchanged when there is no sheet."""
+    return f"{system}{FACTS_RULE}{facts.strip()}" if facts and facts.strip() else system
+
+
 def generate_script(cfg: LLMConfig, topic: str, seconds: int = 60, language: str = "en",
                     refine_passes: int = 1, best_of: int = 1, images_per_segment: int = 2,
-                    fit: str = "whole") -> Script:
+                    fit: str = "whole", facts: str | None = None) -> Script:
     words = _words_for(seconds, language)
     # One segment ≈ one shot, and this number is the whole cut rhythm. A tight upper bound (nseg+1)
     # keeps the model from padding to twice the length.
@@ -677,7 +697,7 @@ def generate_script(cfg: LLMConfig, topic: str, seconds: int = 60, language: str
     user = USER_TMPL.format(topic=topic, seconds=seconds, words=round(words * ASK_INFLATION),
                             nseg=nseg, nseg2=nseg2, wseg=wseg)
     name = LANG_NAME.get(language, "English")
-    system = SYSTEM + f"\n- Write ALL narration in {name}."
+    system = with_facts(SYSTEM + f"\n- Write ALL narration in {name}.", facts)
     client = OllamaClient(cfg)
     # Generation caps sized with wide margin so a real script never truncates, while a runaway model
     # (gemma free-text can append prose past the JSON) can't burn minutes. The JSON output (narration
@@ -726,7 +746,7 @@ def generate_script(cfg: LLMConfig, topic: str, seconds: int = 60, language: str
     # Three attempts, not two: a rejected rewrite now re-rolls instead of giving up, so the budget has
     # to cover "overshoot, re-roll, land" without letting a hopeless draft burn the whole night.
     if (fit or "whole").lower() == "segmentwise":
-        data = fit_segments(client, data, words, language)
+        data = fit_segments(client, data, words, language, facts=facts)
     best = data
     for _ in range(3 if (fit or "whole").lower() != "segmentwise" else 0):
         cur = _nwords(data)
@@ -861,23 +881,17 @@ Promote this app where natural (in descriptions/captions): {app} — {tagline} (
 Return JSON exactly:
 {{
   "youtube": {{"title": "punchy title <=80 chars", "description": "2-3 sentence summary, then a new line: 'Get {app}: {url}'", "tags": ["10-15 short lowercase tags"]}},
-  "tiktok": {{"caption": "one-line hook + 4-6 hashtags including #astronomy #space"}},
-  "instagram": {{"caption": "one-line hook, then a blank line, then the hashtags"}},
-  "instagram_hashtags": ["12-15 tags, LAYERED, see below"]
+  "tiktok": {{"caption": "one-line hook, NO hashtags (the pipeline adds them)"}},
+  "instagram": {{"caption": "one-line hook, NO hashtags (the pipeline adds them)"}},
+  "instagram_hashtags": ["6-10 NARROW tags, see below"]
 }}
 
-The Instagram hashtags decide whether anyone outside the followers ever sees the reel, and a flat
-list of huge generic tags is the one arrangement that guarantees they will not: a new account cannot
-rank in #space, so those tags are decoration. Build FOUR tiers instead, in this order:
-  - 2-3 BROAD (#astronomy #space) — context for the algorithm, not reach,
-  - 4-5 MID, specific to this video's subject and sized where an account can actually place
-    (#planetaryscience #marsexploration #solarsystem),
-  - 4-5 NARROW, the exact object and mission by name (#vallesmarineris #marsreconnaissanceorbiter) —
-    small audiences, but this is the only tier where the reel can reach the top of a feed,
-  - 1-2 COMMUNITY where the people who own telescopes actually gather (#astrophotography
-    #backyardastronomy), because this channel exists to reach them.
-All lowercase, no spaces, no duplicates, no banned or engagement-bait tags (#followforfollow, #f4f,
-#viral, #fyp). Every NARROW tag must name something the narration actually discussed."""
+The broad, mid and community hashtags (#astronomy, #planetaryscience, #astrophotography ...) are
+added by the pipeline from a fixed bank. Your ONLY hashtag job is the NARROW tier: 6-10 tags that
+name the exact object, mission, spacecraft, instrument or phenomenon the narration actually
+discusses, by their real names (#greatredspot #juno #philae #rosetta #comet67p). One word each,
+lowercase, no spaces, no invented compounds (#stormsystems, #jupiterspot are worthless), no
+engagement bait (#fyp, #viral, #followforfollow)."""
 
 
 # A stray apostrophe INSIDE a word that isn't a real English contraction (gemma once wrote "Earth'ally"
@@ -906,7 +920,7 @@ def _meta_looks_clean(data: dict) -> bool:
                for suffix in _APOSTROPHE_WORD.findall(txt or ""))
 
 
-def _clean_metadata(data: dict) -> dict:
+def _clean_metadata(data: dict, script_text: str = "", hashtag_bank: dict | None = None) -> dict:
     yt = data.get("youtube")
     if isinstance(yt, dict):
         for k in ("title", "description"):
@@ -918,6 +932,9 @@ def _clean_metadata(data: dict) -> dict:
             d["caption"] = _clean_text(d["caption"])
     _merge_instagram_hashtags(data)
     _ensure_brand_tag(data)
+    if script_text:                     # the curated bank + validated narrow tags (avp/hashtags.py)
+        from . import hashtags
+        hashtags.finalize(data, script_text, hashtag_bank)
     return data
 
 
@@ -1041,8 +1058,13 @@ def brainstorm_topics(cfg: LLMConfig, avoid, n: int, theme: str = "space and ast
     return out
 
 
-def generate_metadata(cfg: LLMConfig, script: Script, funnel: FunnelConfig, language: str = "en") -> dict:
+def generate_metadata(cfg: LLMConfig, script: Script, funnel: FunnelConfig, language: str = "en",
+                      hashtag_bank: dict | None = None) -> dict:
     name = LANG_NAME.get(language, "English")
+    # What the narrow hashtags are validated against: a tag must name something the video says.
+    script_text = " ".join([script.title or "", script.narration] + [
+        f"{getattr(s, 'visual', '') or ''} {' '.join(getattr(s, 'keywords', None) or [])}"
+        for s in script.segments])
     user = META_USER.format(title=script.title, narration=script.narration,
                             app=funnel.app_name, tagline=funnel.tagline, url=funnel.url)
     system = META_SYSTEM + f" Write titles, descriptions and captions in {name} (hashtags may stay English)."
@@ -1060,7 +1082,7 @@ def generate_metadata(cfg: LLMConfig, script: Script, funnel: FunnelConfig, lang
                 elif not _meta_looks_clean(data):
                     fallback, last = data, "malformed text (stray apostrophe)"   # re-roll for clean prose
                 else:
-                    return _clean_metadata(data)
+                    return _clean_metadata(data, script_text, hashtag_bank)
             else:
                 last = "empty reply"
         except Exception as e:  # noqa: BLE001 — incl. a request timeout on the cold reload
@@ -1068,5 +1090,5 @@ def generate_metadata(cfg: LLMConfig, script: Script, funnel: FunnelConfig, lang
         log.warning("Metadata attempt %d/4 unusable (%s) — retrying.", i + 1, last)
     if fallback is not None:                    # don't fail the build over a typo — ship the best we got
         log.warning("Using last metadata despite %s.", last)
-        return _clean_metadata(fallback)
+        return _clean_metadata(fallback, script_text, hashtag_bank)
     raise RuntimeError(f"Model returned no usable metadata after 4 attempts ({last}).")
