@@ -413,6 +413,12 @@ def morbid_word(text: str) -> str | None:
 
 
 def morbid_in_script(data: dict) -> str | None:
+    """First banned word across the title, every narration and the closing bridge. The title was not
+    checked at first, and "The Shrinking Wound of a Giant" went through — the title is the line
+    people read on the thumbnail."""
+    w = morbid_word(str(data.get("title", "")))
+    if w:
+        return w
     for seg in _segment_dicts(data):
         w = morbid_word(str(seg.get("narration", "")))
         if w:
@@ -597,6 +603,18 @@ def _reword_copied(client: "OllamaClient", data: dict, phrase: str, language: st
     """Rewrite only the segment(s) containing a copied exemplar phrase, keeping their fact and length."""
     segs = _segment_dicts(data)
     out = []
+    title = str(data.get("title", "") or "")
+    if phrase in title.lower():
+        try:
+            cand = _extract_json(client.chat(SEGMENT_FIT_SYSTEM,
+                f"This video TITLE must lose the word \"{phrase}\" (too morbid for a channel whose tone is "
+                f"wonder). Rewrite it in 3-7 words, same subject, surprising, no morbid word. Write in "
+                f"{LANG_NAME.get(language, 'English')}.\nTitle: {title}", temperature=0.7, num_predict=64))
+            nt = str(cand.get("narration", "")).strip() if isinstance(cand, dict) else ""
+            if nt and phrase not in nt.lower():
+                data = {**data, "title": nt}
+        except Exception as e:  # noqa: BLE001
+            log.debug("reword of the title failed (%s)", e)
     bridge = str(data.get("cta_bridge", "") or "")
     if phrase in bridge.lower():
         try:

@@ -2879,6 +2879,12 @@ class ToneIsWonderNotTheMorgue(unittest.TestCase):
         self.assertIsNone(morbid_word("Saturn's rings are younger than the dinosaurs."))
         self.assertIsNone(morbid_word("the deadline for the mission"))      # not a whole word
 
+    def test_the_title_is_checked_too(self):
+        """"The Shrinking Wound of a Giant" went through: the title is what people read first."""
+        from avp.llm import morbid_in_script
+        self.assertEqual(morbid_in_script({"title": "The Shrinking Wound of a Giant",
+                                           "segments": [{"narration": "fine"}]}), "wound")
+
     def test_the_bridge_is_checked_too(self):
         from avp.llm import morbid_in_script
         self.assertEqual(morbid_in_script({"segments": [{"narration": "fine"}],
