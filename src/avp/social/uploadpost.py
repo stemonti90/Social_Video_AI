@@ -26,7 +26,8 @@ from ..log import get_logger
 log = get_logger("avp.social.uploadpost")
 
 API = "https://api.upload-post.com/api/upload"
-TIMEOUT = (30, 900)          # connect, read: a 30 MB upload on a slow link takes a while
+TIMEOUT = (600, 900)   # (connect, read). urllib3 sends the request BODY under the connect timeout, so a
+                       # 20 MB video on a slow uplink died at 30 s with 'write operation timed out' (6/9).
 
 
 def settings(cfg) -> dict:
