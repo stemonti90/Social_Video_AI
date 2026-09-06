@@ -66,6 +66,10 @@ def _caption_for(platform: str, meta: dict) -> str:
         return meta.get("tiktok", {}).get("caption", "")
     if p == "instagram":
         return meta.get("instagram", {}).get("caption", "")
+    if p == "reddit":
+        # Reddit shows a TITLE, then the video; the description carries the app link. No hashtags.
+        yt = meta.get("youtube", {})
+        return (yt.get("description") or meta.get("tiktok", {}).get("caption", "")).strip()
     return meta.get("tiktok", {}).get("caption", "")
 
 
@@ -181,7 +185,12 @@ def _publish_native(plan: list[dict], video: Path, meta: dict, cfg: Config,
     for it in plan:
         plat = it["platform"]
         try:
-            it["result"] = social.post(plat, video, it["caption"], meta, cfg, disclose_ai)
+            if (cfg.publish.via or {}).get(plat) == "uploadpost":
+                from .social import uploadpost
+                it["result"] = uploadpost.post(plat, video, it["caption"], meta, cfg, disclose_ai,
+                                               title=_title_for(plat, meta))
+            else:
+                it["result"] = social.post(plat, video, it["caption"], meta, cfg, disclose_ai)
             it["posted"] = True
         except Exception as e:  # noqa: BLE001 — the reason belongs in the plan, not a traceback
             it["posted"] = False

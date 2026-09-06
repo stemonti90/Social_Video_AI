@@ -185,6 +185,13 @@ def _native_connected(cfg: Config) -> set[str]:
     found: set[str] = set()
     for plat in cfg.auto.platforms:
         canon = publish_mod._canon(plat)
+        if (cfg.publish.via or {}).get(canon) == "uploadpost":
+            from .social import uploadpost
+            if uploadpost.configured(cfg):
+                found.add(canon)            # their app is audited: public posts, no TikTok gate needed
+            else:
+                log.info("%s is routed to Upload-Post but it is not configured — leaving it out.", canon)
+            continue
         rec = token_store.get(canon)
         if not rec:
             continue

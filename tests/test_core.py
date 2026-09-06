@@ -2762,6 +2762,83 @@ class VoiceWithoutPlagiarismOrPadding(unittest.TestCase):
         self.assertLess(sum(counts), 148)
 
 
+class UploadPostBackend(unittest.TestCase):
+    """TikTok refused our app for production ("personal use"), so TikTok and Reddit go through
+    Upload-Post, a third party whose own TikTok app is audited. Contract from their docs, 6/9/2026."""
+
+    def _cfg(self, **over):
+        cfg = Config.load(None)
+        cfg.publish.via = {"tiktok": "uploadpost", "reddit": "uploadpost"}
+        cfg.publish.uploadpost = {"api_key": "k123", "user": "astro", "subreddit": "Astronomy"}
+        cfg.publish.uploadpost.update(over)
+        return cfg
+
+    def _call(self, cfg, platform, caption="A moon where it rains gasoline. #space", body=None, status=200):
+        from avp.social import uploadpost
+        seen = {}
+
+        class R:
+            status_code = status
+            text = "x"
+            def json(self):
+                return body if body is not None else {"success": True, "results": {platform: {"success": True, "url": "https://t/1", "post_id": "p1"}}}
+
+        def fake_post(url, headers=None, data=None, files=None, timeout=None):
+            seen.update(url=url, headers=headers, data=dict(data), platforms=[v for k, v in data if k == "platform[]"], files=files)
+            return R()
+
+        with tempfile.TemporaryDirectory() as tmp:
+            v = Path(tmp) / "v.mp4"; v.write_bytes(b"\x00" * 100)
+            with mock.patch("avp.social.uploadpost.requests.post", fake_post):
+                res = uploadpost.post(platform, v, caption, {}, cfg, disclose_ai=True, title="A title")
+        return seen, res
+
+    def test_tiktok_goes_public_with_the_ai_label(self):
+        seen, res = self._call(self._cfg(), "tiktok")
+        self.assertEqual(seen["url"], "https://api.upload-post.com/api/upload")
+        self.assertEqual(seen["headers"]["Authorization"], "Apikey k123")
+        self.assertEqual(seen["platforms"], ["tiktok"])
+        d = seen["data"]
+        self.assertEqual(d["privacy_level"], "PUBLIC_TO_EVERYONE")
+        self.assertEqual(d["post_mode"], "DIRECT_POST")
+        self.assertEqual(d["is_aigc"], "true")
+        self.assertTrue(d["tiktok_title"].startswith("A moon where it rains gasoline"))
+        self.assertEqual(res["url"], "https://t/1")
+
+    def test_reddit_needs_a_subreddit_and_a_title(self):
+        seen, _ = self._call(self._cfg(), "reddit")
+        self.assertEqual(seen["data"]["subreddit"], "Astronomy")
+        self.assertEqual(seen["data"]["reddit_title"], "A title")
+        with self.assertRaises(RuntimeError):
+            self._call(self._cfg(subreddit=""), "reddit")
+
+    def test_an_api_failure_raises_with_the_apis_own_reason(self):
+        with self.assertRaises(RuntimeError) as cm:
+            self._call(self._cfg(), "tiktok", body={"success": False, "error": "quota exceeded"})
+        self.assertIn("quota exceeded", str(cm.exception))
+
+    def test_unconfigured_means_not_a_target_yet(self):
+        from avp import auto
+        from avp.social import uploadpost
+        cfg = self._cfg(); cfg.publish.uploadpost["api_key"] = ""
+        self.assertFalse(uploadpost.configured(cfg))
+        cfg.auto.platforms = ["instagram", "tiktok", "reddit"]
+        with mock.patch("avp.social.tokens.get", lambda p: {"access_token": "t"} if p == "instagram" else None):
+            self.assertEqual(auto.connected_platforms(cfg), {"instagram"})
+
+    def test_configured_means_tiktok_and_reddit_join_without_the_tiktok_gate(self):
+        from avp import auto
+        cfg = self._cfg(); cfg.auto.platforms = ["instagram", "tiktok", "reddit"]
+        with mock.patch("avp.social.tokens.get", lambda p: {"access_token": "t"} if p == "instagram" else None), \
+             mock.patch.object(auto, "tiktok_can_post_publicly", return_value=False):
+            self.assertEqual(auto.connected_platforms(cfg), {"instagram", "tiktok", "reddit"})
+
+    def test_the_native_publisher_routes_via_uploadpost_when_told(self):
+        from avp import publish
+        src = inspect.getsource(publish._publish_native)
+        self.assertIn('(cfg.publish.via or {}).get(plat) == "uploadpost"', src)
+
+
 class WatermarkOnEveryFrame(unittest.TestCase):
     """A brand watermark on every frame of content, requested so every screenshot and re-share
     carries the channel. Top-right in the safe zone; the endcard carries the brand itself."""

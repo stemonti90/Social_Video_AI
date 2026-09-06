@@ -179,6 +179,13 @@ class PublishConfig:
     old path for the other ~18 networks Postiz supports.
     """
     backend: str = "native"       # native | postiz
+    # Per-platform override of the backend: {"tiktok": "uploadpost", "reddit": "uploadpost"}.
+    # Upload-Post is a third party whose own TikTok app is audited, so its posts come out PUBLIC;
+    # ours cannot (TikTok refused the app as "personal use"). See social/uploadpost.py.
+    via: dict = field(default_factory=dict)
+    # {"api_key": … (prefer env AVP_UPLOADPOST_KEY), "user": <profile id>, "subreddit": …,
+    #  "privacy": "public", "tiktok_post_mode": "DIRECT_POST"}
+    uploadpost: dict = field(default_factory=dict)
     # Per-platform OAuth app credentials. Env wins (AVP_TIKTOK_CLIENT_KEY, AVP_META_APP_ID, …); this is
     # the fallback for a config-driven setup. config.yaml is gitignored, but prefer the environment.
     apps: dict = field(default_factory=dict)      # {"tiktok": {"client_id": …, "client_secret": …}}
