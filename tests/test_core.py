@@ -2762,6 +2762,47 @@ class VoiceWithoutPlagiarismOrPadding(unittest.TestCase):
         self.assertLess(sum(counts), 148)
 
 
+class ToneIsWonderNotTheMorgue(unittest.TestCase):
+    """The audience found the earlier voice grim rather than gripping — "planetary hemorrhage",
+    "corpse", "hell" — and asked for wonder. Banned words are caught whole-word and reworded with
+    the same fact, and the closing bridge is covered too ("the ghost of a dying titan")."""
+
+    def test_morbid_words_are_caught_whole_word_and_case_insensitively(self):
+        from avp.llm import morbid_word
+        self.assertEqual(morbid_word("A planetary Hemorrhage of grit"), "hemorrhage")
+        self.assertEqual(morbid_word("a frozen corpse hides"), "corpse")
+        self.assertIsNone(morbid_word("Saturn's rings are younger than the dinosaurs."))
+        self.assertIsNone(morbid_word("the deadline for the mission"))      # not a whole word
+
+    def test_the_bridge_is_checked_too(self):
+        from avp.llm import morbid_in_script
+        self.assertEqual(morbid_in_script({"segments": [{"narration": "fine"}],
+                                           "cta_bridge": "the ghost of a dying titan"}), "dying")
+
+    def test_a_morbid_line_and_bridge_are_reworded_with_the_fact_kept(self):
+        from avp import llm
+
+        class Client:
+            def chat(self, system, user, **kw):
+                if "closing line" in user:
+                    return json.dumps({"narration": "Point your lens at Jupiter tonight and watch a giant change."})
+                return json.dumps({"narration": "A storm wider than three Earths is quietly shrinking."})
+
+        data = {"segments": [{"narration": "Jupiter's collapsing predator is dying."},
+                             {"narration": "Winds reach hundreds of kilometres per hour."}],
+                "cta_bridge": "witness the ghost of a dying titan"}
+        out = llm._reword_copied(Client(), data, "dying", "en")
+        self.assertIsNone(llm.morbid_in_script(out))
+        self.assertEqual(out["segments"][1]["narration"], "Winds reach hundreds of kilometres per hour.")
+
+    def test_the_prompt_no_longer_teaches_the_morgue(self):
+        from avp import llm
+        for w in ("graveyard of shattered moons", "suicide mission", "planetary autopsy", "screaming into the void"):
+            self.assertNotIn(w, llm.SYSTEM.split("BANNED anywhere")[0].split("WHAT WORKS")[1])
+        self.assertIn("THE TONE IS WONDER", llm.SYSTEM)
+        self.assertIn("younger than the dinosaurs", llm.SYSTEM)
+
+
 class CopiedLinesAreRewordedNotJustFlagged(unittest.TestCase):
     """A warning in an unattended run is a warning nobody reads: a Moon script reached the render with
     "it's a planetary autopsy" in it. A copied exemplar line is now rewritten, same fact, own words."""

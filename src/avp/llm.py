@@ -21,32 +21,40 @@ SYSTEM = """You are an elite scriptwriter for a faceless short-form video channe
 astronomy and space (TikTok / Reels / YouTube Shorts). You write to make a stranger stop scrolling and \
 stay to the end. Craft first, then the truth rules — both are non-negotiable.
 
-WHAT WORKS ON THIS CHANNEL (its own best lines — match this voice, never copy them):
-  "Saturn's rings are a graveyard of shattered moons."
-  "Saturn's rings are bleeding."
-  "This isn't a ring; it's a planetary autopsy."
-  "NASA sent a suicide mission into Saturn's crushing atmosphere."
-  "NASA intentionally vaporized the craft into Saturn's furnace to kill Earth microbes."
-  "A machine 225 million kilometres away is still screaming into the void."
-Every one of those is a CLAIM WITH STAKES: something is dying, hiding, lying, being killed, or should \
-be impossible. Each has one violent or too-human verb, and each makes you need the next line. And \
-every one is A REAL FACT IN DISGUISE: under "graveyard of shattered moons" sits how the rings formed; \
-under "suicide mission" sits Cassini's deliberate final plunge; under "to kill Earth microbes" sits \
-planetary-protection policy. Before you write an image, name to yourself the checkable fact beneath \
-it. An image with no fact under it — "a planetary stomach swallows a moon" — is not bold, it is \
-false, and it is banned. These example lines are OFF-LIMITS verbatim: reuse the nerve, never the words.
+WHAT WORKS ON THIS CHANNEL — the voice to match (never copy these lines):
+  "Saturn's rings are younger than the dinosaurs."
+  "There is a moon where it rains gasoline."
+  "Jupiter has a storm three Earths wide that has been raging for centuries."
+  "The Moon is quietly leaving us — four centimetres a year."
+  "A robot the size of a car is driving on Mars right now, alone."
+  "Mercury hides ice in craters the Sun has never once lit."
+Every one of those is a CLAIM THAT STOPS YOU: something surprising, hidden, impossible-sounding, or \
+too close to home. Each has one concrete image and each makes you need the next line. And every one is \
+A REAL FACT IN DISGUISE: under "younger than the dinosaurs" sits Cassini's estimate of the rings' age; \
+under "rains gasoline" sits Titan's methane cycle; under "quietly leaving us" sits the 3.8 cm/year \
+recession measured by laser. Before you write an image, name to yourself the checkable fact beneath \
+it. An image with no fact under it is not bold, it is false, and it is banned. These example lines are \
+OFF-LIMITS verbatim: reuse the energy, never the words.
+
+THE TONE IS WONDER, NOT THE MORGUE. Earlier scripts opened with corpses, hemorrhages, tombs, graveyards, \
+autopsies, torture chambers and screaming — the audience found it grim, not gripping. BANNED anywhere \
+in the script: corpse, cadaver, dead, dying, died, death, kill, killed, murder, tomb, grave, graveyard, \
+autopsy, hemorrhage, bleed, bleeding, wound, scar, torture, suicide, hell, hellscape, nightmare, \
+scream, screaming, butcher, prison, prisoner, gutted, rot, decay, doom, apocalypse, and any "planetary \
+X" where X is a body part or an injury. Stakes come from AWE and SURPRISE — scale, strangeness, \
+things that should not exist, things happening right now over your head — never from gore or dread. \
+Curious, confident, a little playful; the tone of someone who cannot wait to tell you this.
 
 WHAT FAILED ON THIS CHANNEL (the lines viewers called "written by a child"):
   "These deep craters trap vapor in shadows where the sun never reaches, ensuring no heat can enter."
   "This extreme cold turns surrounding gases into a solid, crystalline frost."
-  "This tidal kneading melts the moon's interior."
-Those are EXPLAINER sentences: they describe a mechanism calmly, start with "This/These", and restate \
-the previous line in new words. Nobody stops scrolling for a mechanism. BANNED: any sentence that opens \
-with "This", "These" or "It" followed by a calm verb; any line that paraphrases an earlier one; the \
-words "ensuring", "allowing", "creating", "resulting in"; and padding of any kind.
+Those are EXPLAINER sentences: calm mechanism, "This/These" openers, restating the line before. Nobody \
+stops scrolling for a mechanism. BANNED: any sentence that opens with "This", "These" or "It" followed \
+by a calm verb; any line that paraphrases an earlier one; "ensuring", "allowing", "creating", \
+"resulting in"; and padding of any kind.
 
-- HOOK: the first 6-8 words RENAME the subject as something unsettling. Never a measurement, never a question, never "Imagine", "Have you ever", "Picture this", "In the vast expanse". A number is evidence: it belongs in segment 2, where it lands on a viewer you have already stopped.
-- EVERY SEGMENT IS A REVEAL. One new, specific, verifiable fact, delivered as a claim with stakes — then its consequence, in one concrete image. If a line could sit in a textbook unchanged, rewrite it until it could not.
+- HOOK: the first 6-8 words RENAME the subject as something surprising — a fact that sounds impossible, a secret, a scale that breaks intuition. Never a measurement, never a question, never "Imagine", "Have you ever", "Picture this", "In the vast expanse", and never anything from the banned list above. A number is evidence: it belongs in segment 2, where it lands on a viewer you have already stopped.
+- EVERY SEGMENT IS A REVEAL. One new, specific, verifiable fact, delivered as a claim that surprises — then its consequence, in one concrete image. If a line could sit in a textbook unchanged, rewrite it until it could not.
 - ESCALATE. Each segment raises the stakes of the one before; the penultimate segment is the single biggest turn in the script; the last one lands it with a line that would work as the title.
 - LENGTH: about the per-segment word count given below, in one or two spoken sentences. A shorter script in which every line earns its place beats a longer one with a single soft line. NEVER pad to reach a count.
 - DRAMATURGY, not exposition: a fact that shouldn't be possible → why it shouldn't be → how it is anyway → what that means. Explanation arrives as the answer to a tension you opened, never as a lecture.
@@ -69,8 +77,10 @@ Return STRICT JSON only, no commentary."""
 
 CRITIQUE_SYSTEM = (
     "You are a ruthless short-form video editor. First, grade this astronomy/space Shorts script 1-5 "
-    "on HYPE: does the hook rename the subject as something unsettling, does every segment make a "
-    "claim with stakes (something dying, hiding, lying, impossible) rather than explain a mechanism, "
+    "on WONDER: does the hook rename the subject as something surprising, does every segment make a "
+    "claim that stops you (something hidden, impossible-sounding, happening right now) rather than "
+    "explain a mechanism, is the tone awe and curiosity rather than gore or dread (quote every "
+    "morbid word — corpse, tomb, hemorrhage, scream, hell — with a wonder-based rewrite), "
     "does it escalate to one peak turn, would a stranger stay to the end? Quote every EXPLAINER "
     "sentence — one that starts with This/These/It and calmly describes how something works, or "
     "restates an earlier line — and give an exact rewrite with stakes for each. Then grade fact "
@@ -367,19 +377,47 @@ def _draft_script_json(client: "OllamaClient", system: str, user: str,
 JUDGE_SYSTEM = (
     "You are the editor-in-chief of a top astronomy/space Shorts channel choosing which of several "
     "drafts of the SAME video to publish. Decide by ONE question: which draft would make a stranger "
-    "stop scrolling in the first second and stay to the last line? Rank by hype, curiosity, stakes "
-    "and escalation — the draft that reads like a thriller beats the draft that reads like a "
-    "textbook, every time. The rules (hook not a measurement, one fact per segment, no repetition, "
-    "no invented numbers, correct tense, no false superlatives) DISQUALIFY a draft that breaks them; "
+    "stop scrolling in the first second and stay to the last line? Rank by wonder, curiosity, surprise "
+    "and escalation — the draft that reads like a great campfire story beats the draft that reads "
+    "like a textbook, every time; a draft that reaches for gore or dread (corpses, tombs, screaming) "
+    "instead of awe loses. The rules (hook not a measurement, one fact per segment, no repetition, "
+    "no invented numbers, correct tense, no false superlatives, no morbid lexicon) DISQUALIFY a "
+    "draft that breaks them; "
     "they earn no points for being obeyed. Never pick a draft because it 'follows the constraints' — "
     "if two drafts both obey, pick the one with more nerve. Be decisive. Return STRICT JSON only: "
     '{"best": <1-based draft number>, "why": "one short sentence about what grips, not what complies"}.'
 )
 
 
-EXEMPLAR_PHRASES = ("graveyard of shattered moons", "rings are bleeding", "planetary autopsy",
-                    "suicide mission", "kill earth microbes", "scream into the void",
-                    "screaming into the void")   # "into the void" alone matched honest lines
+EXEMPLAR_PHRASES = ("younger than the dinosaurs", "rains gasoline", "three earths wide",
+                    "quietly leaving us", "driving on mars right now", "the sun has never once lit",
+                    "graveyard of shattered moons", "planetary autopsy", "suicide mission",
+                    "scream into the void", "screaming into the void")   # the old voice, still off-limits   # "into the void" alone matched honest lines
+
+
+MORBID_WORDS = ("corpse", "cadaver", "dead", "dying", "died", "death", "kill", "killed", "murder",
+                "tomb", "grave", "graveyard", "autopsy", "hemorrhage", "haemorrhage", "bleed", "bleeding",
+                "wound", "torture", "suicide", "hell", "hellscape", "nightmare", "scream", "screaming",
+                "butcher", "prison", "prisoner", "gutted", "rot", "rotting", "decay", "doom", "apocalypse")
+_MORBID_RE = None
+
+
+def morbid_word(text: str) -> str | None:
+    """The first banned morbid word in `text`, whole-word, or None. The audience found the earlier
+    voice grim rather than gripping — corpses, hemorrhages, tombs — and asked for wonder instead."""
+    global _MORBID_RE
+    if _MORBID_RE is None:
+        _MORBID_RE = re.compile(r"\b(" + "|".join(map(re.escape, MORBID_WORDS)) + r")\b", re.IGNORECASE)
+    m = _MORBID_RE.search(text or "")
+    return m.group(1).lower() if m else None
+
+
+def morbid_in_script(data: dict) -> str | None:
+    for seg in _segment_dicts(data):
+        w = morbid_word(str(seg.get("narration", "")))
+        if w:
+            return w
+    return morbid_word(str(data.get("cta_bridge", "")))
 
 
 def copied_exemplar(data: dict) -> str | None:
@@ -452,7 +490,8 @@ def moves_closer(new: int, cur: int, target: int) -> bool:
 SEGMENT_FIT_SYSTEM = (
     "You are the line editor of a faceless astronomy short-form channel. You rewrite ONE segment of "
     "a script to an exact spoken length WITHOUT losing its nerve. Keep its single fact, its tense, "
-    "its numbers, its role in the story and its voice — a claim with stakes, one vivid verb. To "
+    "its numbers, its role in the story and its voice — a claim that surprises, one vivid image, never "
+    "a morbid word (corpse, tomb, hemorrhage, scream, hell, dying). To "
     "SHORTEN, cut the weakest clause, never the stakes. To LENGTHEN, add one concrete consequence or "
     "image the line was missing — never restate, never open with This/These/It, never use ensuring/"
     "allowing/creating. If it is segment 1 it is the HOOK: it renames the subject as something "
@@ -558,14 +597,28 @@ def _reword_copied(client: "OllamaClient", data: dict, phrase: str, language: st
     """Rewrite only the segment(s) containing a copied exemplar phrase, keeping their fact and length."""
     segs = _segment_dicts(data)
     out = []
+    bridge = str(data.get("cta_bridge", "") or "")
+    if phrase in bridge.lower():
+        try:
+            cand = _extract_json(client.chat(SEGMENT_FIT_SYSTEM,
+                f"This closing line must lose the word \"{phrase}\" (too morbid for a channel whose tone is "
+                f"wonder). Rewrite it in about {len(bridge.split())} words, same meaning, no morbid word. "
+                f"Write in {LANG_NAME.get(language, 'English')}.\nLine: {bridge}", temperature=0.7, num_predict=128))
+            nb = str(cand.get("narration", "")).strip() if isinstance(cand, dict) else ""
+            if nb and phrase not in nb.lower():
+                data = {**data, "cta_bridge": nb}
+        except Exception as e:  # noqa: BLE001
+            log.debug("reword of the bridge failed (%s)", e)
     for i, seg in enumerate(segs):
         line = str(seg.get("narration", ""))
         if phrase not in line.lower():
             out.append(seg); continue
-        user = (f"This line copies a phrase from another video on the channel: \"{phrase}\". Rewrite the "
-                f"line in about {len(line.split())} words, keeping its fact, its stakes and its role, with "
-                f"an image of your own — the phrase itself must not appear. Write in "
-                f"{LANG_NAME.get(language, 'English')}.\nLine: {line}")
+        user = (f"This line must lose the word or phrase \"{phrase}\" — it is either copied from another "
+                f"video on the channel or too morbid for the channel's tone, which is wonder and "
+                f"curiosity, never gore or dread. Rewrite the line in about {len(line.split())} words, "
+                f"keeping its fact, its surprise and its role, with an image of your own; the word must "
+                f"not appear and no other morbid word (corpse, tomb, hemorrhage, scream, hell, dying) may "
+                f"replace it. Write in {LANG_NAME.get(language, 'English')}.\nLine: {line}")
         try:
             cand = _extract_json(client.chat(SEGMENT_FIT_SYSTEM, user, temperature=0.7, num_predict=256))
             new = str(cand.get("narration", "")).strip() if isinstance(cand, dict) else ""
@@ -707,6 +760,16 @@ def generate_script(cfg: LLMConfig, topic: str, seconds: int = 60, language: str
             best = cand
 
     data = best
+    # Tone guard: any morbid word is reworded the way a copied exemplar is — same fact, wonder instead.
+    for _ in range(3):
+        mw = morbid_in_script(data)
+        if not mw:
+            break
+        data = _reword_copied(client, data, mw, language)
+        if morbid_in_script(data) == mw:            # the rewrite kept it: stop trying, warn below
+            break
+    if (mw := morbid_in_script(data)):
+        log.warning("Script still contains the morbid word %r after rewrites — fix it in script.md.", mw)
     if (ph := copied_exemplar(data)):
         # A warning in an unattended run is a warning nobody reads: the Moon script went to render
         # with "it's a planetary autopsy" in it. Repair it — one targeted rewrite of the offending
