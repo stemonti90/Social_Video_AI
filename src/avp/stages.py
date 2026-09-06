@@ -660,6 +660,15 @@ def _assemble_engine(project: VideoProject, cfg: Config, script: Script, eng: st
                 words, project.root / f"captions_png_{eng}", cfg.captions, cfg.video,
                 total_dur=caption_dur):
             items.append({"path": png, "start": s, "end": e, "x": "(main_w-overlay_w)/2", "y": cap_y})
+    if getattr(cfg.video, "watermark", True):
+        # Every frame of content carries the brand; the endcard already does, so it stops there.
+        # Top-right, 5% in from the edge and below the platforms' top UI band.
+        wm = project.root / f"watermark_{eng}.png"
+        captions_mod.render_watermark(wm, getattr(cfg.video, "watermark_text", "@astrostackerpro"),
+                                      cfg.video, float(getattr(cfg.video, "watermark_opacity", 0.55)))
+        items.append({"path": wm, "start": 0.0, "end": max(0.5, caption_dur),
+                      "x": f"main_w-overlay_w-{int(cfg.video.width * 0.05)}",
+                      "y": f"{int(cfg.video.height * 0.075)}"})
     if cfg.video.show_credits:
         cdir = project.root / f"credits_png_{eng}"
         cdir.mkdir(exist_ok=True)

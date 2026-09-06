@@ -107,6 +107,12 @@ class VideoConfig:
     prefer_video: bool = True    # use NASA *video* clips when available, else stills + Ken Burns
     video_seek: float = 3.0      # skip N seconds into video clips (avoids NASA title cards)
     show_credits: bool = True    # burn a small source credit per clip
+    # A brand watermark on every frame of content (the endcard carries the brand itself). Top-right,
+    # inside the platforms' safe zones, semi-transparent: present in every screenshot and re-share,
+    # never in the way of the picture or the captions.
+    watermark: bool = True
+    watermark_text: str = "@astrostackerpro"
+    watermark_opacity: float = 0.55
     footage_relevance_floor: float = 0.35   # min normalized relevance (0-1) of a visual to its segment; below → re-search then fallback
     footage_strict: bool = False            # strict: refuse a below-floor visual outright (generated backdrop) vs best-effort
     # Visuals: archive = NASA/Wikimedia only (real, public-domain) · generate = local AI images

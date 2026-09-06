@@ -2762,6 +2762,34 @@ class VoiceWithoutPlagiarismOrPadding(unittest.TestCase):
         self.assertLess(sum(counts), 148)
 
 
+class WatermarkOnEveryFrame(unittest.TestCase):
+    """A brand watermark on every frame of content, requested so every screenshot and re-share
+    carries the channel. Top-right in the safe zone; the endcard carries the brand itself."""
+
+    def test_the_wordmark_renders_small_and_translucent(self):
+        from PIL import Image
+        from avp.captions import render_watermark
+        from avp.config import VideoConfig
+        with tempfile.TemporaryDirectory() as tmp:
+            out = render_watermark(Path(tmp) / "wm.png", "@astrostackerpro", VideoConfig(), 0.55)
+            img = Image.open(out)
+            self.assertEqual(img.mode, "RGBA")
+            self.assertLess(img.height, VideoConfig().height * 0.08)     # small
+            self.assertLess(img.width, VideoConfig().width * 0.6)
+            self.assertLessEqual(max(img.split()[3].getdata()), int(255 * 0.55) + 1)   # translucent
+
+    def test_assemble_overlays_it_for_the_content_only(self):
+        from avp import stages
+        src = inspect.getsource(stages._assemble_engine)
+        self.assertIn("render_watermark", src)
+        self.assertIn('"end": max(0.5, caption_dur)', src)              # not over the endcard
+
+    def test_it_can_be_switched_off(self):
+        from avp.config import VideoConfig
+        self.assertTrue(VideoConfig().watermark)
+        self.assertEqual(VideoConfig().watermark_text, "@astrostackerpro")
+
+
 class ToneIsWonderNotTheMorgue(unittest.TestCase):
     """The audience found the earlier voice grim rather than gripping — "planetary hemorrhage",
     "corpse", "hell" — and asked for wonder. Banned words are caught whole-word and reworded with

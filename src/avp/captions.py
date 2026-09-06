@@ -320,6 +320,27 @@ def _wrap(draw, text: str, font, max_w: int) -> list[str]:
     return lines or [text]
 
 
+def render_watermark(path: Path, text: str, video: VideoConfig, opacity: float = 0.55) -> Path:
+    """A small semi-transparent wordmark PNG, white with a soft dark shadow so it reads on both a
+    black sky and a bright Martian plain. Sized to ~3% of the frame height; the caller places it."""
+    from PIL import Image, ImageDraw, ImageFilter
+    size = max(24, int(video.height * 0.03))     # discreet: ~58 px tall on a 1920-px frame
+    font = _truetype(size, "Montserrat")
+    measure = ImageDraw.Draw(Image.new("RGBA", (8, 8)))
+    tw = int(measure.textlength(text, font=font)) + size
+    th = int(size * 1.6)
+    img = Image.new("RGBA", (tw, th), (0, 0, 0, 0))
+    shadow = Image.new("RGBA", (tw, th), (0, 0, 0, 0))
+    ImageDraw.Draw(shadow).text((size // 2 + 2, size * 0.3 + 2), text, font=font, fill=(0, 0, 0, 170))
+    shadow = shadow.filter(ImageFilter.GaussianBlur(3))
+    img.alpha_composite(shadow)
+    ImageDraw.Draw(img).text((size // 2, size * 0.3), text, font=font, fill=(255, 255, 255, 255))
+    a = img.split()[3].point(lambda v: int(v * max(0.0, min(1.0, opacity))))
+    img.putalpha(a)
+    img.save(path)
+    return path
+
+
 def render_endcard(path: Path, funnel: FunnelConfig, video: VideoConfig) -> None:
     """An inviting but sober end card over a soft cosmic backdrop: brand chip + app name +
     tagline + a clear amber CTA button + handle — the visual behind the spoken call-to-action."""
