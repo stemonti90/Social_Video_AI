@@ -15,6 +15,13 @@ script:
   target_seconds: 50      # aim above the 60s TikTok Creator-Rewards minimum
   language: en            # en | it — language of the spoken narration + captions
 
+  refine_passes: 2         # giri critica→rifinitura sul copione (qualita' in profondita', mai regressioni)
+  fit: segmentwise         # whole | segmentwise — misurato: il modello locale "allunga tutto" raddoppiando; per segmento obbedisce
+  normalize_numbers: true  # cifre → parole per la voce ("85%" → "ottantacinque per cento")
+  subtitle_language: null  # es. "it": voce inglese + sottotitoli tradotti a schede leggibili; null = karaoke nella lingua della voce
+  factcheck: "off"         # off | flag | fix — un modello forte (DeepSeek) verifica il copione prima del render; "fix" corregge
+  factcheck_model: deepseek-chat
+  factcheck_key: ""        # meglio la variabile d'ambiente DEEPSEEK_API_KEY; serve anche a brief, polish e sottotitoli
 funnel:                   # appended as a spoken + on-screen endcard (objective #2: app installs)
   enabled: true
   app_name: AstroStackerPro
@@ -24,12 +31,16 @@ funnel:                   # appended as a spoken + on-screen endcard (objective 
   cta_line: "Want to capture the cosmos yourself? Get {app} — link in the bio."
   cta_button: "Get the app  ·  Link in bio"   # endcard pill label (set to your channel language)
 
+  bridge_policy: always    # always | honest — se il copione non trova un ponte onesto verso l'app: chiudi comunque sull'app, o sul cielo
 tts:
   engine: kokoro          # kokoro (the only shipped engine — Apache-2.0, commercial-clean)
   kokoro_voice: af_heart  # see Kokoro voices (af_*, am_*, bf_*, bm_*); IT uses if_sara automatically
   kokoro_lang: a          # a = American English, b = British, i = Italian
   device: mps             # Apple Silicon GPU
 
+  primary: kokoro          # quale voce va nel video finale quando engine == both
+  speed: 1.0               # velocita' Kokoro (<1 = piu' lenta; l'italiano si auto-rallenta a 0.94)
+  chatterbox_ref: null     # wav di riferimento 5-10 s per clonare una voce (Chatterbox)
 stt:                      # for caption word-timing
   engine: parakeet        # parakeet (MLX, fast & clean) | whisperx (accurate) | even (no install)
   model: large-v3
@@ -69,6 +80,24 @@ video:
   image_seed: 100
   image_timeout: 900
 
+  trim_silence: true       # taglia i silenzi ai bordi di ogni segmento TTS
+  music_source: library    # library (assets/music) | generate (Stable Audio Open, extra "music") | none
+  music_mood: ethereal     # auto | ethereal | cinematic | dark | tense | emotional | documentary
+  music_steps: 100         # passi di diffusione Stable Audio (piu' alti = meglio, piu' lento)
+  music_seconds: 45.0      # lunghezza del letto generato (max ≈47 s; viene ripetuto)
+  watermark: true          # marchio su ogni frame parlato (non sulla card, che lo porta gia')
+  watermark_text: "@astrostackerpro"
+  watermark_opacity: 0.55
+  footage_relevance_floor: 0.35   # rilevanza minima (0-1) di un visual al suo segmento
+  footage_strict: false           # true: rifiuta un visual sotto soglia invece del best-effort
+  footage_clip: true              # CLIP riordina i candidati d'archivio sui pixel (il testo da solo sbaglia spesso)
+  footage_clip_candidates: 3
+  footage_clip_floor: 0.25        # scala propria di CLIP (ViT-B/32): ~0.30 buono, <0.22 scarso
+  image_reject_people: true       # scarta le immagini generate con figure umane (Faster R-CNN; soglia misurata)
+  image_people_threshold: 0.9
+  image_people_retries: 2
+  images_per_segment: 2           # quante immagini generate finiscono a schermo per segmento (taglio a meta')
+  max_images_per_segment: 3       # tetto in render, dalla durata misurata del segmento
 captions:
   phrase_fontsize: 68     # sottotitoli tradotti a schede: corpo (0 = come fontsize), max righe, durata max scheda,
   phrase_max_lines: 4     # e velocita' di lettura (caratteri/secondo) a cui il testo viene CONDENSATO
@@ -101,11 +130,18 @@ publish:                  # share to socials via Postiz (open-source scheduler; 
   disclose_ai: false      # TikTok video_made_with_ai — footage is real; set true to disclose the AI voice/script
   short_link: false       # let Postiz shorten links in the caption
 
+  backend: native          # native (TikTok/Meta/Google diretti) | postiz
+  via: {}                  # backend per piattaforma, es. {tiktok: uploadpost, reddit: uploadpost}
+  uploadpost: {}           # {api_key (o env AVP_UPLOADPOST_KEY), user, subreddit, privacy}
+  apps: {}                 # credenziali OAuth per piattaforma: {tiktok: {client_id, client_secret}} — meglio le env
+  media_host: {}           # {ssh, dir, url}: dove il reel viene esposto in pubblico per l'API di Instagram
+  hashtags: {}             # banco hashtag per piattaforma (override dei default di avp/hashtags.py)
 paths:
   projects_dir: projects
   footage_dir: assets/footage
   music_dir: assets/music
 
+  export_dir: "~/Desktop/Social AstroStacker"   # copia condivisibile di mp4 + metadata per progetto; "" = disattivo
 auto:                     # unattended daily pipeline: `avp auto` generates count videos + schedules them
   count: 3                # videos per run
   platforms: [tiktok, instagram]   # only those with a connected Postiz channel actually get posted
@@ -115,3 +151,4 @@ auto:                     # unattended daily pipeline: `avp auto` generates coun
   refill_threshold: 6     # refill the queue when it holds fewer than this
   refill_batch: 12        # how many topics the LLM proposes per refill
   theme: space and astronomy   # editorial theme for LLM topic brainstorming
+  tiktok_restricted_ok: false   # true: posta su TikTok anche quando l'app nativa puo' solo SELF_ONLY (da rendere pubblico a mano)
