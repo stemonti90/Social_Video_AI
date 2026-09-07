@@ -81,6 +81,15 @@ def parse_script_md(path: Path, base: Script) -> Script:
                 seg.visual = line.split(":", 1)[1].strip()
             elif upper.startswith("KEYWORDS:"):
                 seg.keywords = [k.strip() for k in line.split(":", 1)[1].split(",") if k.strip()]
+    # The CTA line is COMPOSED at build time from cta_bridge + the app hook, so an edit to that line
+    # in script.md used to be silently ignored (7/9: a fixed bridge was overwritten by a stage that
+    # re-saved script.json). Read the bridge back from the edited line: everything before the hook.
+    import re
+    for seg in base.segments:
+        if seg.kind == "cta" and seg.narration:
+            m = re.search(r"\s*Get\s+.+?link in (?:the )?bio\.?\s*$", seg.narration, re.I)
+            if m and seg.narration[:m.start()].strip():
+                base.cta_bridge = seg.narration[:m.start()].strip()
     return base
 
 
@@ -318,11 +327,18 @@ def stage_captions(project: VideoProject, cfg: Config) -> None:
         sub_path = project.root / f"subtitles.{sub_lang}.json"
         items = [(s.index, s.narration, float(s.duration or 0.0))
                  for s in script.segments if s.kind != "cta" and s.narration.strip()]
+        for s in script.segments:              # the CTA's spoken bridge gets a subtitle too (not the hook)
+            bridge = (script.cta_bridge or "").strip()
+            if s.kind == "cta" and bridge and s.narration.strip() and s.duration:
+                share = len(bridge.split()) / max(1, len(s.narration.split()))
+                # the card cuts the bridge subtitle off a little before the bridge audio ends
+                # (CARD_LEAD), so the budget is 85% of the bridge's share of the CTA audio
+                items.append((s.index, bridge, float(s.duration) * share * 0.85))
         existing = json.loads(sub_path.read_text()) if sub_path.exists() else None
         if subs_mod.stale(existing, items):     # keyed by SOURCE text: an edited line gets a new subtitle
             texts = subs_mod.adapt(items, sub_lang, cfg)
-            sub_path.write_text(_json([{"index": i, "text": t, "source": src}
-                                       for (i, src, _), t in zip(items, texts)]))
+            sub_path.write_text(_json([{"index": i, "text": t, "source": src, "seconds": round(sec, 2)}
+                                       for (i, src, sec), t in zip(items, texts)]))
             log.info("Adapted %d segments → %s subtitles", len(texts), sub_lang)
     _free_memory(cfg)   # evict the Ollama model so the STT aligner has RAM headroom (see note above)
     for eng in engines:
@@ -565,6 +581,7 @@ def _assemble_engine(project: VideoProject, cfg: Config, script: Script, eng: st
     # The CTA plays its spoken bridge over the last picture the viewer was already looking at, so the
     # pitch stays inside the story instead of cutting to a card mid-sentence.
     last_content: Path | None = None
+    cta_bridge_seconds = 0.0
     for seg in script.segments:
         seg_audio = adir / f"{seg.index:02d}.wav"
         if not seg_audio.exists():
@@ -589,6 +606,8 @@ def _assemble_engine(project: VideoProject, cfg: Config, script: Script, eng: st
                                _card_seconds(project, cfg, script, eng, render_dur))
                     if seg.kind == "cta"
                     else [render_dur / len(srcs)] * len(srcs))
+            if seg.kind == "cta":
+                cta_bridge_seconds = durs[0]        # the spoken bridge plays over a photo before the card
             # A short dissolve between the stills of one segment. They used to hard-cut, for pace —
             # but two renderings of the same subject jumping into each other read as a glitch, not a
             # cut ("the transition barely works"). Each part is rendered `inner` longer and the
@@ -643,8 +662,11 @@ def _assemble_engine(project: VideoProject, cfg: Config, script: Script, eng: st
 
     items: list[dict] = []
     cap_y = f"main_h-overlay_h-{cfg.captions.margin_v}"
-    # captions cover the SPOKEN content only — the silent endcard gets no subtitle
+    # captions cover the SPOKEN part only — the silent endcard gets no subtitle. The CTA's spoken
+    # bridge plays over a photo for `cta_bridge_seconds` before the card: it is spoken, so it is
+    # subtitled and watermarked like the rest; the card itself carries the brand and needs neither.
     caption_dur = sum(d for seg, d in zip(segs_used, content_durs) if seg.kind != "cta")
+    card_at = caption_dur + cta_bridge_seconds
     sub_json = (project.root / f"subtitles.{sub_lang}.json") if sub_lang else None
     if want_translated and sub_json and sub_json.exists():   # EN audio + translated PHRASE subtitles
         trans = {d["index"]: d["text"] for d in json.loads(sub_json.read_text())}
@@ -659,6 +681,13 @@ def _assemble_engine(project: VideoProject, cfg: Config, script: Script, eng: st
             if seg.kind != "cta":
                 phrases += captions_mod.split_phrases(
                     trans.get(seg.index) or seg.narration, t0, t0 + dur,
+                    max_chars=int(cfg.captions.reading_cps * cfg.captions.phrase_max_seconds),
+                    max_seconds=cfg.captions.phrase_max_seconds)
+            elif trans.get(seg.index) and cta_bridge_seconds > 0.5:
+                # the CTA entry holds the adapted BRIDGE only (the hook is on the card), shown while
+                # the bridge is spoken and gone the moment the card appears
+                phrases += captions_mod.split_phrases(
+                    trans[seg.index], t0, t0 + cta_bridge_seconds,
                     max_chars=int(cfg.captions.reading_cps * cfg.captions.phrase_max_seconds),
                     max_seconds=cfg.captions.phrase_max_seconds)
             t0 += dur
@@ -682,12 +711,13 @@ def _assemble_engine(project: VideoProject, cfg: Config, script: Script, eng: st
                 total_dur=caption_dur):
             items.append({"path": png, "start": s, "end": e, "x": "(main_w-overlay_w)/2", "y": cap_y})
     if getattr(cfg.video, "watermark", True):
-        # Every frame of content carries the brand; the endcard already does, so it stops there.
+        # Every spoken frame carries the brand, bridge included; the endcard already does, so it stops
+        # there ("sempre presente": a watermark that vanished during the bridge was measured 7/9).
         # Top-right, 5% in from the edge and below the platforms' top UI band.
         wm = project.root / f"watermark_{eng}.png"
         captions_mod.render_watermark(wm, getattr(cfg.video, "watermark_text", "@astrostackerpro"),
                                       cfg.video, float(getattr(cfg.video, "watermark_opacity", 0.55)))
-        items.append({"path": wm, "start": 0.0, "end": max(0.5, caption_dur),
+        items.append({"path": wm, "start": 0.0, "end": max(0.5, card_at),
                       "x": f"main_w-overlay_w-{int(cfg.video.width * 0.05)}",
                       "y": f"{int(cfg.video.height * 0.075)}"})
     if cfg.video.show_credits:

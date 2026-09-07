@@ -274,13 +274,21 @@ def choose(current: str, options: list[str], limit: int, italian: bool) -> str |
 
 
 def stale(existing: list[dict] | None, segments: list[tuple[int, str, float]]) -> bool:
-    """True when the saved subtitles were made from different source text (or lack the record)."""
+    """True when the saved subtitles were made from different source text OR for a different
+    duration (the budget is seconds × cps: a re-voiced line that got shorter needs a shorter
+    subtitle), or when the record lacks either."""
     if not existing:
         return True
     by_index = {int(d.get("index", -1)): d for d in existing if isinstance(d, dict)}
-    for i, txt, _ in segments:
+    for i, txt, sec in segments:
         d = by_index.get(i)
         if not d or "source" not in d or " ".join(str(d["source"]).split()) != " ".join(txt.split()):
+            return True
+        try:
+            was = float(d.get("seconds"))
+        except (TypeError, ValueError):
+            return True
+        if sec and abs(was - sec) > 0.10 * max(sec, 0.1):
             return True
     return False
 

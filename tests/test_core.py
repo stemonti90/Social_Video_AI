@@ -2212,6 +2212,23 @@ class TranslatedSubtitlesAreClauses(unittest.TestCase):
         self.assertNotIn("distribute_words", block)
 
 
+class EditedCtaLineReachesTheBridge(unittest.TestCase):
+    def test_the_bridge_is_read_back_from_the_edited_cta_line(self):
+        import tempfile
+        from pathlib import Path
+        from avp import stages
+        from avp.models import Script, Segment
+        base = Script(title="T", cta_bridge="You can spot Pluto with a telescope tonight.",
+                      segments=[Segment(index=1, narration="A line."),
+                                Segment(index=2, narration="You can spot Pluto with a telescope tonight. Get App — link in bio.", kind="cta")])
+        md = ("# T\n\n## 1\nNARRATION: A line.\n\n## 2\nNARRATION: You need a telescope of at least 20 centimetres. "
+              "Get App — link in bio.\n")
+        with tempfile.TemporaryDirectory() as d:
+            p = Path(d) / "script.md"; p.write_text(md)
+            out = stages.parse_script_md(p, base)
+        self.assertEqual(out.cta_bridge, "You need a telescope of at least 20 centimetres.")
+
+
 class BrandTagOnEveryPost(unittest.TestCase):
     """#astrostackerpro goes on every post, on every platform, by construction — the channel exists
     to funnel viewers to the app, and a prompt asking the model for the tag is advice it can ignore."""
@@ -2859,7 +2876,7 @@ class WatermarkOnEveryFrame(unittest.TestCase):
         from avp import stages
         src = inspect.getsource(stages._assemble_engine)
         self.assertIn("render_watermark", src)
-        self.assertIn('"end": max(0.5, caption_dur)', src)              # not over the endcard
+        self.assertIn('"end": max(0.5, card_at)', src)                  # through the spoken bridge, not over the card
 
     def test_it_can_be_switched_off(self):
         from avp.config import VideoConfig
@@ -3820,9 +3837,11 @@ class SubtitlesYouCanRead(unittest.TestCase):
     def test_stale_when_the_source_line_changed_or_is_missing(self):
         from avp import subtitles
         items = [(1, "A comet.", 3.0), (2, "It bounced.", 3.0)]
-        saved = [{"index": 1, "text": "Una cometa.", "source": "A comet."},
-                 {"index": 2, "text": "È rimbalzato.", "source": "It bounced."}]
+        saved = [{"index": 1, "text": "Una cometa.", "source": "A comet.", "seconds": 3.0},
+                 {"index": 2, "text": "È rimbalzato.", "source": "It bounced.", "seconds": 3.0}]
         self.assertFalse(subtitles.stale(saved, items))
+        self.assertTrue(subtitles.stale(saved, [(1, "A comet.", 2.0), (2, "It bounced.", 3.0)]))   # re-voiced shorter
+        self.assertTrue(subtitles.stale([dict(saved[0], seconds=None), saved[1]], items))            # no duration record
         self.assertTrue(subtitles.stale(saved, [(1, "A comet.", 3.0), (2, "It bounced twice.", 3.0)]))
         self.assertTrue(subtitles.stale([{"index": 1, "text": "Una cometa."}], items))   # legacy file, no source
         self.assertTrue(subtitles.stale(None, items))
@@ -3913,6 +3932,9 @@ class SubtitlesYouCanRead(unittest.TestCase):
         self.assertNotIn("translate_segments", src)
         asm = inspect.getsource(stages._assemble_engine)
         self.assertIn("max_chars=int(cfg.captions.reading_cps * cfg.captions.phrase_max_seconds)", asm)
+        self.assertIn('"end": max(0.5, card_at)', asm)                 # watermark up to the card
+        self.assertIn("trans[seg.index], t0, t0 + cta_bridge_seconds", asm)   # the bridge is subtitled
+        self.assertIn("items.append((s.index, bridge, float(s.duration) * share * 0.85))", src)
 
 
 class PolishInTheChannelsVoice(unittest.TestCase):
