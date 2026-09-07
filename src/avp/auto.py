@@ -19,6 +19,9 @@ from pathlib import Path
 
 from . import llm
 from .config import Config
+# Slots, timezone and topic identity live in ONE module shared with server/control.py — the two
+# stacks carried identical copies until 7/9 and a fix reached only one of them.
+from .scheduling import iso_utc as _iso_utc, post_slots, topic_key as _key, zone as _zone  # noqa: F401
 from .log import get_logger
 from .manifest import VideoProject
 
@@ -48,10 +51,6 @@ def _unique_slug(base: str, projects_dir: Path) -> str:
 
 
 # --------------------------------------------------------------------------- topic queue
-def _key(s: str) -> str:
-    return re.sub(r"[^a-z0-9]+", " ", (s or "").lower()).strip()
-
-
 def _queue_path(cfg: Config) -> Path:
     p = Path(cfg.auto.queue_path).expanduser()
     return p if p.is_absolute() else Path(cfg.paths.projects_dir).expanduser() / p
@@ -112,45 +111,6 @@ def next_topics(cfg: Config, n: int, consume: bool = True) -> list[str]:
 
 
 # --------------------------------------------------------------------------- scheduling
-def _zone(tz: str):
-    if ZoneInfo is not None:
-        try:
-            return ZoneInfo(tz)
-        except Exception:  # noqa: BLE001 — bad tz name
-            log.warning("Unknown timezone %r — using UTC.", tz)
-    return timezone.utc
-
-
-def _iso_utc(dt: datetime) -> str:
-    return dt.astimezone(timezone.utc).strftime("%Y-%m-%dT%H:%M:%S.000Z")
-
-
-def post_slots(now: datetime, times: list[str], tz: str, count: int) -> list[datetime]:
-    """The next `count` posting datetimes (tz-aware) from the daily `times` (HH:MM), rolling into
-    following days once today's remaining slots are used up. Only slots strictly in the future."""
-    zone = _zone(tz)
-    now = now.astimezone(zone)
-    parsed: list[tuple[int, int]] = []
-    for t in times:
-        try:
-            hh, mm = (int(x) for x in str(t).split(":")[:2])
-            if 0 <= hh < 24 and 0 <= mm < 60:
-                parsed.append((hh, mm))
-        except Exception:  # noqa: BLE001 — skip a malformed time entry
-            continue
-    parsed = parsed or [(12, 0), (18, 0), (21, 0)]
-    slots: list[datetime] = []
-    for day in range(0, 15):                      # up to two weeks out — a safety bound, never reached
-        base = now + timedelta(days=day)
-        for hh, mm in parsed:
-            cand = base.replace(hour=hh, minute=mm, second=0, microsecond=0)
-            if cand > now:
-                slots.append(cand)
-                if len(slots) >= count:
-                    return slots
-    return slots
-
-
 # --------------------------------------------------------------------------- channels
 def connected_platforms(cfg: Config) -> set[str]:
     """Which target platforms can actually be posted to right now (empty on any error).

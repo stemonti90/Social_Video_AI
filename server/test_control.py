@@ -139,3 +139,31 @@ class StoreLogic(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class StatusNeedsTheToken(unittest.TestCase):
+    """/api/status carries the queue, the recent jobs with their errors and the config: editorial
+    state, behind the same token as everything else (it used to be the one open endpoint)."""
+
+    def test_status_is_401_without_the_token_and_the_compare_is_constant_time(self):
+        import threading, urllib.error, urllib.request
+        control.CFG["token"] = "t0k"
+        control.STORE = control.Store(":memory:")
+        srv = control.ThreadingHTTPServer(("127.0.0.1", 0), control.Handler)
+        threading.Thread(target=srv.serve_forever, daemon=True).start()
+        try:
+            def get(path, tok=None):
+                req = urllib.request.Request(f"http://127.0.0.1:{srv.server_address[1]}{path}",
+                                             headers={"Authorization": tok} if tok else {})
+                try:
+                    return urllib.request.urlopen(req, timeout=5).status
+                except urllib.error.HTTPError as e:
+                    return e.code
+            self.assertEqual(get("/api/status"), 401)
+            self.assertEqual(get("/api/status", "t0k1"), 401)
+            self.assertEqual(get("/api/status", "t0k"), 200)
+            self.assertEqual(get("/healthz"), 200)
+        finally:
+            srv.shutdown()
+        import inspect
+        self.assertIn("compare_digest", inspect.getsource(control.Handler._authed))

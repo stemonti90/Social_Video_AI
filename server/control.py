@@ -18,21 +18,30 @@ Config via env (all optional except the token):
 """
 from __future__ import annotations
 
+import hmac
 import json
 import os
 import sqlite3
+import sys
 import threading
 import time
 import uuid
-from datetime import datetime, timedelta, timezone
+from datetime import datetime, timezone
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
+from pathlib import Path
 
 import postiz_client as pz
 
+# Slots, timezone and topic identity are ONE module shared with `avp auto` (src/avp/scheduling.py):
+# the two stacks carried identical copies and a fix reached only one. In the repo the module is
+# imported from ../src; in the container deploy.sh drops a copy next to this file.
+_SRC = Path(__file__).resolve().parents[1] / "src"
+if _SRC.exists():
+    sys.path.insert(0, str(_SRC))
 try:
-    from zoneinfo import ZoneInfo
-except Exception:  # noqa: BLE001
-    ZoneInfo = None
+    from avp.scheduling import iso_utc, post_slots, topic_key, zone  # noqa: F401
+except ImportError:  # container layout
+    from scheduling import iso_utc, post_slots, topic_key, zone  # type: ignore  # noqa: F401
 
 
 def env(name, default=""):
@@ -55,45 +64,6 @@ CFG = {
     "host": env("SVAI_HOST", "0.0.0.0"),
     "port": int(env("SVAI_PORT", "8770")),
 }
-
-
-# --------------------------------------------------------------------------- time
-def zone(tz):
-    if ZoneInfo is not None:
-        try:
-            return ZoneInfo(tz)
-        except Exception:  # noqa: BLE001
-            pass
-    return timezone.utc
-
-
-def iso_utc(dt):
-    return dt.astimezone(timezone.utc).strftime("%Y-%m-%dT%H:%M:%S.000Z")
-
-
-def post_slots(now, times, tz, count):
-    """The next `count` posting datetimes (tz-aware, future-only), rolling into following days."""
-    z = zone(tz)
-    now = now.astimezone(z)
-    parsed = []
-    for t in times:
-        try:
-            hh, mm = (int(x) for x in str(t).split(":")[:2])
-            if 0 <= hh < 24 and 0 <= mm < 60:
-                parsed.append((hh, mm))
-        except Exception:  # noqa: BLE001
-            continue
-    parsed = parsed or [(12, 0), (18, 0), (21, 0)]
-    slots = []
-    for day in range(0, 15):
-        base = now + timedelta(days=day)
-        for hh, mm in parsed:
-            cand = base.replace(hour=hh, minute=mm, second=0, microsecond=0)
-            if cand > now:
-                slots.append(cand)
-                if len(slots) >= count:
-                    return slots
-    return slots
 
 
 # --------------------------------------------------------------------------- store
@@ -125,10 +95,12 @@ class Store:
     def add_topics(self, topics):
         added = 0
         with self.lock:
+            known = {topic_key(r["topic"]) for r in self._conn.execute("SELECT topic FROM topics")}
             for t in topics:
                 t = (t or "").strip()
-                if not t:
+                if not t or topic_key(t) in known:
                     continue
+                known.add(topic_key(t))
                 try:
                     self._conn.execute("INSERT INTO topics(topic, added_at) VALUES(?,?)", (t, self._now()))
                     added += 1
@@ -264,7 +236,9 @@ class Handler(BaseHTTPRequestHandler):
             self.wfile.write(body)
 
     def _authed(self):
-        return bool(CFG["token"]) and self.headers.get("Authorization", "") == CFG["token"]
+        # compare_digest, not ==: a secret compared with == leaks its length/prefix by timing.
+        tok = CFG["token"] or ""
+        return bool(tok) and hmac.compare_digest(self.headers.get("Authorization", "").encode(), tok.encode())
 
     def _body(self):
         n = int(self.headers.get("Content-Length", 0) or 0)
@@ -281,6 +255,8 @@ class Handler(BaseHTTPRequestHandler):
         if p == "/healthz":
             return self._send(200, {"ok": True})
         if p == "/api/status":
+            if self._need_auth():          # the queue, recent jobs and config are editorial state
+                return
             return self._send(200, STORE.status())
         if p == "/api/topics":
             if self._need_auth():
@@ -390,7 +366,9 @@ async function addTopics(){const t=$('#add').value.split('\\n').map(s=>s.trim())
  const r=await api('/api/topics',{topics:t});if(r){$('#add').value='';load()}}
 async function planNow(){const r=await api('/api/jobs/plan',{});if(r){load()}}
 function esc(s){return (s||'').replace(/[&<>]/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;'}[c]))}
-async function load(){const d=await(await fetch('/api/status')).json();
+async function load(){const r=await fetch('/api/status',{headers:{'Authorization':tok()}});
+ if(r.status===401){$('#msg').innerHTML='<span class=warn>incolla il CONTROL_TOKEN per vedere coda e job</span>';return}
+ const d=await r.json();
  $('#stats').innerHTML=[['coda',d.queue],['in coda job',d.jobs.pending],['in corso',d.jobs.in_progress],['fatti',d.jobs.done],['caricati',d.jobs.uploaded],['falliti',d.jobs.failed]]
    .map(([k,v])=>`<div class=card style=min-width:120px><div class=mut>${k}</div><div class=big>${v}</div></div>`).join('');
  $('#cfg').textContent=`${d.config.count} video/giorno → ${d.config.platforms.join(', ')} @ ${d.config.post_times.join(' / ')} (${d.config.timezone}) · genera alle ${d.config.generate_hour}:00`;

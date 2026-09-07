@@ -8,6 +8,8 @@ DEST="${2:-/home/ste/svai-control}"
 DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 
 echo "→ syncing $DIR → $HOST:$DEST"
+# the shared scheduling module travels with the service (single source: src/avp/scheduling.py)
+cp "$DIR/../src/avp/scheduling.py" "$DIR/scheduling.py"
 rsync -az --delete --exclude .env --exclude __pycache__ --exclude '*.pyc' "$DIR/" "$HOST:$DEST/"
 
 ssh "$HOST" bash -s "$DEST" <<'EOS'
