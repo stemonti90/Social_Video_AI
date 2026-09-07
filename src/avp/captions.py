@@ -199,7 +199,8 @@ PHRASE_MIN_SECONDS = 1.1  # below this a subtitle is a flash, not something you 
 
 
 def split_phrases(text: str, start: float, end: float,
-                  max_words: int = PHRASE_MAX_WORDS, min_seconds: float = PHRASE_MIN_SECONDS):
+                  max_words: int = PHRASE_MAX_WORDS, min_seconds: float = PHRASE_MIN_SECONDS,
+                  max_chars: int | None = None, max_seconds: float | None = None):
     """Cut one segment's translated text into subtitle clauses, each with its share of the segment's
     audio window. Cuts fall at sentence ends first, then commas, then a hard split — never mid-idea
     when a natural break exists. Time is shared by word count, and a piece that would be on screen
@@ -213,6 +214,12 @@ def split_phrases(text: str, start: float, end: float,
     text = " ".join((text or "").split())
     if not text:
         return []
+    if max_chars:
+        # READING mode (translated subtitles, 7/9): the card is the sentence, not eight words. Whole
+        # sentences are packed into one card while it stays under `max_chars` and `max_seconds`, so a
+        # condensed 6-second segment is ONE card the viewer reads at their own pace instead of three
+        # flashes. Word-based cutting below only kicks in for a single sentence that is itself too long.
+        return _split_reading(text, start, end, max_chars, max_seconds or 0.0, min_seconds)
     pieces = [x.strip() for x in re.split(r"(?<=[.!?;:])\s+", text) if x.strip()]
     out = []
     for piece in pieces:                       # long sentences: try commas, then hard-split
@@ -256,6 +263,59 @@ def split_phrases(text: str, start: float, end: float,
     return [(txt, a, b) for txt, a, b in timed]
 
 
+def _split_reading(text: str, start: float, end: float, max_chars: int, max_seconds: float,
+                   min_seconds: float):
+    import re
+    sentences = [x.strip() for x in re.split(r"(?<=[.!?])\s+", text) if x.strip()]
+    units: list[str] = []
+    for sent in sentences:                     # a sentence over the budget: commas, then words
+        if len(sent) <= max_chars:
+            units.append(sent); continue
+        buf = ""
+        for part in [x.strip() for x in re.split(r"(?<=[,;:])\s+", sent) if x.strip()]:
+            trial = f"{buf} {part}".strip()
+            if buf and len(trial) > max_chars:
+                units.append(buf); buf = part
+            else:
+                buf = trial
+        if buf:
+            units.append(buf)
+    final: list[str] = []
+    for u in units:
+        w = u.split()
+        max_words = max(3, max_chars // 6)     # ~6 characters per word incl. the space
+        while len(u) > max_chars and len(w) > max_words:
+            cut = _best_cut(w, max_words)
+            final.append(" ".join(w[:cut])); w = w[cut:]; u = " ".join(w)
+        if w:
+            final.append(" ".join(w))
+    window = max(0.0, end - start)
+    total_chars = sum(len(x) for x in final) or 1
+    # pack consecutive units into cards under both budgets; time is shared by character count
+    cards: list[list] = []
+    for u in final:
+        d = window * len(u) / total_chars
+        if cards and len(f"{cards[-1][0]} {u}") <= max_chars and \
+                (not max_seconds or cards[-1][2] - cards[-1][1] + d <= max_seconds):
+            cards[-1][0] = f"{cards[-1][0]} {u}"; cards[-1][2] += d
+        else:
+            t = cards[-1][2] if cards else start
+            cards.append([u, t, t + d])
+    if cards:
+        cards[-1][2] = end                     # absorb rounding: the window is fully covered
+    changed = True
+    while changed and len(cards) > 1:          # a flash is folded into a neighbour, as before
+        changed = False
+        for i, (txt, a, b) in enumerate(cards):
+            if b - a < min_seconds:
+                j = i - 1 if i > 0 else i + 1
+                cards[j] = [f"{cards[j][0]} {txt}" if j < i else f"{txt} {cards[j][0]}",
+                            min(cards[j][1], a), max(cards[j][2], b)]
+                del cards[i]; changed = True
+                break
+    return [(txt, a, b) for txt, a, b in cards]
+
+
 _DANGLING = {"di", "da", "a", "in", "su", "per", "con", "tra", "fra", "e", "o", "che", "il", "lo",
              "la", "i", "gli", "le", "un", "una", "uno", "del", "della", "dei", "delle", "al", "alla",
              "the", "a", "an", "of", "to", "in", "on", "at", "and", "or", "that", "with", "for"}
@@ -278,22 +338,21 @@ def render_phrase_pngs(phrases, out_dir: Path, style: CaptionStyle, video: Video
     from PIL import Image, ImageDraw
 
     out_dir.mkdir(parents=True, exist_ok=True)
-    font = _load_font(style)
     primary = _ass_to_rgb(style.primary_color, (255, 255, 255))
     max_w = int(video.width * 0.86)
-    line_h = int(style.fontsize * 1.25)
     measure = ImageDraw.Draw(Image.new("RGBA", (8, 8)))
     items = []
     for idx, (text, start, end) in enumerate(phrases):
-        lines = _wrap(measure, text, font, max_w)
-        pad_x, pad_y = int(style.fontsize * 0.55), int(style.fontsize * 0.45)
+        fs, font, lines = fit_lines(measure, text, style, max_w)
+        line_h = int(fs * 1.25)
+        pad_x, pad_y = int(fs * 0.55), int(fs * 0.45)
         band_h = line_h * len(lines) + pad_y * 2
         img = Image.new("RGBA", (video.width, band_h), (0, 0, 0, 0))
         draw = ImageDraw.Draw(img)
         tw = max((draw.textlength(ln, font=font) for ln in lines), default=0)
         cx = video.width / 2.0
         draw.rounded_rectangle([cx - tw / 2 - pad_x, 0, cx + tw / 2 + pad_x, band_h],
-                               radius=int(style.fontsize * 0.32), fill=(0, 0, 0, 150))
+                               radius=int(fs * 0.32), fill=(0, 0, 0, 150))
         y = pad_y
         for ln in lines:
             draw.text((cx, y), ln, font=font, anchor="ma", fill=primary,
@@ -303,6 +362,20 @@ def render_phrase_pngs(phrases, out_dir: Path, style: CaptionStyle, video: Video
         img.save(png)
         items.append((png, start, end))
     return items
+
+
+def fit_lines(measure, text: str, style: CaptionStyle, max_w: int):
+    """(font_size, font, lines) for a phrase card: the phrase size (phrase_fontsize, else fontsize),
+    shrunk step by step — never below 60% — until the text wraps into at most phrase_max_lines."""
+    base = int(getattr(style, "phrase_fontsize", 0) or style.fontsize)
+    max_lines = max(1, int(getattr(style, "phrase_max_lines", 4) or 4))
+    fs = base
+    while True:
+        font = _truetype(fs, style.font)
+        lines = _wrap(measure, text, font, max_w)
+        if len(lines) <= max_lines or fs <= int(base * 0.6):
+            return fs, font, lines
+        fs -= max(2, base // 20)
 
 
 def _wrap(draw, text: str, font, max_w: int) -> list[str]:

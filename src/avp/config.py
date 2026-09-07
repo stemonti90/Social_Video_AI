@@ -54,6 +54,10 @@ class ScriptConfig:
     # only fact base it may use. "auto" = on whenever a fact-check key exists; "on" | "off".
     brief: str = "auto"
     brief_model: str = ""        # empty = factcheck_model
+    # Who writes the translated subtitles (avp/subtitles.py): "auto" = the fact-check model when its
+    # key exists (far better Italian, condenses to a reading-speed budget), else the local writer;
+    # "remote" | "local".
+    subtitle_editor: str = "auto"
 
 
 @dataclass
@@ -172,6 +176,14 @@ class CaptionStyle:
     outline: int = 4
     margin_v: int = 320
     group: int = 3                        # words shown per caption line
+    # Translated PHRASE subtitles (EN voice + IT text). Measured 6/9: 8-word cards at 84px ran at a
+    # median 19.8 characters/second (peaks 27) against a 15-17 ceiling for adult readers. Now one card
+    # per sentence/segment, up to 4 lines at a smaller size, and the text itself is condensed to fit
+    # reading_cps × its seconds (see avp/subtitles.py).
+    phrase_fontsize: int = 68        # 0 = same as fontsize
+    phrase_max_lines: int = 4
+    phrase_max_seconds: float = 7.0  # a card longer than this is cut at a sentence end
+    reading_cps: float = 15.0        # characters per second the subtitle text is budgeted for
 
 
 @dataclass

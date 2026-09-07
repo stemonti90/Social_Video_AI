@@ -3763,3 +3763,153 @@ class HashtagsFromTheBank(unittest.TestCase):
         banked = llm._clean_metadata(data, script_text="Jupiter storm")
         self.assertNotIn("#madeuptag", banked["instagram"]["hashtags"])
         self.assertIn("#LearnOnTikTok", banked["tiktok"]["caption"])
+
+
+class SubtitlesYouCanRead(unittest.TestCase):
+    """Translated subtitles are adapted to a reading-speed budget and shown one sentence per card."""
+
+    def test_budget_is_seconds_times_reading_speed_with_a_floor(self):
+        from avp import subtitles
+        self.assertEqual(subtitles.budget(6.0, 15.0), 90)
+        self.assertEqual(subtitles.budget(0.5, 15.0), subtitles.MIN_BUDGET)
+
+    def test_a_condensed_segment_is_one_card_for_its_whole_window(self):
+        from avp.captions import split_phrases
+        t = "Nel 2014 un robot è atterrato su una cometa. Poi è rimbalzato per 1 km nello spazio."
+        out = split_phrases(t, 0.0, 6.0, max_chars=105, max_seconds=7.0)
+        self.assertEqual(len(out), 1)
+        self.assertEqual(out[0][0], t)
+        self.assertEqual((out[0][1], out[0][2]), (0.0, 6.0))
+
+    def test_over_budget_text_is_cut_at_the_sentence_end_and_time_follows_characters(self):
+        from avp.captions import split_phrases
+        a = "Prima frase abbastanza lunga da riempire da sola una scheda intera di sottotitoli."
+        b = "Seconda frase, anche questa lunga, che va sulla scheda successiva del video."
+        out = split_phrases(f"{a} {b}", 0.0, 8.0, max_chars=90, max_seconds=7.0)
+        self.assertEqual([x[0] for x in out], [a, b])
+        self.assertAlmostEqual(out[0][2], out[1][1], places=6)
+        self.assertAlmostEqual(out[-1][2], 8.0, places=6)
+        self.assertGreater(out[0][2] - out[0][1], out[1][2] - out[1][1])   # longer text, more time
+
+    def test_a_long_window_is_cut_even_when_the_text_fits(self):
+        from avp.captions import split_phrases
+        out = split_phrases("Frase uno breve. Frase due breve.", 0.0, 12.0, max_chars=200, max_seconds=7.0)
+        self.assertEqual(len(out), 2)
+
+    def test_the_old_eight_word_mode_is_untouched_without_a_budget(self):
+        from avp.captions import split_phrases, PHRASE_MAX_WORDS
+        t = ("Una cicatrice planetaria ha spaccato la crosta di Marte abbastanza da inghiottire "
+             "un intero continente.")
+        self.assertTrue(all(len(x[0].split()) <= PHRASE_MAX_WORDS for x in split_phrases(t, 0.0, 6.2)))
+
+    def test_a_card_shrinks_its_font_to_stay_within_the_line_limit(self):
+        from PIL import Image, ImageDraw
+        from avp import captions
+        from avp.config import CaptionStyle, VideoConfig
+        style = CaptionStyle(phrase_fontsize=68, phrase_max_lines=4)
+        measure = ImageDraw.Draw(Image.new("RGBA", (8, 8)))
+        text = ("Le batterie sono durate circa 60 ore, abbastanza per rilevare 16 molecole organiche, "
+                "4 delle quali mai viste prima su una cometa in tutta la storia.")
+        fs, font, lines = captions.fit_lines(measure, text, style, int(VideoConfig().width * 0.86))
+        self.assertLessEqual(len(lines), 4)
+        self.assertLessEqual(fs, 68)
+        self.assertGreaterEqual(fs, int(68 * 0.6))
+        short_fs, _, short_lines = captions.fit_lines(measure, "Una riga.", style, 900)
+        self.assertEqual((short_fs, short_lines), (68, ["Una riga."]))
+
+    def test_stale_when_the_source_line_changed_or_is_missing(self):
+        from avp import subtitles
+        items = [(1, "A comet.", 3.0), (2, "It bounced.", 3.0)]
+        saved = [{"index": 1, "text": "Una cometa.", "source": "A comet."},
+                 {"index": 2, "text": "È rimbalzato.", "source": "It bounced."}]
+        self.assertFalse(subtitles.stale(saved, items))
+        self.assertTrue(subtitles.stale(saved, [(1, "A comet.", 3.0), (2, "It bounced twice.", 3.0)]))
+        self.assertTrue(subtitles.stale([{"index": 1, "text": "Una cometa."}], items))   # legacy file, no source
+        self.assertTrue(subtitles.stale(None, items))
+
+    def _cfg(self, key="k"):
+        from types import SimpleNamespace
+        return SimpleNamespace(script=SimpleNamespace(subtitle_editor="auto", factcheck_key=key,
+                                                      factcheck_model="deepseek-chat", brief_model=""),
+                               captions=SimpleNamespace(reading_cps=15.0), llm=SimpleNamespace(model="x"))
+
+    def test_adaptation_is_budgeted_revised_and_shortened_by_the_strong_model(self):
+        import json as _json
+        from avp import subtitles
+        calls = []
+
+        class R:
+            status_code = 200
+            text = ""
+            def __init__(self, payload): self._p = payload
+            def json(self): return {"choices": [{"message": {"content": _json.dumps(self._p)}}]}
+
+        def fake_post(url, headers=None, json=None, timeout=None):
+            user = json["messages"][1]["content"]
+            calls.append(user)
+            if "THREE alternative versions" in user:               # fix pass (over budget)
+                return R({"items": [{"id": 2, "options": ["Poi è rimbalzato per un chilometro nello spazio.",
+                                                          "Rimbalzo di 1 km nello spazio.", "Rimbalzo di 1 km."]}]})
+            if "copy editor" in user:                            # revision pass
+                return R({"items": [{"id": 1, "text": "Un robot è atterrato su una cometa."},
+                                    {"id": 2, "text": "Poi è rimbalzato per un chilometro nello spazio, in alto."}]})
+            return R({"items": [{"id": 1, "text": "Un robot e' atterrato su una cometa."},
+                                {"id": 2, "text": "Poi è rimbalzato per un chilometro nello spazio, in alto."}]})
+
+        segs = [(1, "A robot landed on a comet.", 4.0), (2, "Then it bounced a kilometre into space.", 1.0)]
+        with mock.patch.dict("os.environ", {"DEEPSEEK_API_KEY": ""}, clear=False), \
+             mock.patch("avp.subtitles.requests.post", fake_post):
+            out = subtitles.adapt(segs, "it", self._cfg())
+        self.assertEqual(out[0], "Un robot è atterrato su una cometa.")      # the revision won
+        self.assertEqual(out[1], "Rimbalzo di 1 km.")                       # over budget → shortened
+        self.assertIn('"max_chars": 60', calls[0])                          # 4.0 s × 15 cps
+        self.assertEqual(len(calls), 3)
+
+    def test_without_a_key_the_local_model_is_used_and_failures_keep_the_source(self):
+        from avp import subtitles
+        with mock.patch.dict("os.environ", {"DEEPSEEK_API_KEY": ""}, clear=False), \
+             mock.patch("avp.subtitles._Local.__init__", lambda self, cfg: None), \
+             mock.patch("avp.subtitles._Local.chat", side_effect=OSError("ollama down")):
+            out = subtitles.adapt([(1, "A comet.", 3.0)], "it", self._cfg(key=""))
+        self.assertEqual(out, ["A comet."])
+
+    def test_passato_remoto_is_detected_and_rewritten(self):
+        import json as _json
+        from avp import subtitles
+        self.assertEqual(subtitles.remoto_forms("Gli arpioni fallirono, l'atterraggio divenne un balzo."),
+                         ["fallirono", "divenne"])
+        self.assertEqual(subtitles.remoto_forms("Rimbalzò e si fermò. Poi nessuno seppe dove fosse."),
+                         ["Rimbalzò", "fermò", "seppe"])
+        self.assertEqual(subtitles.remoto_forms("Però può bastare: è atterrato e ha rimbalzato."), [])
+        calls = []
+
+        class R:
+            status_code = 200
+            text = ""
+            def __init__(self, payload): self._p = payload
+            def json(self): return {"choices": [{"message": {"content": _json.dumps(self._p)}}]}
+
+        def fake_post(url, headers=None, json=None, timeout=None):
+            user = json["messages"][1]["content"]; calls.append(user)
+            if "THREE alternative versions" in user:
+                return R({"items": [{"id": 1, "options": ["Gli arpioni hanno fallito del tutto.",
+                                                          "Gli arpioni hanno fallito.", "Arpioni falliti."]}]})
+            return R({"items": [{"id": 1, "text": "Gli arpioni fallirono."}]})
+
+        with mock.patch.dict("os.environ", {"DEEPSEEK_API_KEY": ""}, clear=False), \
+             mock.patch("avp.subtitles.requests.post", fake_post):
+            out = subtitles.adapt([(1, "The harpoons failed.", 4.0)], "it", self._cfg())
+        self.assertEqual(out, ["Gli arpioni hanno fallito del tutto."])   # longest clean option within 60 chars
+        self.assertTrue(any("THREE alternative versions" in c for c in calls))
+        from avp.subtitles import choose
+        self.assertEqual(choose("Rimbalzò.", ["Ha rimbalzato.", "Rimbalzò via."], 40, True), "Ha rimbalzato.")
+        self.assertIsNone(choose("È atterrato.", ["È atterrato sulla cometa piano piano."], 20, True))
+
+    def test_the_captions_stage_adapts_with_a_source_keyed_cache(self):
+        from avp import stages
+        src = inspect.getsource(stages.stage_captions)
+        self.assertIn("subs_mod.stale(existing, items)", src)
+        self.assertIn("subs_mod.adapt(items, sub_lang, cfg)", src)
+        self.assertNotIn("translate_segments", src)
+        asm = inspect.getsource(stages._assemble_engine)
+        self.assertIn("max_chars=int(cfg.captions.reading_cps * cfg.captions.phrase_max_seconds)", asm)

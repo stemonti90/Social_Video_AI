@@ -10,6 +10,7 @@ llm:
 script:
   brief: auto            # scheda fatti dal modello del fact-check PRIMA di scrivere (avp/brief.py): auto = quando c'e' la chiave; on | off
   brief_model: ""        # vuoto = factcheck_model
+  subtitle_editor: auto  # chi scrive i sottotitoli tradotti (avp/subtitles.py): auto = il modello del fact-check se c'e' la chiave, altrimenti locale; remote | local
   target_seconds: 50      # aim above the 60s TikTok Creator-Rewards minimum
   language: en            # en | it — language of the spoken narration + captions
 
@@ -68,6 +69,10 @@ video:
   image_timeout: 900
 
 captions:
+  phrase_fontsize: 68     # sottotitoli tradotti a schede: corpo (0 = come fontsize), max righe, durata max scheda,
+  phrase_max_lines: 4     # e velocita' di lettura (caratteri/secondo) a cui il testo viene CONDENSATO
+  phrase_max_seconds: 7.0
+  reading_cps: 15.0
   font: Arial
   fontsize: 84
   primary_color: "&H00FFFFFF"    # ASS color = &HAABBGGRR  (white)

@@ -309,13 +309,17 @@ def stage_captions(project: VideoProject, cfg: Config) -> None:
     # Mac makes the aligner's subprocess produce no output and silently fall back to even timing. Freeing
     # the model here gives it headroom. The translated subs feed assemble, not STT, so order is safe.
     sub_lang = cfg.script.subtitle_language
-    if sub_lang and sub_lang != cfg.script.language:   # EN audio + translated subtitles (karaoke)
+    if sub_lang and sub_lang != cfg.script.language:   # EN audio + adapted subtitles (phrase cards)
+        from . import subtitles as subs_mod
         sub_path = project.root / f"subtitles.{sub_lang}.json"
-        if not sub_path.exists():
-            trans = llm.translate_segments(cfg.llm, [s.narration for s in script.segments], sub_lang)
-            sub_path.write_text(_json([{"index": s.index, "text": t}
-                                       for s, t in zip(script.segments, trans)]))
-            log.info("Translated %d segments → %s subtitles", len(trans), sub_lang)
+        items = [(s.index, s.narration, float(s.duration or 0.0))
+                 for s in script.segments if s.kind != "cta" and s.narration.strip()]
+        existing = json.loads(sub_path.read_text()) if sub_path.exists() else None
+        if subs_mod.stale(existing, items):     # keyed by SOURCE text: an edited line gets a new subtitle
+            texts = subs_mod.adapt(items, sub_lang, cfg)
+            sub_path.write_text(_json([{"index": i, "text": t, "source": src}
+                                       for (i, src, _), t in zip(items, texts)]))
+            log.info("Adapted %d segments → %s subtitles", len(texts), sub_lang)
     _free_memory(cfg)   # evict the Ollama model so the STT aligner has RAM headroom (see note above)
     for eng in engines:
         narration = project.audio_dir / eng / "narration.wav"
@@ -649,8 +653,19 @@ def _assemble_engine(project: VideoProject, cfg: Config, script: Script, eng: st
         phrases, t0 = [], 0.0
         for seg, dur in zip(segs_used, content_durs):
             if seg.kind != "cta":
-                phrases += captions_mod.split_phrases(trans.get(seg.index) or seg.narration, t0, t0 + dur)
+                phrases += captions_mod.split_phrases(
+                    trans.get(seg.index) or seg.narration, t0, t0 + dur,
+                    max_chars=int(cfg.captions.reading_cps * cfg.captions.phrase_max_seconds),
+                    max_seconds=cfg.captions.phrase_max_seconds)
             t0 += dur
+        if phrases:                            # the number that decides whether anyone can read them
+            from . import subtitles as subs_mod
+            speeds = subs_mod.reading_speed(phrases)
+            worst = max(speeds)
+            log.info("Subtitles: %d cards, median %.1f chars/s, worst %.1f (budget %.0f).", len(phrases),
+                     sorted(speeds)[len(speeds) // 2], worst, cfg.captions.reading_cps)
+            if worst > cfg.captions.reading_cps * 1.25:
+                log.warning("A subtitle card runs at %.1f chars/s — too fast to read.", worst)
         sub_dir = project.root / f"subs_png_{eng}_{sub_lang}"
         shutil.rmtree(sub_dir, ignore_errors=True)     # cards from a previous render must not linger
         for png, s, e in captions_mod.render_phrase_pngs(phrases, sub_dir, cfg.captions, cfg.video):
