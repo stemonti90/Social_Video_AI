@@ -18,6 +18,7 @@ from __future__ import annotations
 
 import json
 import logging
+import re
 
 import requests
 
@@ -67,7 +68,9 @@ Subtitles:
 
 FIX_USER = """Some of these {name} subtitles need fixing. Per item: "over" = it exceeds max_chars (spaces
 included); "passato_remoto" = the literary verb forms it uses (Italian subtitles speak in the passato
-prossimo: è atterrato, hanno fallito, ha trovato). For EACH item return THREE alternative versions,
+prossimo: è atterrato, hanno fallito, ha trovato); "errori_di_italiano" = calques or grammar an Italian
+reader would notice (e.g. "mai" used as English "ever" in an affirmative sentence — rewrite the idea
+in natural Italian, never keep the construction). For EACH item return THREE alternative versions,
 all in correct spoken {name}, all faithful to the facts and numbers, of decreasing length: the first
 close to max_chars, the second about 85% of it, the third about 70%. Drop the least important clause
 rather than squeezing words; never a fragment; never the passato remoto.
@@ -75,6 +78,57 @@ Return JSON exactly: {{"items": [{{"id": 1, "options": ["...", "...", "..."]}}, 
 
 Subtitles:
 {items}"""
+
+PROOF_USER = """Sei un correttore di bozze madrelingua italiano, severo. Questi sottotitoli sono stati scritti da un
+modello a partire da un testo inglese: cerca i CALCHI dall'inglese e gli errori che un italiano noterebbe
+subito. In particolare: "mai" usato come "ever" in frase affermativa ("ci saluta mai" → "ci mostra un solo
+volto"); "attualmente" per "actually"; "eventualmente" per "eventually"; "realizzare" per "realize";
+"fare senso"; ordine delle parole inglese; preposizioni sbagliate; accordi di genere e numero; congiuntivi
+mancanti; virgola tra soggetto e verbo; anglicismi evitabili. Correggi SOLO cio' che e' sbagliato o
+innaturale, senza aggiungere informazioni e senza superare max_chars (accorcia se serve). Per ogni voce
+restituisci "ok": true se la frase era gia' corretta, altrimenti "ok": false e il testo corretto.
+Restituisci JSON esatto: {{"items": [{{"id": 1, "ok": true, "text": "..."}}, ...]}}.
+
+Sottotitoli:
+{items}"""
+
+
+class SubtitleQualityError(RuntimeError):
+    """A subtitle still fails the Italian lint after the proofreader and the fix passes. Raised so the
+    build STOPS: the channel's owner asked that a sentence like "Solo un emisfero ci saluta mai" never
+    reaches a viewer again — a missing video is recoverable, a published one is not."""
+
+
+# Deterministic Italian lint — the calques the model itself keeps missing, written as rules it cannot
+# talk past. High precision on purpose: a false positive blocks a video.
+_NEG_OR_LICIT = re.compile(r"\b(non|nessun\w*|niente|nulla|n[eé]|senza|come|quasi|se|caso|pi[uù] che|meglio che|peggio che)\b", re.I)
+_CALQUES = [
+    (re.compile(r"\bf(a|anno|are|aceva|acevano|atto)\s+senso\b", re.I), "'fare senso' (make sense → avere senso)"),
+    (re.compile(r"\bin ordine (di|a)\b", re.I), "'in ordine di' (in order to → per)"),
+    (re.compile(r"\brealizz\w*\s+(che|di)\b", re.I), "'realizzare che' (realize → capire/rendersi conto)"),
+    (re.compile(r"\beventualmente\b", re.I), "'eventualmente' (eventually → alla fine)"),
+    (re.compile(r"\bprend\w*\s+posto\b", re.I), "'prendere posto' (take place → avvenire)"),
+    (re.compile(r"\b(un|una|il|la|lo|i|gli|le)\s+\1\b", re.I), "articolo doppio"),
+    (re.compile(r"\b(\w{3,})\s+\1\b", re.I), "parola ripetuta"),
+]
+
+
+def italian_lint(text: str) -> list[str]:
+    """Problems an Italian reader would notice at once, or []. Flags 'mai' used as English 'ever' —
+    'mai' closing an affirmative clause with no negation, no question, no 'come/quasi/se mai' — plus
+    a short list of classic calques. 'quattro mai viste', 'non ... mai', 'hai mai visto?' pass."""
+    problems = []
+    for clause in re.split(r"[.!?;:]\s*", text or ""):
+        clause = clause.strip()
+        if not clause:
+            continue
+        if re.search(r"\bmai\s*,?\s*$", clause, re.I) and not _NEG_OR_LICIT.search(clause) and "?" not in clause:
+            problems.append("'mai' affermativo a fine frase (calco di 'ever'): " + clause)
+    for pat, why in _CALQUES:
+        if pat.search(text or ""):
+            problems.append(why)
+    return problems
+
 
 # 3rd-person passato remoto: regular endings plus the irregulars a science script actually meets.
 # Excluded look-alikes: però, ciò, perciò, può (and 1st-person futures like sarò, which a narration
@@ -199,21 +253,41 @@ def adapt(segments: list[tuple[int, str, float]], target_lang: str, cfg,
         except Exception as e:  # noqa: BLE001
             log.debug("subtitle revision skipped (%s)", e)
         italian = name == "Italian"
-        for attempt in range(2):      # fix pass: over budget and/or literary tense → three alternatives, we pick
+        if italian:        # a native proofreader, cold, temperature 0 — a different task than "translate"
+            try:
+                proof_rows = [{"id": i, "text": texts[i], "max_chars": limits[i]} for i in ids if i in texts]
+                data = backend.chat(system, PROOF_USER.format(items=_items_json(proof_rows)), temperature=0.0)
+                fixed = 0
+                for it in (data.get("items") or []) if isinstance(data, dict) else []:
+                    try:
+                        i = int(it.get("id"))
+                    except (TypeError, ValueError, AttributeError):
+                        continue
+                    t = " ".join(str(it.get("text", "")).split())
+                    if i in texts and t and t != texts[i] and len(t) <= max(limits[i] * 1.2, len(texts[i])):
+                        log.info("Proofreader: seg %d %r → %r", i, texts[i], t)
+                        texts[i] = t; fixed += 1
+                if fixed:
+                    log.info("Proofreader corrected %d subtitle(s).", fixed)
+            except Exception as e:  # noqa: BLE001 — the lint below still stands guard
+                log.warning("subtitle proofreading skipped (%s)", e)
+        for attempt in range(2):      # fix pass: over budget, literary tense or a lint hit → three alternatives, we pick
             bad = {}
             for i in ids:
                 if i not in texts:
                     continue
                 over = len(texts[i]) > limits[i] * 1.10
                 rem = remoto_forms(texts[i]) if italian else []
-                if over or rem:
-                    bad[i] = (over, rem)
+                lint = italian_lint(texts[i]) if italian else []
+                if over or rem or lint:
+                    bad[i] = (over, rem, lint)
             if not bad:
                 break
             # the model lands ABOVE the number it is given, so it is asked for 92% of the real limit;
             # choose() judges the options against the real one
             rows_fix = [{"id": i, "text": texts[i], "chars": len(texts[i]), "max_chars": int(limits[i] * 0.92),
-                         "over": over, "passato_remoto": rem} for i, (over, rem) in bad.items()]
+                         "over": over, "passato_remoto": rem, "errori_di_italiano": lint}
+                        for i, (over, rem, lint) in bad.items()]
             try:
                 data = backend.chat(system, FIX_USER.format(name=name, items=_items_json(rows_fix)),
                                     temperature=0.4 + 0.3 * attempt)
@@ -227,6 +301,11 @@ def adapt(segments: list[tuple[int, str, float]], target_lang: str, cfg,
         still = [i for i in ids if i in texts and len(texts[i]) > limits[i] * 1.10]
         if still:
             log.warning("Subtitles over budget after shortening: segments %s (limit %s cps).", still, cps)
+        if italian:        # the hard gate: broken Italian never ships
+            broken = {i: italian_lint(texts[i]) for i in ids if i in texts and italian_lint(texts[i])}
+            if broken:
+                raise SubtitleQualityError("subtitles still fail the Italian lint: " + "; ".join(
+                    f"seg {i}: {texts[i]!r} — {', '.join(p)}" for i, p in broken.items()))
     out = [texts.get(i) or txt for i, txt, _ in segments]
     made = sum(1 for i in ids if i in texts)
     log.info("Subtitles: %d/%d segments adapted to %s by %s (budget %.0f cps).", made, len(ids), name, model, cps)
@@ -255,7 +334,7 @@ def choose(current: str, options: list[str], limit: int, italian: bool) -> str |
     option, and only if it is shorter than what we have. An option must be an improvement — fewer
     passato remoto forms or fewer characters — or it is not taken."""
     def rem(t): return len(remoto_forms(t)) if italian else 0
-    cands = [o for o in options if o and o != current]
+    cands = [o for o in options if o and o != current and not (italian and italian_lint(o))]
     if not cands:
         return None
     tiers = [
@@ -268,7 +347,8 @@ def choose(current: str, options: list[str], limit: int, italian: bool) -> str |
         if tier:
             pick = tier[0]
             better = rem(pick) < rem(current) or len(pick) < len(current) \
-                or (rem(pick) == rem(current) and len(current) > limit * 1.10 and len(pick) <= limit)
+                or (rem(pick) == rem(current) and len(current) > limit * 1.10 and len(pick) <= limit) \
+                or (italian and italian_lint(current) and not italian_lint(pick))   # correct beats shorter
             return pick if better else None
     return None
 

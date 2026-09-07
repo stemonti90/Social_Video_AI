@@ -3787,6 +3787,8 @@ class SubtitlesYouCanRead(unittest.TestCase):
             if "THREE alternative versions" in user:               # fix pass (over budget)
                 return R({"items": [{"id": 2, "options": ["Poi è rimbalzato per un chilometro nello spazio.",
                                                           "Rimbalzo di 1 km nello spazio.", "Rimbalzo di 1 km."]}]})
+            if "correttore di bozze" in user:                      # proofreader: nothing to fix
+                return R({"items": []})
             if "copy editor" in user:                            # revision pass
                 return R({"items": [{"id": 1, "text": "Un robot è atterrato su una cometa."},
                                     {"id": 2, "text": "Poi è rimbalzato per un chilometro nello spazio, in alto."}]})
@@ -3800,7 +3802,7 @@ class SubtitlesYouCanRead(unittest.TestCase):
         self.assertEqual(out[0], "Un robot è atterrato su una cometa.")      # the revision won
         self.assertEqual(out[1], "Rimbalzo di 1 km.")                       # over budget → shortened
         self.assertIn('"max_chars": 60', calls[0])                          # 4.0 s × 15 cps
-        self.assertEqual(len(calls), 3)
+        self.assertEqual(len(calls), 4)                                     # editor, reviser, proofreader, fix
 
     def test_without_a_key_the_local_model_is_used_and_failures_keep_the_source(self):
         from avp import subtitles
@@ -3950,3 +3952,68 @@ class SharedScheduling(unittest.TestCase):
         from avp.scheduling import topic_key
         self.assertEqual(topic_key("The Great Red Spot!"), topic_key("the great  red spot"))
         self.assertNotEqual(topic_key("Ceres"), topic_key("Cerere"))
+
+
+class ItalianNeverShipsBroken(unittest.TestCase):
+    """'Solo un emisfero ci saluta mai' went out on TikTok (7/9): a calque of 'ever' the model and its own
+    revision both missed. A deterministic lint now stands guard and the build stops if it still fails."""
+
+    def test_the_lint_catches_ever_as_mai_and_the_classic_calques(self):
+        from avp.subtitles import italian_lint
+        self.assertTrue(italian_lint("Un compagno silenzioso nasconde il suo volto. Solo un emisfero ci saluta mai."))
+        self.assertTrue(italian_lint("Questo fa senso per tutti."))
+        self.assertTrue(italian_lint("Il lander realizzò che era solo."))
+        self.assertTrue(italian_lint("La la cometa."))
+        # legitimate 'mai'
+        for ok in ("Non l'abbiamo mai visto da Terra.", "Hai mai visto Saturno?", "Mai più così vicino.",
+                   "Quattro molecole mai viste su una cometa.", "Come mai ruota al contrario?", "Quasi mai visibile a occhio nudo.",
+                   "Senza mai fermarsi, il ghiaccio scorre."):
+            self.assertEqual(italian_lint(ok), [], ok)
+
+    def _cfg(self):
+        from types import SimpleNamespace
+        return SimpleNamespace(script=SimpleNamespace(subtitle_editor="auto", factcheck_key="k", factcheck_model="m", brief_model=""),
+                               captions=SimpleNamespace(reading_cps=15.0), llm=SimpleNamespace(model="x"))
+
+    def _fake(self, proof_text, fix_options):
+        import json as _json
+        calls = []
+
+        class R:
+            status_code = 200
+            text = ""
+            def __init__(self, payload): self._p = payload
+            def json(self): return {"choices": [{"message": {"content": _json.dumps(self._p)}}]}
+
+        def fake_post(url, headers=None, json=None, timeout=None):
+            user = json["messages"][1]["content"]; calls.append(user)
+            if "correttore di bozze" in user:
+                return R({"items": [{"id": 1, "ok": proof_text is None, "text": proof_text or "Solo un emisfero ci saluta mai."}]})
+            if "THREE alternative versions" in user:
+                return R({"items": [{"id": 1, "options": fix_options}]})
+            if "copy editor" in user:
+                return R({"items": [{"id": 1, "text": "Solo un emisfero ci saluta mai."}]})
+            return R({"items": [{"id": 1, "text": "Solo un emisfero ci saluta mai."}]})
+        return fake_post, calls
+
+    def test_the_proofreader_fixes_the_calque(self):
+        from avp import subtitles
+        fake, calls = self._fake("Ci mostra sempre un solo emisfero.", [])
+        with mock.patch.dict("os.environ", {"DEEPSEEK_API_KEY": ""}, clear=False), mock.patch("avp.subtitles.requests.post", fake):
+            out = subtitles.adapt([(1, "Only one hemisphere ever greets us.", 4.0)], "it", self._cfg())
+        self.assertEqual(out, ["Ci mostra sempre un solo emisfero."])
+        self.assertTrue(any("correttore di bozze" in c for c in calls))
+
+    def test_the_fix_pass_is_the_second_net(self):
+        from avp import subtitles
+        fake, calls = self._fake(None, ["Solo un emisfero ci saluta mai.", "Vediamo sempre lo stesso emisfero.", "Un solo volto."])
+        with mock.patch.dict("os.environ", {"DEEPSEEK_API_KEY": ""}, clear=False), mock.patch("avp.subtitles.requests.post", fake):
+            out = subtitles.adapt([(1, "Only one hemisphere ever greets us.", 4.0)], "it", self._cfg())
+        self.assertEqual(out, ["Vediamo sempre lo stesso emisfero."])     # the lint-failing option is never chosen
+
+    def test_a_subtitle_that_still_fails_stops_the_build(self):
+        from avp import subtitles
+        fake, calls = self._fake(None, ["Solo un emisfero ci saluta mai.", "Un emisfero ci saluta mai."])
+        with mock.patch.dict("os.environ", {"DEEPSEEK_API_KEY": ""}, clear=False), mock.patch("avp.subtitles.requests.post", fake):
+            with self.assertRaises(subtitles.SubtitleQualityError):
+                subtitles.adapt([(1, "Only one hemisphere ever greets us.", 4.0)], "it", self._cfg())
