@@ -10,6 +10,7 @@ llm:
 script:
   brief: auto            # scheda fatti dal modello del fact-check PRIMA di scrivere (avp/brief.py): auto = quando c'e' la chiave; on | off
   brief_model: ""        # vuoto = factcheck_model
+  polish: auto           # rilettura finale del modello forte: riscrive le righe corrette-ma-piatte nel tono del canale, solo con i fatti della scheda (avp/polish.py); on | off
   subtitle_editor: auto  # chi scrive i sottotitoli tradotti (avp/subtitles.py): auto = il modello del fact-check se c'e' la chiave, altrimenti locale; remote | local
   target_seconds: 50      # aim above the 60s TikTok Creator-Rewards minimum
   language: en            # en | it — language of the spoken narration + captions

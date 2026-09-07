@@ -148,8 +148,12 @@ def stage_script(project: VideoProject, cfg: Config, topic: str | None) -> Scrip
                                  # the cut rhythm is seconds-per-IMAGE, so the writer needs to know
                                  # how many images each segment will be given
                                  images_per_segment=int(getattr(cfg.video, "images_per_segment", 2) or 2))
-    # Check the facts BEFORE the CTA is appended and before a single frame is rendered: a correction
-    # is free here and costs a full rebuild once the voice has been synthesised against the old words.
+    # The strong model rewrites the draft in the channel's voice, fact-locked to the sheet — the local
+    # writer reaches past the sheet and the fact-check alone leaves true, flat lines (see polish.py).
+    from . import polish
+    script = polish.run(script, facts, cfg, out_dir=project.root)
+    # Check the facts AFTER the polish and BEFORE the CTA is appended and a single frame is rendered:
+    # a correction is free here and costs a full rebuild once the voice has been synthesised.
     try:
         from . import factcheck
         factcheck.run(script, cfg, out_dir=project.root)

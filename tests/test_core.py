@@ -3913,3 +3913,70 @@ class SubtitlesYouCanRead(unittest.TestCase):
         self.assertNotIn("translate_segments", src)
         asm = inspect.getsource(stages._assemble_engine)
         self.assertIn("max_chars=int(cfg.captions.reading_cps * cfg.captions.phrase_max_seconds)", asm)
+
+
+class PolishInTheChannelsVoice(unittest.TestCase):
+    """The strong model rewrites a checked-but-flat script; guards keep count, length, tone and visuals."""
+
+    def _script(self):
+        from avp.models import Script, Segment
+        return Script(title="Pluto's frozen river of ice.", cta_bridge="You can spot Pluto with a telescope tonight.",
+                      segments=[Segment(index=1, narration="A frozen plain of nitrogen ice spreads across a cold world.",
+                                        visual="wide shot of Sputnik Planitia", keywords=["Pluto"]),
+                                Segment(index=2, narration="At these temperatures nitrogen ice is soft and flows slowly.",
+                                        visual="close-up of ice lobes", keywords=["New Horizons"])])
+
+    def test_apply_keeps_visuals_and_takes_title_lines_and_bridge(self):
+        from avp import polish
+        out, why = polish.apply(self._script(), {
+            "title": "A Glacier Made of Air",
+            "segments": [{"index": 1, "narration": "There is a glacier on Pluto made of the gas you breathe."},
+                         {"index": 2, "narration": "At minus 230 degrees that nitrogen is solid, yet it creeps downhill."}],
+            "cta_bridge": "Pluto needs a large telescope, but the sky above you tonight does not."})
+        self.assertEqual(why, "ok")
+        self.assertEqual(out.title, "A Glacier Made of Air")
+        self.assertEqual(out.segments[0].visual, "wide shot of Sputnik Planitia")      # visuals untouched
+        self.assertEqual(out.segments[1].keywords, ["New Horizons"])
+        self.assertTrue(out.segments[0].narration.startswith("There is a glacier"))
+        self.assertEqual(out.bridge_kind, "shoot")
+
+    def test_guards_reject_count_length_morbid_and_copied_lines(self):
+        from avp import polish
+        s = self._script()
+        self.assertIsNone(polish.apply(s, {"segments": [{"index": 1, "narration": "Only one."}]})[0])
+        self.assertIn("length", polish.apply(s, {"segments": [{"index": 1, "narration": "Short."},
+                                                              {"index": 2, "narration": "Also short."}]})[1])
+        long1 = "There is a glacier on Pluto made of the gas you breathe."
+        self.assertIn("morbid", polish.apply(s, {"segments": [{"index": 1, "narration": long1},
+                                                              {"index": 2, "narration": "A frozen corpse of nitrogen creeps downhill."}]})[1])
+        self.assertIn("exemplar", polish.apply(s, {"segments": [{"index": 1, "narration": long1},
+                                                                {"index": 2, "narration": "A place where it rains gasoline, slowly."}]})[1])
+
+    def test_a_hook_on_a_number_or_an_explainer_opener_is_rejected(self):
+        from avp import polish
+        s = self._script()
+        ok2 = "At minus 230 degrees that nitrogen is solid, yet it creeps downhill."
+        self.assertIn("number", polish.apply(s, {"segments": [
+            {"index": 1, "narration": "A 1,000 km basin of nitrogen ice flows on Pluto."}, {"index": 2, "narration": ok2}]})[1])
+        self.assertIn("explainer", polish.apply(s, {"segments": [
+            {"index": 1, "narration": "There is a glacier on Pluto made of the gas you breathe."},
+            {"index": 2, "narration": "This frozen river moves centimetres a year in the deep cold."}]})[1])
+
+    def test_run_is_fail_soft_and_off_without_a_key(self):
+        from types import SimpleNamespace
+        from avp import polish
+        cfg = SimpleNamespace(script=SimpleNamespace(polish="auto", factcheck_key="", factcheck_model="m", brief_model=""),
+                              funnel=SimpleNamespace(app_name="App"))
+        s = self._script()
+        with mock.patch.dict("os.environ", {"DEEPSEEK_API_KEY": ""}, clear=False), \
+             mock.patch("avp.polish.requests.post", side_effect=AssertionError("must not be called")):
+            self.assertIs(polish.run(s, "FACT SHEET", cfg), s)
+        cfg.script.factcheck_key = "k"
+        with mock.patch.dict("os.environ", {"DEEPSEEK_API_KEY": ""}, clear=False), \
+             mock.patch("avp.polish.requests.post", side_effect=OSError("offline")):
+            self.assertIs(polish.run(s, "FACT SHEET", cfg), s)
+
+    def test_the_stage_polishes_before_the_fact_check(self):
+        from avp import stages
+        src = inspect.getsource(stages.stage_script)
+        self.assertLess(src.index("polish.run(script, facts, cfg"), src.index("factcheck.run(script, cfg"))

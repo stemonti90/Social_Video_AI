@@ -58,6 +58,9 @@ class ScriptConfig:
     # key exists (far better Italian, condenses to a reading-speed budget), else the local writer;
     # "remote" | "local".
     subtitle_editor: str = "auto"
+    # The strong model's last pass over the script (avp/polish.py): rewrite the checked-but-flat lines
+    # in the channel's voice using only the fact sheet. "auto" = when a key exists; "on" | "off".
+    polish: str = "auto"
 
 
 @dataclass
