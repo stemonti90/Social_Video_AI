@@ -68,7 +68,7 @@ Rewrite in the channel's voice, under these constraints:
 - Same number of segments, same order, same VISUAL and KEYWORDS (do not return them).
 - Per-segment word budget (±15%): {budgets}.
 - TITLE: 3-8 words, surprising, no morbid word, no colon-heavy SEO shape.
-- cta_bridge: ONE honest sentence that links THIS topic to looking at or photographing the sky with
+- cta_bridge: ONE honest sentence of at most 15 words that links THIS topic to looking at or photographing the sky with
   the equipment it really takes (the sheet's last line tells you what a viewer can see), METRIC
   units only (centimetres, never inches). It is
   followed by "Get {app} — link in bio.", so do not write that part.
@@ -125,6 +125,8 @@ def apply(script: Script, data: dict) -> tuple[Script | None, str]:
         return None, f"length drifted {before} → {after} words"
     title = " ".join(str(data.get("title") or "").split()).rstrip(".")
     bridge = " ".join(str(data.get("cta_bridge") or "").split())
+    if _words(bridge) > 22:              # a two-sentence bridge made the Moon's CTA 14.9 s and the video 63 s
+        return None, f"bridge too long ({_words(bridge)} words)"
     probe = {"title": title or script.title,
              "segments": [{"narration": x} for x in new_lines],
              "cta_bridge": bridge or script.cta_bridge}
