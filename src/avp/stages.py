@@ -668,47 +668,15 @@ def _assemble_engine(project: VideoProject, cfg: Config, script: Script, eng: st
 
     items: list[dict] = []
     cap_y = f"main_h-overlay_h-{cfg.captions.margin_v}"
-    # captions cover the SPOKEN part only — the silent endcard gets no subtitle. The CTA's spoken
-    # bridge plays over a photo for `cta_bridge_seconds` before the card: it is spoken, so it is
-    # subtitled and watermarked like the rest; the card itself carries the brand and needs neither.
+    # Overlays cover the SPOKEN part only — the silent endcard gets none. The CTA's spoken bridge plays
+    # over a photo for `cta_bridge_seconds` before the card: it is spoken, so it is subtitled and
+    # watermarked like the rest; the card itself carries the brand and needs neither.
     caption_dur = sum(d for seg, d in zip(segs_used, content_durs) if seg.kind != "cta")
     card_at = caption_dur + cta_bridge_seconds
     sub_json = (project.root / f"subtitles.{sub_lang}.json") if sub_lang else None
     if want_translated and sub_json and sub_json.exists():   # EN audio + translated PHRASE subtitles
-        trans = {d["index"]: d["text"] for d in json.loads(sub_json.read_text())}
-        # A translation has no per-word timing and cannot follow the voice word by word — its words
-        # are in a different order and a different number. It used to be pushed through the karaoke
-        # renderer anyway ("so the IT subtitles still pop"), which produced 3-word cards every 0.3s
-        # with the highlight on unrelated words: unreadable. Now each segment's translation is cut
-        # into clauses and each clause holds its share of that segment's audio window, on a plate,
-        # no highlight — the way subtitles on a dubbed film work.
-        phrases, t0 = [], 0.0
-        for seg, dur in zip(segs_used, content_durs):
-            if seg.kind != "cta":
-                phrases += captions_mod.split_phrases(
-                    trans.get(seg.index) or seg.narration, t0, t0 + dur,
-                    max_chars=int(cfg.captions.reading_cps * cfg.captions.phrase_max_seconds),
-                    max_seconds=cfg.captions.phrase_max_seconds)
-            elif trans.get(seg.index) and cta_bridge_seconds > 0.5:
-                # the CTA entry holds the adapted BRIDGE only (the hook is on the card), shown while
-                # the bridge is spoken and gone the moment the card appears
-                phrases += captions_mod.split_phrases(
-                    trans[seg.index], t0, t0 + cta_bridge_seconds,
-                    max_chars=int(cfg.captions.reading_cps * cfg.captions.phrase_max_seconds),
-                    max_seconds=cfg.captions.phrase_max_seconds)
-            t0 += dur
-        if phrases:                            # the number that decides whether anyone can read them
-            from . import subtitles as subs_mod
-            speeds = subs_mod.reading_speed(phrases)
-            worst = max(speeds)
-            log.info("Subtitles: %d cards, median %.1f chars/s, worst %.1f (budget %.0f).", len(phrases),
-                     sorted(speeds)[len(speeds) // 2], worst, cfg.captions.reading_cps)
-            if worst > cfg.captions.reading_cps * 1.25:
-                log.warning("A subtitle card runs at %.1f chars/s — too fast to read.", worst)
-        sub_dir = project.root / f"subs_png_{eng}_{sub_lang}"
-        shutil.rmtree(sub_dir, ignore_errors=True)     # cards from a previous render must not linger
-        for png, s, e in captions_mod.render_phrase_pngs(phrases, sub_dir, cfg.captions, cfg.video):
-            items.append({"path": png, "start": s, "end": e, "x": "(main_w-overlay_w)/2", "y": cap_y})
+        items += _translated_subtitle_items(project, cfg, eng, sub_lang, segs_used, content_durs,
+                                            cta_bridge_seconds, cap_y)
     elif cap_json.exists():
         from .stt import Word
         words = [Word(**w) for w in json.loads(cap_json.read_text())]
@@ -717,26 +685,9 @@ def _assemble_engine(project: VideoProject, cfg: Config, script: Script, eng: st
                 total_dur=caption_dur):
             items.append({"path": png, "start": s, "end": e, "x": "(main_w-overlay_w)/2", "y": cap_y})
     if getattr(cfg.video, "watermark", True):
-        # Every spoken frame carries the brand, bridge included; the endcard already does, so it stops
-        # there ("sempre presente": a watermark that vanished during the bridge was measured 7/9).
-        # Top-right, 5% in from the edge and below the platforms' top UI band.
-        wm = project.root / f"watermark_{eng}.png"
-        captions_mod.render_watermark(wm, getattr(cfg.video, "watermark_text", "@astrostackerpro"),
-                                      cfg.video, float(getattr(cfg.video, "watermark_opacity", 0.55)))
-        items.append({"path": wm, "start": 0.0, "end": max(0.5, card_at),
-                      "x": f"main_w-overlay_w-{int(cfg.video.width * 0.05)}",
-                      "y": f"{int(cfg.video.height * 0.075)}"})
+        items.append(_watermark_item(project, cfg, eng, card_at))
     if cfg.video.show_credits:
-        cdir = project.root / f"credits_png_{eng}"
-        cdir.mkdir(exist_ok=True)
-        t0 = 0.0
-        for seg, dur in zip(segs_used, content_durs):
-            if seg.kind != "cta" and seg.credit:
-                cp = cdir / f"cr_{seg.index:02d}.png"
-                captions_mod.render_credit(cp, seg.credit, cfg.video)
-                items.append({"path": cp, "start": t0 + 0.1, "end": max(t0 + 0.2, t0 + dur - 0.05),
-                              "x": "30", "y": "main_h-overlay_h-30"})
-            t0 += dur
+        items += _credit_items(project, cfg, eng, segs_used, content_durs)
 
     if items:
         ffmpeg.overlay_items(video_silent, audio_mix, items, out, cfg.video.crf, cfg.video.fps)
@@ -744,6 +695,73 @@ def _assemble_engine(project: VideoProject, cfg: Config, script: Script, eng: st
         ffmpeg.mux(video_silent, audio_mix, None, out, cfg.video.crf, cfg.video.fps)
     log.info("[%s] → %s", eng, out)
     return out
+
+
+def _translated_subtitle_items(project: VideoProject, cfg: Config, eng: str, sub_lang: str,
+                               segs_used: list[Segment], content_durs: list[float],
+                               cta_bridge_seconds: float, cap_y: str) -> list[dict]:
+    """Overlay items for the translated PHRASE subtitles (EN voice + e.g. IT text).
+
+    A translation has no per-word timing and cannot follow the voice word by word — its words are in
+    a different order and a different number. It used to be pushed through the karaoke renderer
+    anyway ("so the IT subtitles still pop"), which produced 3-word cards every 0.3s with the
+    highlight on unrelated words: unreadable. Now each segment's adapted text is cut into sentence
+    cards that each hold their share of that segment's audio window, on a plate, no highlight — the
+    way subtitles on a dubbed film work. The CTA entry holds the adapted BRIDGE only (the hook is on
+    the card): shown while the bridge is spoken, gone the moment the card appears."""
+    translations = {d["index"]: d["text"]
+                    for d in json.loads((project.root / f"subtitles.{sub_lang}.json").read_text())}
+    max_chars = int(cfg.captions.reading_cps * cfg.captions.phrase_max_seconds)
+    phrases, t0 = [], 0.0
+    for seg, dur in zip(segs_used, content_durs):
+        if seg.kind != "cta":
+            phrases += captions_mod.split_phrases(translations.get(seg.index) or seg.narration, t0, t0 + dur,
+                                                  max_chars=max_chars, max_seconds=cfg.captions.phrase_max_seconds)
+        elif translations.get(seg.index) and cta_bridge_seconds > 0.5:
+            phrases += captions_mod.split_phrases(translations[seg.index], t0, t0 + cta_bridge_seconds,
+                                                  max_chars=max_chars, max_seconds=cfg.captions.phrase_max_seconds)
+        t0 += dur
+    if phrases:                            # the number that decides whether anyone can read them
+        from . import subtitles as subs_mod
+        speeds = subs_mod.reading_speed(phrases)
+        worst = max(speeds)
+        log.info("Subtitles: %d cards, median %.1f chars/s, worst %.1f (budget %.0f).", len(phrases),
+                 sorted(speeds)[len(speeds) // 2], worst, cfg.captions.reading_cps)
+        if worst > cfg.captions.reading_cps * 1.25:
+            log.warning("A subtitle card runs at %.1f chars/s — too fast to read.", worst)
+    sub_dir = project.root / f"subs_png_{eng}_{sub_lang}"
+    shutil.rmtree(sub_dir, ignore_errors=True)     # cards from a previous render must not linger
+    return [{"path": png, "start": s, "end": e, "x": "(main_w-overlay_w)/2", "y": cap_y}
+            for png, s, e in captions_mod.render_phrase_pngs(phrases, sub_dir, cfg.captions, cfg.video)]
+
+
+def _watermark_item(project: VideoProject, cfg: Config, eng: str, card_at: float) -> dict:
+    """The brand on every spoken frame, bridge included; the endcard already carries it, so it stops
+    there ("sempre presente": a watermark that vanished during the bridge was measured 7/9).
+    Top-right, 5% in from the edge and below the platforms' top UI band."""
+    wm = project.root / f"watermark_{eng}.png"
+    captions_mod.render_watermark(wm, getattr(cfg.video, "watermark_text", "@astrostackerpro"),
+                                  cfg.video, float(getattr(cfg.video, "watermark_opacity", 0.55)))
+    return {"path": wm, "start": 0.0, "end": max(0.5, card_at),
+            "x": f"main_w-overlay_w-{int(cfg.video.width * 0.05)}",
+            "y": f"{int(cfg.video.height * 0.075)}"}
+
+
+def _credit_items(project: VideoProject, cfg: Config, eng: str, segs_used: list[Segment],
+                  content_durs: list[float]) -> list[dict]:
+    """A small source credit per archive clip, bottom-left, for the length of its segment."""
+    cdir = project.root / f"credits_png_{eng}"
+    cdir.mkdir(exist_ok=True)
+    items, t0 = [], 0.0
+    for seg, dur in zip(segs_used, content_durs):
+        if seg.kind != "cta" and seg.credit:
+            cp = cdir / f"cr_{seg.index:02d}.png"
+            captions_mod.render_credit(cp, seg.credit, cfg.video)
+            items.append({"path": cp, "start": t0 + 0.1, "end": max(t0 + 0.2, t0 + dur - 0.05),
+                          "x": "30", "y": "main_h-overlay_h-30"})
+        t0 += dur
+    return items
+
 
 
 def _free_memory(cfg: Config) -> None:

@@ -2208,8 +2208,10 @@ class TranslatedSubtitlesAreClauses(unittest.TestCase):
         src = inspect.getsource(stages._assemble_engine)
         i = src.index("want_translated and sub_json")
         block = src[i:src.index("elif cap_json.exists()", i)]    # the translated branch, whole
-        self.assertIn("render_phrase_pngs", block)
-        self.assertNotIn("distribute_words", block)
+        self.assertIn("_translated_subtitle_items", block)
+        helper = inspect.getsource(stages._translated_subtitle_items)
+        self.assertIn("render_phrase_pngs", helper)
+        self.assertNotIn("distribute_words", helper)
 
 
 class EditedCtaLineReachesTheBridge(unittest.TestCase):
@@ -2874,9 +2876,10 @@ class WatermarkOnEveryFrame(unittest.TestCase):
 
     def test_assemble_overlays_it_for_the_content_only(self):
         from avp import stages
-        src = inspect.getsource(stages._assemble_engine)
+        src = inspect.getsource(stages._watermark_item)
         self.assertIn("render_watermark", src)
         self.assertIn('"end": max(0.5, card_at)', src)                  # through the spoken bridge, not over the card
+        self.assertIn("_watermark_item(project, cfg, eng, card_at)", inspect.getsource(stages._assemble_engine))
 
     def test_it_can_be_switched_off(self):
         from avp.config import VideoConfig
@@ -3940,10 +3943,10 @@ class SubtitlesYouCanRead(unittest.TestCase):
         self.assertIn("subs_mod.stale(existing, items)", src)
         self.assertIn("subs_mod.adapt(items, sub_lang, cfg)", src)
         self.assertNotIn("translate_segments", src)
-        asm = inspect.getsource(stages._assemble_engine)
-        self.assertIn("max_chars=int(cfg.captions.reading_cps * cfg.captions.phrase_max_seconds)", asm)
-        self.assertIn('"end": max(0.5, card_at)', asm)                 # watermark up to the card
-        self.assertIn("trans[seg.index], t0, t0 + cta_bridge_seconds", asm)   # the bridge is subtitled
+        asm = inspect.getsource(stages._translated_subtitle_items)
+        self.assertIn("max_chars = int(cfg.captions.reading_cps * cfg.captions.phrase_max_seconds)", asm)
+        self.assertIn('"end": max(0.5, card_at)', inspect.getsource(stages._watermark_item))   # watermark up to the card
+        self.assertIn("translations[seg.index], t0, t0 + cta_bridge_seconds", asm)   # the bridge is subtitled
         self.assertIn("window = len(bridge.split()) / rate - CARD_LEAD", src)      # the bridge window follows the voice
 
 
@@ -3979,6 +3982,9 @@ class PolishInTheChannelsVoice(unittest.TestCase):
         self.assertIn("length", polish.apply(s, {"segments": [{"index": 1, "narration": "Short."},
                                                               {"index": 2, "narration": "Also short."}]})[1])
         long1 = "There is a glacier on Pluto made of the gas you breathe."
+        ok2 = "At minus 230 degrees that nitrogen is solid, yet it creeps downhill."
+        self.assertIn("bridge too long", polish.apply(s, {"segments": [{"index": 1, "narration": long1}, {"index": 2, "narration": ok2}],
+                                                          "cta_bridge": " ".join(["word"] * 23)})[1])
         self.assertIn("morbid", polish.apply(s, {"segments": [{"index": 1, "narration": long1},
                                                               {"index": 2, "narration": "A frozen corpse of nitrogen creeps downhill."}]})[1])
         self.assertIn("exemplar", polish.apply(s, {"segments": [{"index": 1, "narration": long1},
@@ -4012,3 +4018,37 @@ class PolishInTheChannelsVoice(unittest.TestCase):
         from avp import stages
         src = inspect.getsource(stages.stage_script)
         self.assertLess(src.index("polish.run(script, facts, cfg"), src.index("factcheck.run(script, cfg"))
+
+
+class SharedScheduling(unittest.TestCase):
+    """One copy of the slot/timezone/identity code, imported by both orchestration paths."""
+
+    def test_both_paths_import_the_same_functions(self):
+        import importlib, sys
+        from avp import auto, scheduling
+        self.assertIs(auto.post_slots, scheduling.post_slots)
+        self.assertIs(auto._key, scheduling.topic_key)
+        self.assertIs(auto._iso_utc, scheduling.iso_utc)
+        sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "server"))
+        try:
+            control = importlib.import_module("control")
+        finally:
+            sys.path.pop(0)
+        self.assertIs(control.post_slots, scheduling.post_slots)
+        self.assertIs(control.topic_key, scheduling.topic_key)
+
+    def test_slots_roll_over_and_malformed_times_fall_back(self):
+        from datetime import datetime
+        from zoneinfo import ZoneInfo
+        from avp import scheduling
+        now = datetime(2026, 9, 7, 20, 30, tzinfo=ZoneInfo("Europe/Rome"))
+        slots = scheduling.post_slots(now, ["12:00", "18:00", "21:00"], "Europe/Rome", 3)
+        self.assertEqual([(s.day, s.hour) for s in slots], [(7, 21), (8, 12), (8, 18)])
+        self.assertEqual(scheduling.parse_times(["25:00", "x", "07:5"]), [(7, 5)])
+        self.assertEqual(scheduling.parse_times([]), list(scheduling.DEFAULT_TIMES))
+        self.assertTrue(scheduling.iso_utc(slots[0]).endswith(".000Z"))
+
+    def test_topic_identity_folds_case_and_punctuation(self):
+        from avp.scheduling import topic_key
+        self.assertEqual(topic_key("The Great Red Spot!"), topic_key("the great  red spot"))
+        self.assertNotEqual(topic_key("Ceres"), topic_key("Cerere"))
