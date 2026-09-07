@@ -1,11 +1,10 @@
-"""Posting slots, timezone and topic identity — the one copy both orchestration paths import.
+"""Posting slots, timezone and topic identity — the one copy of the scheduling rules.
 
-Two stacks schedule videos: `avp auto` (launchd on the Mac, a text-file topic queue) and the control
-plane in server/control.py (Docker, a sqlite queue, a GPU worker). Until 7/9 each carried its own
-`post_slots`, `zone`, `iso_utc` and its own idea of when two topics are "the same" — character for
-character the same code in auto.py and control.py, which means a fix landed in one place and not the
-other. This module is stdlib-only on purpose: the control plane is deployed as a dependency-free
-container and must be able to import it with nothing but a path.
+Until 7/9 two stacks scheduled videos — `avp auto` (launchd on the Mac, a text-file topic queue) and
+a control plane + GPU worker (Docker, a sqlite queue, Postiz) — and each carried its own `post_slots`,
+`zone`, `iso_utc` and its own idea of when two topics are "the same": character for character the
+same code, so a fix landed in one place and not the other. The rules were extracted here first; the
+second stack, never used in production, was then retired. Stdlib-only, so anything can import it.
 """
 from __future__ import annotations
 

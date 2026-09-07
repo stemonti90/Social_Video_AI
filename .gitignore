@@ -43,5 +43,3 @@ Social AstroStacker App.app/
 !electron/build/
 !electron/build/icon.icns
 vendor/
-# copied from src/avp/scheduling.py by server/deploy.sh
-server/scheduling.py

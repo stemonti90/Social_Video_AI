@@ -1218,101 +1218,6 @@ class AutoPipeline(unittest.TestCase):
         self.assertEqual(posted, [])                                           # publish never called
 
 
-class WorkerLoop(unittest.TestCase):
-    """The Mac worker claims a job, renders it, and uploads metadata + video; a render failure is
-    reported to the control server instead of crashing the loop."""
-
-    class _Resp:
-        def __init__(self, status=200, payload=None, text=None):
-            self.status_code = status
-            self._p = payload
-            self.text = text if text is not None else (json.dumps(payload) if payload is not None else "")
-
-        def json(self):
-            return self._p
-
-        def raise_for_status(self):
-            if self.status_code >= 400:
-                raise RuntimeError(f"HTTP {self.status_code}")
-
-    class _Requests:
-        def __init__(self, claim):
-            self.claim = list(claim)
-            self.calls = []
-
-        def post(self, url, json=None, data=None, headers=None, timeout=None):
-            self.calls.append(("POST", url))
-            if url.endswith("/jobs/claim"):
-                return self.claim.pop(0) if self.claim else WorkerLoop._Resp(204, text="")
-            return WorkerLoop._Resp(200, {"ok": True})
-
-        def put(self, url, data=None, headers=None, timeout=None):
-            try:
-                data.read()
-            except Exception:
-                pass
-            self.calls.append(("PUT", url))
-            return WorkerLoop._Resp(200, {"status": "done"})
-
-    def _fake_project(self, root, video):
-        class FP:
-            def output_for(self, eng):
-                return Path("/nonexistent-xyz.mp4")     # force fallback to .output
-
-            @property
-            def output(self):
-                return video
-
-            @classmethod
-            def create(cls, slug, cfg):
-                inst = cls()
-                inst.root = root
-                return inst
-        return FP
-
-    def _run(self, build_fn, claim_payload):
-        import avp.pipeline as pipeline_mod
-        import avp.stages as stages_mod
-        from avp import worker as w
-        cfg = Config.load(None)
-        orig = {}
-
-        def patch(m, n, v):
-            orig[(m, n)] = getattr(m, n)
-            setattr(m, n, v)
-        with tempfile.TemporaryDirectory() as td:
-            root = Path(td)
-            video = root / "v.kokoro.mp4"
-            video.write_bytes(b"MP4DATA")
-            (root / "metadata.json").write_text('{"tiktok":{"caption":"c"}}')
-            cfg.paths.projects_dir = td
-            fake = self._Requests([self._Resp(200, claim_payload)])
-            try:
-                patch(w, "requests", fake)
-                patch(w, "VideoProject", self._fake_project(root, video))
-                patch(stages_mod, "stage_script", lambda p, c, t: None)
-                patch(pipeline_mod, "build", build_fn)
-                w.run_worker(cfg, "http://ctl", "tok", once=True)
-            finally:
-                for (m, n), v in orig.items():
-                    setattr(m, n, v)
-            return [c[1] for c in fake.calls]
-
-    def test_once_renders_and_uploads(self):
-        urls = self._run(lambda p, c, config_path=None: None,
-                         {"id": "J1", "topic": "Saturn hexagon", "slot_utc": "2026-07-01T18:00:00.000Z"})
-        self.assertTrue(any(u.endswith("/jobs/J1/metadata") for u in urls))
-        self.assertTrue(any(u.endswith("/jobs/J1/video") for u in urls))
-        self.assertFalse(any(u.endswith("/fail") for u in urls))
-
-    def test_render_failure_is_reported(self):
-        def boom(p, c, config_path=None):
-            raise RuntimeError("build blew up")
-        urls = self._run(boom, {"id": "J2", "topic": "Betelgeuse", "slot_utc": "2026-07-01T18:00:00.000Z"})
-        self.assertTrue(any(u.endswith("/jobs/J2/fail") for u in urls))
-        self.assertFalse(any(u.endswith("/jobs/J2/video") for u in urls))
-
-
 class ImageGen(unittest.TestCase):
     """Local AI visuals: prompts stay in the channel's photographic style, generation degrades safely
     when mflux isn't installed, and CLIP picks the best candidate (falling back to the first)."""
@@ -4021,21 +3926,14 @@ class PolishInTheChannelsVoice(unittest.TestCase):
 
 
 class SharedScheduling(unittest.TestCase):
-    """One copy of the slot/timezone/identity code, imported by both orchestration paths."""
+    """One copy of the slot/timezone/identity code (the second consumer, the control plane, was retired)."""
 
-    def test_both_paths_import_the_same_functions(self):
-        import importlib, sys
+    def test_auto_imports_the_shared_functions(self):
         from avp import auto, scheduling
         self.assertIs(auto.post_slots, scheduling.post_slots)
         self.assertIs(auto._key, scheduling.topic_key)
         self.assertIs(auto._iso_utc, scheduling.iso_utc)
-        sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "server"))
-        try:
-            control = importlib.import_module("control")
-        finally:
-            sys.path.pop(0)
-        self.assertIs(control.post_slots, scheduling.post_slots)
-        self.assertIs(control.topic_key, scheduling.topic_key)
+        self.assertFalse((Path(__file__).resolve().parents[1] / "server").exists())   # path B retired 7/9
 
     def test_slots_roll_over_and_malformed_times_fall_back(self):
         from datetime import datetime

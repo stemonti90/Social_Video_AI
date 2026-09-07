@@ -19,8 +19,8 @@ from pathlib import Path
 
 from . import llm
 from .config import Config
-# Slots, timezone and topic identity live in ONE module shared with server/control.py — the two
-# stacks carried identical copies until 7/9 and a fix reached only one of them.
+# Slots, timezone and topic identity live in ONE module (scheduling.py) — a retired second stack
+# carried an identical copy until 7/9 and a fix reached only one of them.
 from .scheduling import iso_utc as _iso_utc, post_slots, topic_key as _key, zone as _zone  # noqa: F401
 from .log import get_logger
 from .manifest import VideoProject

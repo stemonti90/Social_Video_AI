@@ -115,13 +115,6 @@ def _build_parser() -> argparse.ArgumentParser:
     dc = sub.add_parser("disconnect", parents=[common], help="forget a linked social account")
     dc.add_argument("platform", choices=["tiktok", "instagram", "youtube"])
 
-    wk = sub.add_parser("worker", parents=[common],
-                        help="claim + render jobs from the control server (Mac GPU worker)")
-    wk.add_argument("--server", default=None, help="control server base URL (or env AVP_CONTROL_URL)")
-    wk.add_argument("--token", default=None, help="control token (or env AVP_CONTROL_TOKEN)")
-    wk.add_argument("--once", action="store_true", help="process a single job then exit")
-    wk.add_argument("--poll", type=int, default=60, help="seconds between polls when idle")
-    wk.add_argument("--name", default="mac-worker", help="worker id reported to the server")
     return p
 
 
@@ -318,18 +311,6 @@ def main(argv: list[str] | None = None) -> int:
             if args.verbose:
                 raise
             return 1
-
-    if args.cmd == "worker":
-        from . import worker as worker_mod
-        server = args.server or os.getenv("AVP_CONTROL_URL")
-        token = args.token or os.getenv("AVP_CONTROL_TOKEN", "")
-        if not server:
-            log.error("worker: no control server (use --server or set AVP_CONTROL_URL)")
-            return 1
-        setup_logging(level, Path(cfg.paths.projects_dir).expanduser() / "_auto" / "worker.log")
-        worker_mod.run_worker(cfg, server, token, once=args.once, poll=args.poll,
-                              name=args.name, config_path=args.config)
-        return 0
 
     if args.cmd == "new":
         project = VideoProject.create(args.slug, cfg)
