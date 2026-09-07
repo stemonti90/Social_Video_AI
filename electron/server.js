@@ -18,4 +18,6 @@ http.createServer((req, res) => {
     res.writeHead(200, { "Content-Type": types[path.extname(file)] || "application/octet-stream" });
     res.end(data);
   });
-}).listen(8770, () => console.log("avp-ui preview on http://localhost:8770"));
+// 8780, not 8770: the control plane (server/control.py, SVAI_PORT) listens on 8770 by default and the
+// two collided on the same machine.
+}).listen(8780, () => console.log("avp-ui preview on http://localhost:8780"));

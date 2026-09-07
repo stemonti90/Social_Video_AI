@@ -22,6 +22,11 @@ whisper = ["whisperx"]      # accurate caption alignment (CPU on Mac)
 parakeet = ["parakeet-mlx"] # fast caption alignment (Apple-Silicon GPU)
 music = ["diffusers>=0.38", "torchsde", "accelerate"]  # Stable Audio Open local music generation
 
+# pytest is the only development dependency: `uv sync --group dev` (or `uv pip install pytest` into
+# an existing setup.sh venv), then `.venv/bin/python -m pytest -q tests/`.
+[dependency-groups]
+dev = ["pytest>=8"]
+
 [project.scripts]
 avp = "avp.cli:main"
 
@@ -31,6 +36,12 @@ build-backend = "setuptools.build_meta"
 
 [tool.setuptools.packages.find]
 where = ["src"]
+
+# chatterbox-tts pins diffusers==0.29.0 and the music extra needs diffusers>=0.38: the two extras are
+# mutually unsatisfiable — pick ONE voice: Kokoro + music, or Kokoro + Chatterbox. Declared so uv
+# resolves the project instead of refusing it (pip installs them in sequence and hides the conflict).
+[tool.uv]
+conflicts = [[{ extra = "chatterbox" }, { extra = "music" }]]
 
 # pkuseg (transitive via chatterbox-tts) needs numpy at build time but doesn't declare it.
 [tool.uv.extra-build-dependencies]

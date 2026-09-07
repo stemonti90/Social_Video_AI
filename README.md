@@ -30,7 +30,7 @@ NASA → Wikimedia Commons → generated cosmic backdrop.
 - **App funnel** — spoken + on-screen endcard, plus per-platform metadata.
 - **Accessible desktop UI** (Electron) wrapping the CLI — no separate backend.
 - **Hardened** — tolerant of brew-ffmpeg/ffprobe SIGSEGV, footage dedup, graceful
-  fallbacks; **23 unit tests**.
+  fallbacks; **300+ unit tests** (`python -m pytest -q tests/`).
 
 ## Requirements
 
@@ -148,12 +148,15 @@ separate, confirmation-gated action.
 ## Tests
 
 ```bash
-PYTHONPATH=src .venv/bin/python -m unittest discover -s tests
+PYTHONPATH=src .venv/bin/python -m pytest -q tests/     # pytest: uv sync --group dev, or uv pip install pytest
+PYTHONPATH=src .venv/bin/python -m unittest discover -s tests   # no pytest needed
 ```
 
-23 unit tests cover footage scoring / dedup / URL-encoding, LLM JSON extraction, caption
-timing, WAV-duration (header-read, no ffprobe), `ffmpeg` retry-on-signal, and config
-round-trips.
+300+ unit tests cover the script guards (length, tone, copied lines, fact sheet, polish), footage
+scoring / dedup / person screening, subtitle budgets and cards, hashtags, publishing backends,
+LLM JSON extraction, caption timing, WAV-duration (header-read, no ffprobe), `ffmpeg`
+retry-on-signal, and config round-trips. Note: the `chatterbox` and `music` extras cannot be
+installed together (diffusers 0.29 vs ≥0.38) — pick one.
 
 ## Layout
 
