@@ -46,6 +46,7 @@ fi
 
 # 5) Local config files
 [ -f config.yaml ] || cp config.example.yaml config.yaml
+chmod 600 config.yaml   # it will hold OAuth client secrets and API keys — same rule as ~/.avp/social_tokens.json
 [ -f .env ] || cp .env.example .env
 
 cat <<'EOF'

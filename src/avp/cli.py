@@ -227,7 +227,15 @@ def _config_set(path: str, patch: dict) -> None:
     p = Path(path)
     data = (yaml.safe_load(p.read_text()) if p.exists() else {}) or {}
     _deep_merge(data, patch)
-    p.write_text(yaml.safe_dump(data, sort_keys=False, allow_unicode=True))
+    # config.yaml carries OAuth client secrets and API keys: written 0600 from the first byte, via a
+    # private temp file then rename (same rule as the token store).
+    import os
+    tmp = p.with_suffix(p.suffix + ".tmp")
+    fd = os.open(tmp, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
+    with os.fdopen(fd, "w") as fh:
+        fh.write(yaml.safe_dump(data, sort_keys=False, allow_unicode=True))
+    tmp.replace(p)
+    os.chmod(p, 0o600)
 
 
 def _quiet_libs() -> None:

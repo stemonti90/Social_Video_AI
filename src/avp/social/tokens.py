@@ -44,8 +44,12 @@ def _save_all(data: dict) -> None:
     # Write via a private temp file then rename: an interrupted write must never leave a half-file
     # that costs the user a re-authorisation.
     tmp = p.with_suffix(".tmp")
-    tmp.write_text(json.dumps(data, indent=2))
-    os.chmod(tmp, 0o600)
+    # Created 0600 from the first byte (os.open with the mode), not written 0644 and chmod-ed after:
+    # that window, however short, is the same secret in the clear.
+    fd = os.open(tmp, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
+    with os.fdopen(fd, "w") as fh:
+        fh.write(json.dumps(data, indent=2))
+    os.chmod(tmp, 0o600)                    # in case the file pre-existed with looser bits
     tmp.replace(p)
 
 
