@@ -327,13 +327,19 @@ def stage_captions(project: VideoProject, cfg: Config) -> None:
         sub_path = project.root / f"subtitles.{sub_lang}.json"
         items = [(s.index, s.narration, float(s.duration or 0.0))
                  for s in script.segments if s.kind != "cta" and s.narration.strip()]
-        for s in script.segments:              # the CTA's spoken bridge gets a subtitle too (not the hook)
-            bridge = (script.cta_bridge or "").strip()
+        # The CTA's spoken bridge gets a subtitle too (not the hook: the card carries it). Its window is
+        # NOT its share of the CTA wav — that wav also holds the hook and a silent tail, and the card
+        # arrives CARD_LEAD before the hook is spoken. Measured 7/9 on Enceladus: share-based budget 5 s,
+        # real window 2.8 s → 22.7 chars/s. So the window is estimated from the speech rate measured on
+        # this very voice (content words / content seconds), which the aligner later confirms to ±10%.
+        bridge = (script.cta_bridge or "").strip()
+        c_words = sum(len(s.narration.split()) for s in script.segments if s.kind != "cta")
+        c_secs = sum(float(s.duration or 0.0) for s in script.segments if s.kind != "cta")
+        rate = (c_words / c_secs) if c_words and c_secs else 2.5          # words per second
+        for s in script.segments:
             if s.kind == "cta" and bridge and s.narration.strip() and s.duration:
-                share = len(bridge.split()) / max(1, len(s.narration.split()))
-                # the card cuts the bridge subtitle off a little before the bridge audio ends
-                # (CARD_LEAD), so the budget is 85% of the bridge's share of the CTA audio
-                items.append((s.index, bridge, float(s.duration) * share * 0.85))
+                window = len(bridge.split()) / rate - CARD_LEAD
+                items.append((s.index, bridge, max(1.0, min(window, float(s.duration)))))
         existing = json.loads(sub_path.read_text()) if sub_path.exists() else None
         if subs_mod.stale(existing, items):     # keyed by SOURCE text: an edited line gets a new subtitle
             texts = subs_mod.adapt(items, sub_lang, cfg)

@@ -901,6 +901,16 @@ _CONTRACTIONS = {"s", "t", "d", "m", "re", "ve", "ll"}
 _APOSTROPHE_WORD = re.compile(r"[A-Za-z]+['’]([A-Za-z]+)")
 
 
+# The writer's verbal tics survive every prompt ban in the CAPTIONS ("literally tearing this moon apart",
+# "literally kneading"); they are removed here rather than asked away. Whole words, case-insensitive,
+# the surrounding spacing repaired.
+_FILLER_RE = re.compile(r"\b(literally|mind-blowing|incredible|incredibly|breathtaking|insane)\s+", re.IGNORECASE)
+
+
+def _drop_filler(caption):
+    return _FILLER_RE.sub("", caption) if isinstance(caption, str) else caption
+
+
 def _clean_text(s):
     """Safe, deterministic tidy-ups only (collapse runs of spaces, trim) — never alter wording."""
     return re.sub(r"[ \t]{2,}", " ", s).strip() if isinstance(s, str) else s
@@ -929,7 +939,7 @@ def _clean_metadata(data: dict, script_text: str = "", hashtag_bank: dict | None
     for plat in ("tiktok", "instagram"):
         d = data.get(plat)
         if isinstance(d, dict) and "caption" in d:
-            d["caption"] = _clean_text(d["caption"])
+            d["caption"] = _clean_text(_drop_filler(d["caption"]))
     _merge_instagram_hashtags(data)
     _ensure_brand_tag(data)
     if script_text:                     # the curated bank + validated narrow tags (avp/hashtags.py)

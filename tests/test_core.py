@@ -3771,6 +3771,16 @@ class HashtagsFromTheBank(unittest.TestCase):
         hashtags.finalize(data, self.SCRIPT, {"tiktok": {"core": ["#fyp", "#space"], "max": 4}})
         self.assertEqual(data["tiktok"]["hashtags"], ["#fyp", "#space", "#astrostackerpro"])
 
+    def test_filler_tics_are_dropped_from_captions(self):
+        from avp import llm
+        data = {"tiktok": {"caption": "Saturn's gravity is literally tearing this moon apart."},
+                "instagram": {"caption": "An Incredible storm, mind-blowing scale."}}
+        out = llm._clean_metadata(data)
+        self.assertEqual(out["tiktok"]["caption"].split("\n")[0].split(" #")[0], "Saturn's gravity is tearing this moon apart.")
+        self.assertTrue(out["instagram"]["caption"].startswith("An storm, scale.") or "storm" in out["instagram"]["caption"])
+        self.assertNotIn("literally", out["tiktok"]["caption"].lower())
+        self.assertNotIn("mind-blowing", out["instagram"]["caption"].lower())
+
     def test_clean_metadata_applies_the_bank_only_when_given_the_script(self):
         from avp import llm
         data = {"instagram": {"caption": "hook #madeuptag"}, "instagram_hashtags": ["#madeuptag"],
@@ -3934,7 +3944,7 @@ class SubtitlesYouCanRead(unittest.TestCase):
         self.assertIn("max_chars=int(cfg.captions.reading_cps * cfg.captions.phrase_max_seconds)", asm)
         self.assertIn('"end": max(0.5, card_at)', asm)                 # watermark up to the card
         self.assertIn("trans[seg.index], t0, t0 + cta_bridge_seconds", asm)   # the bridge is subtitled
-        self.assertIn("items.append((s.index, bridge, float(s.duration) * share * 0.85))", src)
+        self.assertIn("window = len(bridge.split()) / rate - CARD_LEAD", src)      # the bridge window follows the voice
 
 
 class PolishInTheChannelsVoice(unittest.TestCase):
