@@ -17,6 +17,7 @@ import unicodedata
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
+from . import lanes as lanes_mod
 from . import llm
 from .config import Config
 # Slots, timezone and topic identity live in ONE module (scheduling.py) — a retired second stack
@@ -51,9 +52,13 @@ def _unique_slug(base: str, projects_dir: Path) -> str:
 
 
 # --------------------------------------------------------------------------- topic queue
-def _queue_path(cfg: Config) -> Path:
+def _queue_path(cfg: Config, lane: str = "discovery") -> Path:
+    """The topic queue of a lane: Discovery keeps the original file (auto.queue_path); the others
+    live next to it as topics.<lane>.txt."""
     p = Path(cfg.auto.queue_path).expanduser()
-    return p if p.is_absolute() else Path(cfg.paths.projects_dir).expanduser() / p
+    base = p if p.is_absolute() else Path(cfg.paths.projects_dir).expanduser() / p
+    name = lanes_mod.spec(lane).get("queue")
+    return base.parent / name if name else base
 
 
 def load_queue(path: Path) -> list[str]:
@@ -90,15 +95,16 @@ def existing_topics(cfg: Config) -> list[str]:
     return labels
 
 
-def next_topics(cfg: Config, n: int, consume: bool = True) -> list[str]:
+def next_topics(cfg: Config, n: int, consume: bool = True, lane: str = "discovery") -> list[str]:
     """Return the next `n` topics. When consuming (a real run), refill via the LLM if the queue is low,
     then pop `n` off the top and persist the rest. When peeking (dry run), never mutate or call the LLM."""
-    path = _queue_path(cfg)
+    path = _queue_path(cfg, lane)
     queue = load_queue(path)
     if consume and len(queue) < max(n, cfg.auto.refill_threshold):
         avoid = list(dict.fromkeys(queue + existing_topics(cfg)))
+        theme = lanes_mod.spec(lane).get("theme") or cfg.auto.theme
         fresh = llm.brainstorm_topics(cfg.llm, avoid=avoid, n=cfg.auto.refill_batch,
-                                      theme=cfg.auto.theme, language=cfg.script.language)
+                                      theme=theme, language=cfg.script.language)
         have = {_key(t) for t in queue}
         added = [t for t in fresh if _key(t) not in have]
         queue += added
@@ -197,7 +203,11 @@ def run_daily(cfg: Config, count: int | None = None, dry_run: bool = False,
     from . import publish as publish_mod
 
     n = int(count or cfg.auto.count)
-    topics = next_topics(cfg, n, consume=not dry_run)
+    now = datetime.now(_zone(cfg.auto.timezone))
+    wanted = lanes_mod.for_slot(now, cfg.auto.post_times, getattr(cfg.auto, "lanes", None))
+    lane = lanes_mod.effective(wanted, cfg, queue_has_topics=bool(load_queue(_queue_path(cfg, wanted))))
+    log.info("Lane for this slot: %s%s", lane, "" if lane == wanted else f" (wanted {wanted})")
+    topics = next_topics(cfg, n, consume=not dry_run, lane=lane)
     if not topics:
         log.error("No topics available (queue empty and brainstorm produced none).")
         return []
@@ -213,7 +223,7 @@ def run_daily(cfg: Config, count: int | None = None, dry_run: bool = False,
     report: list[dict] = []
     for topic, slot in zip(topics, slots):
         slug = _unique_slug(slugify(topic), projects_dir)
-        entry = {"topic": topic, "slug": slug, "scheduled_local": slot.isoformat(),
+        entry = {"topic": topic, "slug": slug, "lane": lane, "scheduled_local": slot.isoformat(),
                  "scheduled_utc": _iso_utc(slot)}
         if dry_run:
             entry["would_publish_to"] = cfg.auto.platforms
@@ -222,7 +232,14 @@ def run_daily(cfg: Config, count: int | None = None, dry_run: bool = False,
         try:
             from . import pipeline, stages
             project = VideoProject.create(slug, cfg)
-            stages.stage_script(project, cfg, topic)
+            try:                               # the lane travels with the project
+                project.manifest.data["lane"] = lane
+                project.manifest.save()
+            except Exception as e:  # noqa: BLE001 — bookkeeping must not fail a video
+                log.debug("lane not recorded (%s)", e)
+            script = stages.stage_script(project, cfg, topic)
+            if lane == "product":              # the app's real screens, not generated pictures
+                lanes_mod.place_product_assets(project, cfg, len([s for s in script.segments if s.kind != "cta"]))
             pipeline.build(project, cfg, config_path=config_path)
             entry["built"] = True
             if publish and targets:

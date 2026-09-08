@@ -208,6 +208,12 @@ def _publish_native(plan: list[dict], video: Path, meta: dict, cfg: Config,
             else:
                 it["result"] = social.post(plat, video, it["caption"], meta, cfg, disclose_ai)
             it["posted"] = True
+            try:                            # the measure step needs to know what went where
+                from . import analytics
+                lane = str(getattr(project, "manifest", None) and project.manifest.data.get("lane") or "discovery")
+                analytics.record_post(cfg, project.root.name, lane, plat, it["result"])
+            except Exception as e2:  # noqa: BLE001 — bookkeeping must never fail a post
+                log.debug("post record skipped (%s)", e2)
         except Exception as e:  # noqa: BLE001 — the reason belongs in the plan, not a traceback
             it["posted"] = False
             it["error"] = str(e)

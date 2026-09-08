@@ -80,6 +80,10 @@ def _build_parser() -> argparse.ArgumentParser:
                      help="ISO 8601 time to schedule (e.g. 2026-07-01T18:00:00Z); omit = post now")
 
     sub.add_parser("list", parents=[common], help="list projects and stage status")
+    rp = sub.add_parser("report", parents=[common],
+                        help="metrics: --snapshot saves today's numbers; default writes the period report (Markdown)")
+    rp.add_argument("--snapshot", action="store_true", help="collect and save today's snapshot only")
+    rp.add_argument("--days", type=int, default=7, help="window of the report in days (default 7)")
 
     dl = sub.add_parser("delete", parents=[common],
                         help="permanently delete a project and its folder")
@@ -300,6 +304,16 @@ def main(argv: list[str] | None = None) -> int:
         report = auto_mod.run_daily(cfg, count=args.count, dry_run=args.dry_run,
                                     publish=not args.no_publish, config_path=args.config)
         print(json.dumps(report, indent=2, ensure_ascii=False))
+        return 0
+
+    if args.cmd == "report":                # measure: a snapshot, or the period report (no project slug)
+        from . import analytics
+        setup_logging(level, Path(cfg.paths.projects_dir).expanduser() / "_auto" / "metrics.log")
+        if args.snapshot:
+            print(f"📈 {analytics.snapshot(cfg)}")
+        else:
+            analytics.snapshot(cfg)
+            print(analytics.report(cfg, days=args.days))
         return 0
 
     if args.cmd in ("connect", "accounts", "disconnect"):

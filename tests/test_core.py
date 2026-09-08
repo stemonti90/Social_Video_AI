@@ -1169,7 +1169,7 @@ class AutoPipeline(unittest.TestCase):
             orig[(mod, name)] = getattr(mod, name)
             setattr(mod, name, val)
         try:
-            patch(auto, "next_topics", lambda c, n, consume=True: ["Topic A", "Topic B"])
+            patch(auto, "next_topics", lambda c, n, consume=True, **kw: ["Topic A", "Topic B"])
             patch(auto, "connected_platforms", lambda c: {"tiktok"})           # instagram NOT connected
             patch(auto, "VideoProject", FakeProj)
             patch(stages_mod, "stage_script", lambda p, c, t: None)
@@ -1203,7 +1203,7 @@ class AutoPipeline(unittest.TestCase):
             orig[(mod, name)] = getattr(mod, name)
             setattr(mod, name, val)
         try:
-            patch(auto, "next_topics", lambda c, n, consume=True: ["Only One"])
+            patch(auto, "next_topics", lambda c, n, consume=True, **kw: ["Only One"])
             patch(auto, "connected_platforms", lambda c: set())                # nothing connected
             patch(auto, "VideoProject", FakeProj)
             patch(stages_mod, "stage_script", lambda p, c, t: None)
@@ -4233,3 +4233,116 @@ class TikTokDailyCapGoesToARetryQueue(unittest.TestCase):
         src = Path(__file__).resolve().parents[1].joinpath("deploy/auto/backfill.sh").read_text()
         self.assertLess(src.index("tiktok_retry.txt"), src.index("no rebuild queue"))
         self.assertIn("posting cap", src)
+
+
+class ThreeLanesADay(unittest.TestCase):
+    """Discovery / Education / Product: one lane per posting slot, each with its own queue, brief,
+    voice rules, hashtags and CTA. Product only when it can be honest (real app assets + its own topics)."""
+
+    def test_the_lane_follows_the_slot_being_served(self):
+        from datetime import datetime
+        from avp import lanes
+        times = ["08:00", "12:30", "17:00"]
+        self.assertEqual(lanes.for_slot(datetime(2026, 9, 8, 7, 20), times), "discovery")
+        self.assertEqual(lanes.for_slot(datetime(2026, 9, 8, 11, 50), times), "education")
+        self.assertEqual(lanes.for_slot(datetime(2026, 9, 8, 16, 20), times), "product")
+        self.assertEqual(lanes.for_slot(datetime(2026, 9, 8, 23, 0), times), "discovery")     # after the last slot: tomorrow's first
+        self.assertEqual(lanes.for_slot(datetime(2026, 9, 8, 16, 20), times, ["discovery", "education"]), "discovery")
+
+    def test_product_falls_back_to_education_without_assets_or_topics(self):
+        import tempfile
+        from types import SimpleNamespace
+        from avp import lanes
+        with tempfile.TemporaryDirectory() as d:
+            cfg = SimpleNamespace(auto=SimpleNamespace(product_assets=d))
+            self.assertEqual(lanes.effective("product", cfg), "education")            # empty folder
+            (Path(d) / "screen.png").write_bytes(b"x")
+            self.assertEqual(lanes.effective("product", cfg, queue_has_topics=False), "education")
+            self.assertEqual(lanes.effective("product", cfg, queue_has_topics=True), "product")
+            self.assertEqual(lanes.effective("discovery", cfg), "discovery")
+
+    def test_each_lane_has_its_own_queue_file(self):
+        from types import SimpleNamespace
+        from avp import auto
+        cfg = SimpleNamespace(auto=SimpleNamespace(queue_path="topics.txt"), paths=SimpleNamespace(projects_dir="/tmp/p"))
+        self.assertEqual(auto._queue_path(cfg).name, "topics.txt")
+        self.assertEqual(auto._queue_path(cfg, "education").name, "topics.education.txt")
+        self.assertEqual(auto._queue_path(cfg, "product").name, "topics.product.txt")
+
+    def test_the_cta_rotates_by_video_and_never_repeats_a_question(self):
+        from avp import lanes
+        a, b = lanes.cta("education", "instagram", "video-a"), lanes.cta("education", "instagram", "video-a")
+        self.assertEqual(a, b)                                                       # stable per video
+        picks = {lanes.cta("education", "instagram", f"v{i}") for i in range(40)}
+        self.assertGreater(len(picks), 1)                                            # rotates across videos
+        meta = {"instagram": {"caption": "A hook line.\n\n#astronomy #space #astrostackerpro"},
+                "tiktok": {"caption": "A hook line. #LearnOnTikTok #space #astrostackerpro"}}
+        lanes.apply_cta(meta, "education", "video-a")
+        ig = meta["instagram"]["caption"]
+        self.assertTrue(ig.startswith("A hook line.\n"))
+        self.assertIn("\n\n#astronomy", ig)                                          # tags still after the blank line
+        self.assertEqual(ig.count("\n\n"), 1)
+        tt = meta["tiktok"]["caption"]
+        self.assertTrue(tt.startswith("A hook line. "))
+        self.assertTrue(tt.endswith("#astrostackerpro"))
+        asked = {"instagram": {"caption": "Would you try this?\n\n#space"}}
+        lanes.apply_cta(asked, "education", "v")
+        self.assertEqual(asked["instagram"]["caption"], "Would you try this?\n\n#space")   # already a question: untouched
+
+    def test_lane_specs_are_complete(self):
+        from avp import lanes
+        for name in lanes.DEFAULT_LANES:
+            s = lanes.spec(name)
+            for key in ("label", "writer", "brief_focus", "polish", "hashtags", "cta"):
+                self.assertIn(key, s, f"{name}.{key}")
+            self.assertTrue(s["cta"]["instagram"] and s["cta"]["tiktok"])
+        self.assertIsNone(lanes.spec("discovery")["queue"])
+
+    def test_the_stages_read_the_lane(self):
+        from avp import auto, stages
+        self.assertIn("lanes_mod.for_slot(now, cfg.auto.post_times", inspect.getsource(auto.run_daily))
+        self.assertIn('project.manifest.data["lane"] = lane', inspect.getsource(auto.run_daily))
+        self.assertIn("lane_brief=lane.get(\"writer\")", inspect.getsource(stages.stage_script))
+        self.assertIn("lanes_mod.apply_cta(meta, lane, project.root.name)", inspect.getsource(stages.stage_metadata))
+
+
+class MeasureWhatWasPublished(unittest.TestCase):
+    """Create → publish → MEASURE: every post recorded, every number attributed, rankings arithmetic."""
+
+    def test_posts_are_recorded_and_attributed(self):
+        import tempfile
+        from types import SimpleNamespace
+        from avp import analytics
+        with tempfile.TemporaryDirectory() as d:
+            cfg = SimpleNamespace(paths=SimpleNamespace(projects_dir=d))
+            analytics.record_post(cfg, "my-video", "education", "tiktok", {"post_id": "123", "post_url": "https://t/123"})
+            analytics.record_post(cfg, "my-video", "education", "instagram", "18000")
+            posts = analytics.load_posts(cfg)
+            self.assertEqual([(p["platform"], p["id"]) for p in posts], [("tiktok", "123"), ("instagram", "18000")])
+            index = {"my-video": {"lane": "education", "title": "T", "ig_caption": "A hook line.", "tt_caption": "A hook line."}}
+            self.assertEqual(analytics.attribute({"platform": "tiktok", "id": "", "url": "https://www.tiktok.com/t/123"}, posts, index), "my-video")
+            self.assertEqual(analytics.attribute({"platform": "instagram", "id": "18000"}, posts, index), "my-video")
+            self.assertEqual(analytics.attribute({"platform": "instagram", "id": "x", "caption": "A hook line. Get the app"}, [], index), "my-video")
+            self.assertIsNone(analytics.attribute({"platform": "instagram", "id": "x", "caption": "Something else"}, [], index))
+
+    def test_rankings_lanes_hours_and_engagement(self):
+        from avp import analytics
+        posts = [{"platform": "tiktok", "views": 1000, "likes": 50, "comments": 5, "shares": 10, "saves": 5, "lane": "discovery", "at": "2026-09-08T06:00:00Z"},
+                 {"platform": "tiktok", "views": 200, "likes": 4, "lane": "education", "at": "2026-09-08T11:00:00Z"},
+                 {"platform": "instagram", "likes": 7, "lane": "discovery"},
+                 {"platform": "tiktok", "views": 3000, "likes": 90, "lane": "discovery", "at": "2026-09-07T06:30:00Z"}]
+        self.assertAlmostEqual(analytics.engagement(posts[0]), 0.07)
+        self.assertIsNone(analytics.engagement(posts[2]))
+        top, bottom = analytics.rank(posts, "views", n=2)
+        self.assertEqual([p["views"] for p in top], [3000, 1000])
+        self.assertEqual([p["views"] for p in bottom], [200, 1000])
+        lanes = analytics.by_lane(posts, "views")
+        self.assertEqual(lanes["discovery"]["n"], 2); self.assertEqual(lanes["education"]["avg"], 200)
+        hours = analytics.by_hour(posts, "views", "Europe/Rome")
+        self.assertEqual(set(hours), {8, 13})                    # 06:00Z → 08:00 local, 11:00Z → 13:00
+        self.assertEqual(hours[8]["n"], 2)
+
+    def test_publish_records_every_successful_post(self):
+        from avp import publish
+        src = inspect.getsource(publish._publish_native)
+        self.assertIn("analytics.record_post(cfg, project.root.name, lane, plat", src)
