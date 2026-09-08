@@ -4223,8 +4223,10 @@ class TikTokDailyCapGoesToARetryQueue(unittest.TestCase):
             proj = SimpleNamespace(root=root)
             def boom(*a, **k): raise RuntimeError("Upload-Post/tiktok: You have reached the daily posting cap on tiktok (15 posts per 24 h)")
             with mock.patch("avp.social.uploadpost.post", boom):
-                plan = publish._publish_native([{"platform": "tiktok", "caption": "c"}], root / "v.mp4", {}, cfg, False, proj)
-                publish._publish_native([{"platform": "tiktok", "caption": "c"}], root / "v.mp4", {}, cfg, False, proj)
+                with mock.patch("avp.analytics.record_post", lambda *a, **k: None):
+                    plan = publish._publish_native([{"platform": "tiktok", "caption": "c"}], root / "v.mp4", {}, cfg, False, proj)
+                with mock.patch("avp.analytics.record_post", lambda *a, **k: None):
+                    publish._publish_native([{"platform": "tiktok", "caption": "c"}], root / "v.mp4", {}, cfg, False, proj)
             self.assertFalse(plan[0]["posted"])
             q = Path(d) / "_auto" / "tiktok_retry.txt"
             self.assertEqual(q.read_text().split(), ["my-video"])          # queued once, not twice

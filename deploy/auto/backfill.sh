@@ -38,12 +38,14 @@ RETRY="$AUTO/tiktok_retry.txt"
 if [ -s "$RETRY" ]; then
   PENDING="$(grep -v '^\s*#' "$RETRY" | grep -v '^\s*$' || true)"; : > "$RETRY"
   CAF=""; command -v caffeinate >/dev/null 2>&1 && CAF="caffeinate -i -m -s"
-  echo "$PENDING" | while read -r rs; do
+  STOPPED=0
+  for rs in $PENDING; do
     [ -n "$rs" ] || continue
+    if [ "$STOPPED" = "1" ]; then echo "$rs" >>"$RETRY"; continue; fi     # cap hit: the rest goes back untouched
     echo "--- tiktok retry: $rs $(date '+%T')"
     OUT="$($CAF "$ROOT/.venv/bin/avp" publish "$rs" --go --platforms tiktok --config "$ROOT/config.yaml" 2>&1)"; echo "$OUT" | tail -3
     if echo "$OUT" | grep -q "Published to tiktok"; then echo "$(date '+%T') $rs: tiktok retry published" >>"$DONE"
-    elif echo "$OUT" | grep -qi "posting cap"; then echo "cap still in force — the rest stays queued"; break
+    elif echo "$OUT" | grep -qi "posting cap"; then echo "cap still in force — the rest stays queued"; STOPPED=1
     else echo "$(date '+%T') $rs: tiktok retry FAILED (not a cap error) — dropped" >>"$DONE"; fi
   done
 fi
