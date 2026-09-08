@@ -183,7 +183,8 @@ def run(script: Script, facts: str | None, cfg, out_dir: Path | None = None) -> 
     user = USER.format(facts=facts_block, script=json.dumps(current, ensure_ascii=False, indent=1),
                        budgets=budgets, app=getattr(getattr(cfg, "funnel", None), "app_name", "the app"))
     note = ""
-    for attempt in range(3):
+    reasons: list[str] = []
+    for attempt in range(5):        # each guard trips once; the retry carries EVERY earlier reason
         try:
             data = _chat(key, model, system, user + note)
         except Exception as e:  # noqa: BLE001 — a polish must never sink a build
@@ -204,5 +205,9 @@ def run(script: Script, facts: str | None, cfg, out_dir: Path | None = None) -> 
                     pass
             return out
         log.warning("Polish attempt %d rejected (%s).", attempt + 1, why)
-        note = f"\n\nYour previous attempt was REJECTED: {why}. Fix exactly that and keep everything else."
+        reasons.append(why)
+        note = ("\n\nYour previous attempts were REJECTED for these reasons — avoid ALL of them at once: "
+                + "; ".join(f"({i}) {r}" for i, r in enumerate(reasons, 1))
+                + ". Same number of segments, no digit or number word in the hook's first six words, no line "
+                "starting with This/These/It/Its, one to two sentences of at most 18 words each.")
     return script
