@@ -26,8 +26,9 @@ def _projects_of(cfg, day: date) -> list[Path]:
     root = Path(cfg.paths.projects_dir).expanduser()
     picked: dict[str, float] = {}
     for man in root.glob("*/manifest.json"):
-        try:                                  # birth time, not ctime: a re-assembled old video is not today's
-            st = man.stat()
+        try:                                  # the DAY THE SCRIPT WAS BORN: manifests are rewritten by every
+            # stage (fresh inode, fresh birth time); script.json is created once and edited in place
+            st = (man.parent / "script.json").stat() if (man.parent / "script.json").exists() else man.stat()
             created = datetime.fromtimestamp(getattr(st, "st_birthtime", st.st_mtime))
         except OSError:
             continue
