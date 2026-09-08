@@ -1072,7 +1072,9 @@ def generate_metadata(cfg: LLMConfig, script: Script, funnel: FunnelConfig, lang
                       hashtag_bank: dict | None = None) -> dict:
     name = LANG_NAME.get(language, "English")
     # What the narrow hashtags are validated against: a tag must name something the video says.
-    script_text = " ".join([script.title or "", script.narration] + [
+    # The topic too: a video about rogue planets whose narration says "wanderers" must still be
+    # allowed #rogueplanets and #milkyway — the topic names the subject even when the voice does not.
+    script_text = " ".join([script.title or "", getattr(script, "topic", "") or "", script.narration] + [
         f"{getattr(s, 'visual', '') or ''} {' '.join(getattr(s, 'keywords', None) or [])}"
         for s in script.segments])
     user = META_USER.format(title=script.title, narration=script.narration,
