@@ -191,8 +191,26 @@ def _queue_tiktok_retry(project: VideoProject, cfg: Config) -> None:
     log.warning("TikTok daily cap: %s queued for retry (%s)", slug, q)
 
 
+def _tiktok_schedule(when: str | None, cfg: Config, project: VideoProject) -> str | None:
+    """When the TikTok copy should go out: the Instagram slot plus auto.tiktok_offset_minutes (or the
+    active experiment's variant), never less than three minutes from now. None = post now."""
+    from datetime import datetime, timedelta, timezone
+    from . import experiments
+    default = getattr(getattr(cfg, "auto", None), "tiktok_offset_minutes", 0) or 0
+    offset = int(experiments.value(project, "tiktok_offset", default))
+    if offset <= 0:
+        return None
+    now = datetime.now(timezone.utc)
+    try:
+        base = datetime.fromisoformat((when or "").replace("Z", "+00:00")) if when else now
+    except ValueError:
+        base = now
+    target = max(base + timedelta(minutes=offset), now + timedelta(minutes=3))
+    return target.strftime("%Y-%m-%dT%H:%M:%SZ")
+
+
 def _publish_native(plan: list[dict], video: Path, meta: dict, cfg: Config,
-                    disclose_ai: bool, project: VideoProject) -> list[dict]:
+                    disclose_ai: bool, project: VideoProject, when: str | None = None) -> list[dict]:
     """Post directly to each platform. One dead platform must not take the others down with it — a
     failed TikTok upload is no reason to skip a perfectly good Instagram post — so failures are
     recorded per item and the loop continues."""
@@ -203,15 +221,20 @@ def _publish_native(plan: list[dict], video: Path, meta: dict, cfg: Config,
         try:
             if (cfg.publish.via or {}).get(plat) == "uploadpost":
                 from .social import uploadpost
+                sched = _tiktok_schedule(when, cfg, project) if plat == "tiktok" else None
                 it["result"] = uploadpost.post(plat, video, it["caption"], meta, cfg, disclose_ai,
-                                               title=_title_for(plat, meta))
+                                               title=_title_for(plat, meta), scheduled_at=sched)
+                if sched:
+                    it["scheduled"] = sched
             else:
                 it["result"] = social.post(plat, video, it["caption"], meta, cfg, disclose_ai)
             it["posted"] = True
             try:                            # the measure step needs to know what went where
                 from . import analytics
                 lane = str(getattr(project, "manifest", None) and project.manifest.data.get("lane") or "discovery")
-                analytics.record_post(cfg, project.root.name, lane, plat, it["result"])
+                exp = (project.manifest.data.get("experiment") or {}) if getattr(project, "manifest", None) else {}
+                analytics.record_post(cfg, project.root.name, lane, plat, it["result"],
+                                      variant=(f"{exp.get('variable')}={exp.get('variant')}" if exp else None))
             except Exception as e2:  # noqa: BLE001 — bookkeeping must never fail a post
                 log.debug("post record skipped (%s)", e2)
         except Exception as e:  # noqa: BLE001 — the reason belongs in the plan, not a traceback
@@ -280,7 +303,7 @@ def stage_publish(project: VideoProject, cfg: Config, go: bool = False,
             log.warning("Native backend posts IMMEDIATELY — the requested slot (%s) cannot be "
                         "honoured, because Instagram's API has no scheduled publish. Run the "
                         "pipeline at the time you want the post to go out.", when)
-        return _publish_native(plan, video, meta, cfg, disclose_ai, project)
+        return _publish_native(plan, video, meta, cfg, disclose_ai, project, when=when)
 
     client = PostizClient(cfg.publish)
     if not client.token:

@@ -668,7 +668,7 @@ def with_facts(system: str, facts: str | None) -> str:
 
 def generate_script(cfg: LLMConfig, topic: str, seconds: int = 60, language: str = "en",
                     refine_passes: int = 1, best_of: int = 1, images_per_segment: int = 2,
-                    fit: str = "whole", facts: str | None = None) -> Script:
+                    fit: str = "whole", facts: str | None = None, lane_brief: str | None = None) -> Script:
     words = _words_for(seconds, language)
     # One segment ≈ one shot, and this number is the whole cut rhythm. A tight upper bound (nseg+1)
     # keeps the model from padding to twice the length.
@@ -697,7 +697,7 @@ def generate_script(cfg: LLMConfig, topic: str, seconds: int = 60, language: str
     user = USER_TMPL.format(topic=topic, seconds=seconds, words=round(words * ASK_INFLATION),
                             nseg=nseg, nseg2=nseg2, wseg=wseg)
     name = LANG_NAME.get(language, "English")
-    system = with_facts(SYSTEM + f"\n- Write ALL narration in {name}.", facts)
+    system = with_facts(SYSTEM + f"\n- Write ALL narration in {name}." + (lane_brief or ""), facts)
     client = OllamaClient(cfg)
     # Generation caps sized with wide margin so a real script never truncates, while a runaway model
     # (gemma free-text can append prose past the JSON) can't burn minutes. The JSON output (narration
@@ -930,7 +930,7 @@ def _meta_looks_clean(data: dict) -> bool:
                for suffix in _APOSTROPHE_WORD.findall(txt or ""))
 
 
-def _clean_metadata(data: dict, script_text: str = "", hashtag_bank: dict | None = None) -> dict:
+def _clean_metadata(data: dict, script_text: str = "", hashtag_bank: dict | None = None, seed: str | None = None) -> dict:
     yt = data.get("youtube")
     if isinstance(yt, dict):
         for k in ("title", "description"):
@@ -944,7 +944,7 @@ def _clean_metadata(data: dict, script_text: str = "", hashtag_bank: dict | None
     _ensure_brand_tag(data)
     if script_text:                     # the curated bank + validated narrow tags (avp/hashtags.py)
         from . import hashtags
-        hashtags.finalize(data, script_text, hashtag_bank)
+        hashtags.finalize(data, script_text, hashtag_bank, seed=seed)
     return data
 
 
@@ -1094,7 +1094,7 @@ def generate_metadata(cfg: LLMConfig, script: Script, funnel: FunnelConfig, lang
                 elif not _meta_looks_clean(data):
                     fallback, last = data, "malformed text (stray apostrophe)"   # re-roll for clean prose
                 else:
-                    return _clean_metadata(data, script_text, hashtag_bank)
+                    return _clean_metadata(data, script_text, hashtag_bank, seed=script.title)
             else:
                 last = "empty reply"
         except Exception as e:  # noqa: BLE001 — incl. a request timeout on the cold reload
@@ -1102,5 +1102,5 @@ def generate_metadata(cfg: LLMConfig, script: Script, funnel: FunnelConfig, lang
         log.warning("Metadata attempt %d/4 unusable (%s) — retrying.", i + 1, last)
     if fallback is not None:                    # don't fail the build over a typo — ship the best we got
         log.warning("Using last metadata despite %s.", last)
-        return _clean_metadata(fallback, script_text, hashtag_bank)
+        return _clean_metadata(fallback, script_text, hashtag_bank, seed=script.title)
     raise RuntimeError(f"Model returned no usable metadata after 4 attempts ({last}).")

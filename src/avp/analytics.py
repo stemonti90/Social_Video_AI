@@ -44,7 +44,8 @@ def posts_log(cfg) -> Path:
     return auto_dir(cfg) / "posts.jsonl"
 
 
-def record_post(cfg, slug: str, lane: str, platform: str, result: dict | str | None) -> None:
+def record_post(cfg, slug: str, lane: str, platform: str, result: dict | str | None,
+                variant: str | None = None) -> None:
     """One line per successful post: what went where, when, under which lane."""
     p = posts_log(cfg)
     p.parent.mkdir(parents=True, exist_ok=True)
@@ -56,6 +57,7 @@ def record_post(cfg, slug: str, lane: str, platform: str, result: dict | str | N
         rid = result
     with p.open("a") as fh:
         fh.write(json.dumps({"slug": slug, "lane": lane, "platform": platform, "id": rid, "url": url,
+                             "variant": variant,
                              "at": datetime.now(timezone.utc).isoformat(timespec="seconds")}) + "\n")
 
 
@@ -207,12 +209,14 @@ def snapshot(cfg, when: date | None = None) -> Path:
             log.warning("metrics: %s collection failed (%s)", name, e)
             data[name] = {"error": str(e)[:200], "account": {}, "posts": []}
     posts, index = load_posts(cfg), project_index(cfg)
+    variants = {(r.get("slug"), r.get("platform")): r.get("variant") for r in posts if r.get("variant")}
     for plat in ("instagram", "tiktok"):
         for p in data[plat].get("posts", []):
             p["slug"] = attribute(p, posts, index)
             info = index.get(p["slug"] or "", {})
             p["lane"] = info.get("lane") if p["slug"] else None
             p["title"] = info.get("title") if p["slug"] else None
+            p["variant"] = variants.get((p["slug"], plat))
     d = auto_dir(cfg) / "metrics"
     d.mkdir(parents=True, exist_ok=True)
     out = d / f"{when.isoformat()}.json"
@@ -264,6 +268,39 @@ def by_hour(posts: list[dict], key: str = "views", tz: str = "Europe/Rome") -> d
             continue
         acc[t.hour].append(float(p[key]))
     return {h: {"n": len(v), "avg": sum(v) / len(v)} for h, v in sorted(acc.items())}
+
+
+ANALYSIS_SYSTEM = (
+    "Sei l'analista di crescita di un canale di astrofotografia mobile (AstroStackerPro) su Instagram e TikTok. "
+    "Ricevi un report con numeri misurati. Scrivi in italiano, in modo asciutto, SOLO conclusioni sostenute dai "
+    "numeri; ogni affermazione cita il numero. Segnala esplicitamente i campioni piccoli (meno di 5 post) e non "
+    "generalizzare da essi. Struttura: COSA HA FUNZIONATO (max 3 punti), COSA NON HA FUNZIONATO (max 3), PATTERN "
+    "(cosa hanno in comune i migliori), FORMAT DA REPLICARE / DA ABBANDONARE, FATICA (format che si ripetono), "
+    "PROSSIMI 3 ESPERIMENTI (una variabile ciascuno, con la metrica di successo). Niente frasi di cortesia."
+)
+
+
+def analysis(cfg, report_text: str) -> str | None:
+    """The written part of the weekly report, produced by the strong model from the numbers only.
+    None when there is no key or the call fails — the numbers stand on their own."""
+    from . import factcheck
+    key = factcheck._api_key(cfg)
+    if not key:
+        return None
+    model = str(getattr(cfg.script, "factcheck_model", "deepseek-chat") or "deepseek-chat")
+    try:
+        r = requests.post(factcheck.DEEPSEEK_URL,
+                          headers={"Authorization": f"Bearer {key}", "Content-Type": "application/json"},
+                          json={"model": model, "temperature": 0.2,
+                                "messages": [{"role": "system", "content": ANALYSIS_SYSTEM},
+                                             {"role": "user", "content": report_text[:12000]}]},
+                          timeout=getattr(factcheck, "TIMEOUT", (30, 180)))
+        if r.status_code >= 400:
+            raise RuntimeError(f"{r.status_code}: {(r.text or '')[:200]}")
+        return (r.json()["choices"][0]["message"]["content"] or "").strip() or None
+    except Exception as e:  # noqa: BLE001
+        log.warning("report analysis skipped (%s)", e)
+        return None
 
 
 def _load_snapshots(cfg, days: int) -> list[dict]:
@@ -350,6 +387,15 @@ def report(cfg, days: int = 7, out_path: Path | None = None) -> str:
         lines.append("## Pubblico TikTok online per ora (fonte: Upload-Post audience)")
         lines.append("- ore migliori: " + ", ".join(f"{h:02d}:00 ({n})" for h, n in best))
         lines.append("")
+    variants = defaultdict(list)
+    for p in posts:
+        if p.get("variant") and p.get(key) is not None:
+            variants[p["variant"]].append(float(p[key]))
+    if variants:
+        lines.append(f"## Esperimenti (media {key} per variante)")
+        lines += [f"- {v}: {_fmt(sum(xs) / len(xs))} su {len(xs)} post" + (" — campione piccolo" if len(xs) < 5 else "")
+                  for v, xs in sorted(variants.items())]
+        lines.append("")
     missing = []
     if not any(p.get("views") is not None for p in last.get("tiktok", {}).get("posts", [])):
         missing.append("metriche per post TikTok: la cache di Upload-Post si riempie 1-2 giorni dopo la pubblicazione")
@@ -360,6 +406,9 @@ def report(cfg, days: int = 7, out_path: Path | None = None) -> str:
         lines += [f"- {m}" for m in missing]
         lines.append("")
     text = "\n".join(lines)
+    written = analysis(cfg, text)
+    if written:
+        text += "\n## Analisi (scritta dal modello sui numeri qui sopra)\n\n" + written + "\n"
     out_path = out_path or (auto_dir(cfg) / f"report-{last['date']}.md")
     out_path.parent.mkdir(parents=True, exist_ok=True)
     out_path.write_text(text)

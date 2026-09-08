@@ -257,6 +257,14 @@ class AutoConfig:
     refill_threshold: int = 6            # refill the queue when it holds fewer than this many topics
     refill_batch: int = 12               # how many topics the LLM proposes per refill
     theme: str = "space and astronomy"   # editorial theme the LLM brainstorms topics within
+    # One lane per posting slot, in order (see avp/lanes.py): Discovery reaches strangers, Education earns
+    # saves and follows, Product turns interest into the app. Product needs real app assets (screenshots,
+    # screen recordings) in `product_assets` and its own queue (topics.product.txt), else it runs Education.
+    lanes: list[str] = field(default_factory=lambda: ["discovery", "education", "product"])
+    product_assets: str = "assets/app"
+    # TikTok is scheduled this many minutes after the Instagram slot (Upload-Post scheduled_date): two
+    # platforms, two audiences, two times. 0 = post both at once. A hypothesis the weekly report tests.
+    tiktok_offset_minutes: int = 120
     # While the TikTok app is in review, TikTok accepts posts but forces SELF_ONLY (owner-only).
     # True = post anyway and stock the account, flipping each to public in the app after approval;
     # False = leave TikTok out until creator_info offers PUBLIC_TO_EVERYONE.

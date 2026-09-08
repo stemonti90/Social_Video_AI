@@ -42,7 +42,7 @@ def configured(cfg) -> bool:
 
 
 def post(platform: str, video: Path, caption: str, meta: dict, cfg, disclose_ai: bool = False,
-         title: str | None = None) -> dict:
+         title: str | None = None, scheduled_at: str | None = None) -> dict:
     """Publish one video to one platform through Upload-Post. Raises with the API's own message."""
     s = settings(cfg)
     if not s.get("api_key") or not s.get("user"):
@@ -68,7 +68,10 @@ def post(platform: str, video: Path, caption: str, meta: dict, cfg, disclose_ai:
             data.append(("flair_id", str(s["flair_id"])))
     else:
         data.append((f"{plat}_title", caption[:2200]))
-    log.info("Upload-Post → %s as user %r (%.1f MB)", plat, s["user"], video.stat().st_size / 1e6)
+    if scheduled_at:                      # ISO-8601 UTC, must be in the future (Upload-Post holds the post)
+        data += [("scheduled_date", scheduled_at), ("timezone", "UTC")]
+    log.info("Upload-Post → %s as user %r (%.1f MB)%s", plat, s["user"], video.stat().st_size / 1e6,
+             f" scheduled {scheduled_at}" if scheduled_at else "")
     with video.open("rb") as fh:
         r = requests.post(API, headers={"Authorization": f"Apikey {s['api_key']}"},
                           data=data, files={"video": (video.name, fh, "video/mp4")}, timeout=TIMEOUT)
@@ -78,6 +81,11 @@ def post(platform: str, video: Path, caption: str, meta: dict, cfg, disclose_ai:
         body = {"raw": r.text[:500]}
     if r.status_code >= 400 or not body.get("success", False):
         raise RuntimeError(f"Upload-Post {r.status_code}: {str(body)[:400]}")
+    if scheduled_at and (r.status_code == 202 or body.get("scheduled") or not body.get("results")):
+        out = {"via": "uploadpost", "scheduled_date": scheduled_at, "post_id": body.get("job_id") or body.get("request_id"),
+               "url": None, "usage": body.get("usage")}
+        log.info("Upload-Post/%s: scheduled for %s (%s)", plat, scheduled_at, out["post_id"] or "ok")
+        return out
     res = (body.get("results") or {}).get(plat) or {}
     if not res.get("success", True):
         raise RuntimeError(f"Upload-Post/{plat}: {res.get('error') or res}")

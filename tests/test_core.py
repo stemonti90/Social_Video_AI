@@ -4376,3 +4376,70 @@ class TheDailyPlanIsDerivedFromTheVideos(unittest.TestCase):
         self.assertIn("**Durata**: 20 s", text)
         self.assertIn("#astrophotography #astrostackerpro", text)
         self.assertIn("**Orario TikTok**: programmato", text)
+
+
+class OneVariableAtATime(unittest.TestCase):
+    """A/B tests assigned per video, alternating arms, read back where the pipeline acts on them."""
+
+    def _cfg(self, d):
+        from types import SimpleNamespace
+        return SimpleNamespace(paths=SimpleNamespace(projects_dir=d), auto=SimpleNamespace(tiktok_offset_minutes=120))
+
+    def test_assignment_alternates_and_is_stable_per_video(self):
+        import tempfile
+        from avp import experiments
+        with tempfile.TemporaryDirectory() as d:
+            cfg = self._cfg(d)
+            self.assertIsNone(experiments.assign(cfg, "v1"))                 # nothing running
+            experiments.start(cfg, "stagger", "tiktok_offset", ["60", "180"])
+            arms = [experiments.assign(cfg, f"v{i}")["variant"] for i in range(4)]
+            self.assertEqual(arms, [60, 180, 60, 180])
+            self.assertEqual(experiments.assign(cfg, "v0")["variant"], 60)  # idempotent
+            self.assertIn("stagger", experiments.describe(cfg))
+            with self.assertRaises(ValueError):
+                experiments.start(cfg, "bad", "font_size", ["1", "2"])
+            stopped = experiments.stop(cfg)
+            self.assertEqual(stopped["name"], "stagger")
+            self.assertIsNone(experiments.active(cfg))
+
+    def test_the_variant_reaches_the_tiktok_schedule(self):
+        from datetime import datetime, timedelta, timezone
+        from types import SimpleNamespace
+        from avp import publish
+        cfg = SimpleNamespace(auto=SimpleNamespace(tiktok_offset_minutes=120))
+        proj = SimpleNamespace(manifest=SimpleNamespace(data={}))
+        slot = (datetime.now(timezone.utc) + timedelta(hours=2)).strftime("%Y-%m-%dT%H:%M:%S.000Z")
+        when = publish._tiktok_schedule(slot, cfg, proj)
+        got = datetime.strptime(when, "%Y-%m-%dT%H:%M:%SZ").replace(tzinfo=timezone.utc)
+        self.assertAlmostEqual((got - datetime.fromisoformat(slot.replace("Z", "+00:00"))).total_seconds(), 7200, delta=2)
+        proj.manifest.data["experiment"] = {"name": "s", "variable": "tiktok_offset", "variant": 60}
+        when2 = publish._tiktok_schedule(slot, cfg, proj)
+        got2 = datetime.strptime(when2, "%Y-%m-%dT%H:%M:%SZ").replace(tzinfo=timezone.utc)
+        self.assertAlmostEqual((got2 - datetime.fromisoformat(slot.replace("Z", "+00:00"))).total_seconds(), 3600, delta=2)
+        past = (datetime.now(timezone.utc) - timedelta(hours=5)).strftime("%Y-%m-%dT%H:%M:%S.000Z")
+        got3 = datetime.strptime(publish._tiktok_schedule(past, cfg, proj), "%Y-%m-%dT%H:%M:%SZ").replace(tzinfo=timezone.utc)
+        self.assertGreater(got3, datetime.now(timezone.utc) + timedelta(minutes=2))   # never in the past
+        cfg.auto.tiktok_offset_minutes = 0; proj.manifest.data.pop("experiment")
+        self.assertIsNone(publish._tiktok_schedule(slot, cfg, proj))
+        self.assertIn('("scheduled_date", scheduled_at)', inspect.getsource(__import__("avp.social.uploadpost", fromlist=["post"]).post))
+
+    def test_hashtag_blocks_rotate_per_video_inside_the_bank(self):
+        from avp import hashtags
+        blocks = []
+        for seed in ("Video A", "Video B", "Video C"):
+            data = {"instagram": {"caption": "hook"}, "tiktok": {"caption": "hook"}}
+            hashtags.finalize(data, "Jupiter storm", seed=seed)
+            blocks.append(tuple(data["instagram"]["hashtags"]))
+            self.assertEqual(data["instagram"]["hashtags"][-1], "#astrostackerpro")
+            self.assertLessEqual(len(data["instagram"]["hashtags"]), 20)
+            allowed = set(t.lower() for tier in ("broad", "mid", "community") for t in hashtags.DEFAULTS["instagram"][tier]) | {"#astrostackerpro"}
+            self.assertTrue(set(t.lower() for t in data["instagram"]["hashtags"]) <= allowed)
+        self.assertGreater(len(set(blocks)), 1)                                # not the same block every time
+        again = {"instagram": {"caption": "hook"}, "tiktok": {"caption": "hook"}}
+        hashtags.finalize(again, "Jupiter storm", seed="Video A")
+        self.assertEqual(tuple(again["instagram"]["hashtags"]), blocks[0])   # stable for the same video
+
+    def test_the_report_groups_by_variant(self):
+        from avp import analytics
+        self.assertIn("Esperimenti", inspect.getsource(analytics.report))
+        self.assertIn("variant", inspect.getsource(analytics.record_post))

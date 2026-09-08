@@ -232,8 +232,15 @@ def run_daily(cfg: Config, count: int | None = None, dry_run: bool = False,
         try:
             from . import pipeline, stages
             project = VideoProject.create(slug, cfg)
-            try:                               # the lane travels with the project
+            try:                               # the lane and the experiment arm travel with the project
+                from . import experiments
                 project.manifest.data["lane"] = lane
+                arm = experiments.assign(cfg, slug)
+                if arm:
+                    project.manifest.data["experiment"] = arm
+                    entry["experiment"] = arm
+                    if arm["variable"] == "target_seconds":
+                        cfg.script.target_seconds = int(arm["variant"])
                 project.manifest.save()
             except Exception as e:  # noqa: BLE001 — bookkeeping must not fail a video
                 log.debug("lane not recorded (%s)", e)

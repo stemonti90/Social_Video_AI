@@ -93,7 +93,20 @@ def _strip_tags(caption: str) -> str:
     return re.sub(r"\s{2,}", " ", _TAG.sub("", caption or "")).strip(" \n")
 
 
-def finalize(data: dict, script_text: str, overrides: dict | None = None) -> dict:
+def _rotate(tags: list[str], keep: int, seed: str) -> list[str]:
+    """A per-video subset of a tier, so the block is never the same on every post yet stays inside the
+    curated bank. Deterministic for a video (seed), different across videos."""
+    tags = list(tags or [])
+    if keep >= len(tags) or not seed:
+        return tags
+    import hashlib
+    h = int(hashlib.md5(seed.encode()).hexdigest(), 16)
+    start = h % len(tags)
+    rotated = tags[start:] + tags[:start]
+    return rotated[:keep]
+
+
+def finalize(data: dict, script_text: str, overrides: dict | None = None, seed: str | None = None) -> dict:
     """Rebuild the Instagram and TikTok tag lists and captions in place from the bank + validated
     narrow tags. The model's proposals are read from `instagram_hashtags` (if still present),
     `instagram.hashtags` and the inline tags of both captions."""
@@ -114,10 +127,11 @@ def finalize(data: dict, script_text: str, overrides: dict | None = None) -> dic
     if isinstance(ig, dict):
         s = spec["instagram"]
         taken: set[str] = {BRAND_TAG}
-        tags = _dedupe(list(s.get("broad") or []), taken)
-        tags += _dedupe(list(s.get("mid") or []), taken)
+        # never the same block twice: 3 broad, 5 mid and 4 community tags rotated per video
+        tags = _dedupe(_rotate(list(s.get("broad") or []), 3, seed), taken)
+        tags += _dedupe(_rotate(list(s.get("mid") or []), 5, seed), taken)
         tags += narrow_tags(proposed, script_text, int(s.get("narrow_max", 6)), taken)
-        tags += _dedupe(list(s.get("community") or []), taken)
+        tags += _dedupe(_rotate(list(s.get("community") or []), 4, seed), taken)
         tags = tags[: max(1, int(s.get("max", 20)) - 1)] + [BRAND_TAG]
         ig["hashtags"] = tags
         ig["caption"] = f"{_strip_tags(ig.get('caption', ''))}\n\n{' '.join(tags)}".strip()

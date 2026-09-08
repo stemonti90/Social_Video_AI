@@ -84,6 +84,11 @@ def _build_parser() -> argparse.ArgumentParser:
                         help="metrics: --snapshot saves today's numbers; default writes the period report (Markdown)")
     rp.add_argument("--snapshot", action="store_true", help="collect and save today's snapshot only")
     rp.add_argument("--days", type=int, default=7, help="window of the report in days (default 7)")
+    ex = sub.add_parser("experiment", parents=[common], help="A/B tests: start NAME VARIABLE V1,V2 | stop | show")
+    ex.add_argument("action", choices=["start", "stop", "show"])
+    ex.add_argument("name", nargs="?", default=None)
+    ex.add_argument("variable", nargs="?", default=None)
+    ex.add_argument("variants", nargs="?", default=None, help="comma-separated variants")
     pl = sub.add_parser("plan", parents=[common], help="the day's plan: one block of 13 fields per video (Markdown)")
     pl.add_argument("--date", default=None, help="YYYY-MM-DD (default today)")
 
@@ -306,6 +311,19 @@ def main(argv: list[str] | None = None) -> int:
         report = auto_mod.run_daily(cfg, count=args.count, dry_run=args.dry_run,
                                     publish=not args.no_publish, config_path=args.config)
         print(json.dumps(report, indent=2, ensure_ascii=False))
+        return 0
+
+    if args.cmd == "experiment":
+        from . import experiments
+        if args.action == "start":
+            if not (args.name and args.variable and args.variants):
+                log.error("usage: avp experiment start NAME VARIABLE V1,V2"); return 2
+            exp = experiments.start(cfg, args.name, args.variable, [v.strip() for v in args.variants.split(",") if v.strip()])
+            print(f"🧪 {exp['name']}: {exp['variable']} ∈ {exp['variants']}")
+        elif args.action == "stop":
+            exp = experiments.stop(cfg); print("chiuso:" if exp else "nessun esperimento attivo", exp["name"] if exp else "")
+        else:
+            print(experiments.describe(cfg))
         return 0
 
     if args.cmd == "plan":

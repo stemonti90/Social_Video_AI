@@ -149,8 +149,11 @@ def stage_script(project: VideoProject, cfg: Config, topic: str | None) -> Scrip
     # budget has to hold at the WORST case or the video crosses 60s exactly when the bridge runs long.
     content_target = cfg.script.target_seconds - (9 if cfg.funnel.enabled else 0)
     from . import brief
-    facts = brief.build(topic, cfg, out_dir=project.root)      # None when off/unconfigured/failed
+    from . import lanes as lanes_mod
+    lane = lanes_mod.spec(lanes_mod.of(project))
+    facts = brief.build(topic, cfg, out_dir=project.root, focus=lane.get("brief_focus") or None)
     script = llm.generate_script(cfg.llm, topic, max(30, content_target), facts=facts,
+                                 lane_brief=lane.get("writer") or None,
                                  language=cfg.script.language, refine_passes=cfg.script.refine_passes,
                                  best_of=getattr(cfg.llm, "best_of", 1),
                                  fit=getattr(cfg.script, "fit", "whole"),
@@ -160,7 +163,7 @@ def stage_script(project: VideoProject, cfg: Config, topic: str | None) -> Scrip
     # The strong model rewrites the draft in the channel's voice, fact-locked to the sheet — the local
     # writer reaches past the sheet and the fact-check alone leaves true, flat lines (see polish.py).
     from . import polish
-    script = polish.run(script, facts, cfg, out_dir=project.root)
+    script = polish.run(script, facts, cfg, out_dir=project.root, lane_rules=lane.get("polish") or None)
     # Check the facts AFTER the polish and BEFORE the CTA is appended and a single frame is rendered:
     # a correction is free here and costs a full rebuild once the voice has been synthesised.
     try:
@@ -860,8 +863,20 @@ def export_outputs(project: VideoProject, cfg: Config) -> Path | None:
 # --------------------------------------------------------------------------- metadata
 def stage_metadata(project: VideoProject, cfg: Config) -> None:
     script = load_script(project)
+    from . import lanes as lanes_mod
+    lane = lanes_mod.of(project)
+    # the lane's hashtag bank first, the user's config overrides on top
+    bank = {k: dict(v) for k, v in (lanes_mod.spec(lane).get("hashtags") or {}).items()}
+    for plat, over in (getattr(cfg.publish, "hashtags", None) or {}).items():
+        if isinstance(over, dict):
+            bank.setdefault(plat, {}).update(over)
+    from . import experiments
+    ig_max = experiments.value(project, "ig_hashtags_max", None)
+    if ig_max:
+        bank.setdefault("instagram", {})["max"] = int(ig_max)
     meta = llm.generate_metadata(cfg.llm, script, cfg.funnel, cfg.script.language,
-                                 hashtag_bank=getattr(cfg.publish, "hashtags", None) or None)
+                                 hashtag_bank=bank or None)
+    lanes_mod.apply_cta(meta, lane, project.root.name)      # a rotating, lane-specific call to action
     meta["disclosure_ai"] = bool(project.manifest.data.get("disclosure_ai", False))
     (project.root / "metadata.json").write_text(_json(meta))
     _write_metadata_md(project, cfg, meta)
