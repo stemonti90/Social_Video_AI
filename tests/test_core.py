@@ -1825,7 +1825,8 @@ class NativePublishDispatch(unittest.TestCase):
 
             with mock.patch("avp.social.post", side_effect=fake_post):
                 with mock.patch("avp.qa.check", lambda *a, **k: []):   # QA is tested on its own; here the file does not exist
-                    plan = publish.stage_publish(proj, cfg, go=True)
+                    with mock.patch("avp.analytics.record_post", lambda *a, **k: None):
+                        plan = publish.stage_publish(proj, cfg, go=True)
             # the outcome is written back, so a scheduled run leaves an auditable record
             saved = json.loads((proj.root / "publish_plan.json").read_text())
         by = {p["platform"]: p for p in plan}
@@ -1844,7 +1845,8 @@ class NativePublishDispatch(unittest.TestCase):
             proj = self._project(tmp)
             with mock.patch("avp.social.post") as native:
                 with self.assertRaises(RuntimeError):      # no token → the Postiz path complains
-                    publish.stage_publish(proj, cfg, go=True)
+                    with mock.patch("avp.analytics.record_post", lambda *a, **k: None):
+                        publish.stage_publish(proj, cfg, go=True)
             native.assert_not_called()
 
     def test_dry_run_posts_nothing(self):
