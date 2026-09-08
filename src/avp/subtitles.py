@@ -51,6 +51,8 @@ Rules:
 - Numbers as digits with the {name} thousands separator (16.000 km, 430 km/h, 60 ore); units abbreviated.
 - Keep proper nouns. Use the same term for the same thing in every segment.
 - A subtitle never ends on an article or preposition and never splits a name across cards.
+- Punctuation marks the PAUSES a reader needs: a comma where one breathes, a full stop before the
+  key fact, at most 14 words per sentence, never a semicolon.
 
 Segments:
 {items}
@@ -278,7 +280,10 @@ def adapt(segments: list[tuple[int, str, float]], target_lang: str, cfg,
                     continue
                 over = len(texts[i]) > limits[i] * 1.10
                 rem = remoto_forms(texts[i]) if italian else []
-                lint = italian_lint(texts[i]) if italian else []
+                lint = list(italian_lint(texts[i])) if italian else []
+                longest = max((len(s.split()) for s in re.split(r"(?<=[.!?])\s+", texts[i]) if s.strip()), default=0)
+                if longest > 22:            # a breathless sentence is a readability problem, not a lint failure
+                    lint.append(f"frase di {longest} parole senza pause: spezzala in due")
                 if over or rem or lint:
                     bad[i] = (over, rem, lint)
             if not bad:

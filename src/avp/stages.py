@@ -186,6 +186,12 @@ def stage_script(project: VideoProject, cfg: Config, topic: str | None) -> Scrip
 
 
 # --------------------------------------------------------------------------- voice
+def _voice_stamp(prov) -> str:
+    """The synthesis parameters that change the audio without changing the text."""
+    parts = [f"{k}={getattr(prov, k)}" for k in ("speed", "sentence_pause", "clause_pause") if hasattr(prov, k)]
+    return ("\n#voice " + " ".join(parts)) if parts else ""
+
+
 def stage_voice(project: VideoProject, cfg: Config) -> Script:
     script = load_script(project)
     providers = tts_mod.get_providers(cfg)
@@ -206,7 +212,9 @@ def stage_voice(project: VideoProject, cfg: Config) -> Script:
                 # are recorded next to the audio, and the audio is reused only when they still match.
                 stamp = out.with_suffix(".txt")
                 spoken_before = stamp.read_text() if stamp.exists() else None
-                if out.exists() and spoken_before == seg.narration:
+                # text + the voice parameters (pauses, speed): a changed pause setting must re-synthesise
+                stamp_text = seg.narration + _voice_stamp(prov)
+                if out.exists() and spoken_before == stamp_text:
                     log.info("[%s] segment %d/%d (cached)", prov.name, seg.index, len(script.segments))
                 elif out.exists() and spoken_before is None:
                     # Audio from before this stamp existed: keep it (re-voicing a whole back catalogue
@@ -250,7 +258,7 @@ def stage_voice(project: VideoProject, cfg: Config) -> Script:
                 # Record the exact words this wav says, so an edited line is re-voiced next time
                 # instead of being served from cache in its old wording.
                 try:
-                    out.with_suffix(".txt").write_text(seg.narration)
+                    out.with_suffix(".txt").write_text(stamp_text)
                 except Exception as e:  # noqa: BLE001 — a failed stamp must not fail the build
                     log.debug("Could not stamp %s (%s)", out.name, e)
                 seg_paths.append(out)
@@ -516,7 +524,8 @@ def _music_mood_decision(project: VideoProject, cfg: Config) -> dict:
             text = load_script(project).narration
         except Exception:  # noqa: BLE001
             text = ""
-        d = music.classify_mood(text, cfg.script.language)
+        d = music.classify_mood(text, cfg.script.language,
+                                palette=list(getattr(cfg.video, "music_palette", None) or []) or None)
         log.info("Music mood (auto) → %s — %s", d["mood"], d["rationale"])
     else:
         d = {"mood": configured, "rationale": "configured by video.music_mood", "scores": {},

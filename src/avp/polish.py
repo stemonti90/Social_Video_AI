@@ -57,6 +57,10 @@ VOICE = """THE VOICE:
 - Metric units. Numbers, dates and names ONLY from the fact sheet; never invent a mechanism; if the
   sheet does not say how, say what happened, not how.
 - Spoken cadence, one or two sentences per segment, about the word count given for each (±15%).
+- PUNCTUATE FOR THE VOICE: the pauses are part of the message. One idea per sentence, at most 18
+  words; a comma exactly where a listener needs a breath; a full stop before the reveal, so the pause
+  gives it weight; an em dash only for the twist ("The Moon is leaving us — four centimetres a year");
+  never a semicolon, never a parenthesis, never three clauses in one breath.
 """
 
 USER = """{facts}
@@ -119,6 +123,9 @@ def apply(script: Script, data: dict) -> tuple[Script | None, str]:
     for x in new_lines:
         if re.match(r"^(This|These|It|Its)\b", x):
             return None, f"explainer opener {x[:32]!r}"
+        for sent in re.split(r"(?<=[.!?])\s+", x):
+            if _words(sent) > 26:
+                return None, f"run-on sentence ({_words(sent)} words): {sent[:40]!r}"
     before = sum(_words(s.narration) for s in content)
     after = sum(_words(x) for x in new_lines)
     if not (0.75 * before <= after <= 1.25 * before):      # ±25% ≈ ±5 s on a 50 s video; the fit already sized it

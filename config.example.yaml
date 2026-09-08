@@ -40,6 +40,8 @@ tts:
 
   primary: kokoro          # quale voce va nel video finale quando engine == both
   speed: 1.0               # velocita' Kokoro (<1 = piu' lenta; l'italiano si auto-rallenta a 0.94)
+  sentence_pause: 0.35     # silenzio inserito dopo . ! ? — le pause sono parte del messaggio
+  clause_pause: 0.22       # dopo lineetta lunga, punto e virgola, due punti
   chatterbox_ref: null     # wav di riferimento 5-10 s per clonare una voce (Chatterbox)
 stt:                      # for caption word-timing
   engine: parakeet        # parakeet (MLX, fast & clean) | whisperx (accurate) | even (no install)
@@ -55,7 +57,7 @@ video:
   ken_burns: true         # slow zoom on still images
   crf: 20                 # lower = higher quality / bigger file
   transition: 0.4         # crossfade seconds between clips (0 = hard cut)
-  segment_gap: 0.22       # silence after each segment (pacing/breath)
+  segment_gap: 0.45        # respiro tra segmenti: piu' lungo di qualsiasi pausa interna (0,12 era meno di una virgola)
   loudness_lufs: -14.0    # EBU R128 normalization target (0 = disable)
   prefer_video: true      # use NASA video clips when available, else stills + Ken Burns
   video_seek: 3.0         # skip N seconds into video clips (avoids NASA title cards)
@@ -85,6 +87,7 @@ video:
   music_mood: ethereal     # auto | ethereal | cinematic | dark | tense | emotional | documentary
   music_steps: 100         # passi di diffusione Stable Audio (piu' alti = meglio, piu' lento)
   music_seconds: 45.0      # lunghezza del letto generato (max ≈47 s; viene ripetuto)
+  music_palette: [ethereal, documentary, emotional, cinematic]   # mood ammessi in auto: dark/tense lavorano contro un canale di meraviglia
   watermark: true          # marchio su ogni frame parlato (non sulla card, che lo porta gia')
   watermark_text: "@astrostackerpro"
   watermark_opacity: 0.55

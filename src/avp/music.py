@@ -78,7 +78,13 @@ _MOOD_KEYWORDS = {
 }
 
 
-def classify_mood(text: str, lang: str = "it", default: str = "documentary") -> dict:
+# Where an off-palette mood goes: the same register, without the dread. A wonder-tone channel does not
+# want a "dark" bed because the script said "void", nor a ticking "tense" pulse under a discovery.
+PALETTE_FALLBACK = {"dark": "ethereal", "tense": "cinematic"}
+
+
+def classify_mood(text: str, lang: str = "it", default: str = "documentary",
+                  palette: list[str] | None = None) -> dict:
     """Pick a music mood from the script tone by weighted keyword hits. Returns the chosen mood, a
     short rationale (the matched signals), the per-mood scores, and the mood's musical params — all
     deterministic and logged, so the choice is auditable. Falls back to a neutral documentary bed
@@ -102,7 +108,13 @@ def classify_mood(text: str, lang: str = "it", default: str = "documentary") -> 
     else:
         chosen = max(scores, key=lambda m: (scores[m], -list(_MOOD_KEYWORDS).index(m)))
         rationale = f"matched {', '.join(repr(h) for h in hits[chosen])}"
-    return {"mood": chosen, "rationale": rationale, "scores": scores,
+    raw = chosen
+    if palette and chosen not in palette:            # video.music_palette: the channel's allowed moods
+        chosen = PALETTE_FALLBACK.get(chosen, default if default in palette else palette[0])
+        if chosen not in palette:
+            chosen = palette[0]
+        rationale += f" → {raw!r} is off-palette, using {chosen!r}"
+    return {"mood": chosen, "mood_raw": raw, "rationale": rationale, "scores": scores,
             "params": MOOD_PARAMS.get(chosen, MOOD_PARAMS["documentary"])}
 
 _PIPE = None

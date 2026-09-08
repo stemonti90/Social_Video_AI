@@ -294,18 +294,21 @@ def mix_audio(voice: Path, music: Path | None, music_gain_db: float, out: Path,
                 # is being spoken — the opening lands dry and viewers read it as the music starting
                 # late. Under a second is long enough to avoid a click and short enough that the
                 # first line already has a floor under it.
-                f"[1:a]loudnorm=I=-19.5:TP=-2:LRA=11,volume={music_gain_db}dB,"
+                # The bed: 2 dB lower than before (-21.5), a high shelf out of the consonant band so the
+                # words stay crisp, then ducked 4:1 under the voice with a slow release so it swells back
+                # in the pauses — the music breathes with the narration instead of competing with it.
+                f"[1:a]loudnorm=I=-21.5:TP=-2:LRA=11,highshelf=g=-4:f=3200,volume={music_gain_db}dB,"
                 f"afade=t=in:st=0:d={MUSIC_FADE_IN}[mraw];"
                 # GENTLE duck: ~3-4 dB dip under speech, music stays present (no hard pumping)
-                f"[mraw][v0]sidechaincompress=threshold=0.1:ratio=2.5:attack=20:release=400:detection=rms:makeup=1[mduck];"
+                f"[mraw][v0]sidechaincompress=threshold=0.08:ratio=4:attack=30:release=700:detection=rms:makeup=1[mduck];"
                 f"{fadeout}"
-                f"[v1]volume=-2dB[vq];"                                  # voice a touch lower vs music
+                f"[v1]volume=-1dB[vq];"                                  # the voice leads
                 f"[vq]{mlabel}amix=inputs=2:duration=first:dropout_transition=2:normalize=0[mx];"
                 f"[mx]{norm}[a]"
             )
         else:
-            fc = (f"[0:a]{VOICE_WARM},volume=-2dB[vw];"
-                  f"[1:a]loudnorm=I=-19.5:TP=-2,volume={music_gain_db}dB[m];"
+            fc = (f"[0:a]{VOICE_WARM},volume=-1dB[vw];"
+                  f"[1:a]loudnorm=I=-21.5:TP=-2,highshelf=g=-4:f=3200,volume={music_gain_db}dB[m];"
                   f"[vw][m]amix=inputs=2:duration=first:dropout_transition=2[mx];"
                   f"[mx]{norm}[a]")
         run(["-i", str(voice), "-stream_loop", "-1", "-i", str(music),

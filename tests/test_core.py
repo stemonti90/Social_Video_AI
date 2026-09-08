@@ -1986,7 +1986,7 @@ class EditedLinesAreReVoiced(unittest.TestCase):
         from avp import stages
         src = inspect.getsource(stages.stage_voice)
         self.assertIn("with_suffix(\".txt\")", src)
-        self.assertIn("spoken_before == seg.narration", src)
+        self.assertIn("spoken_before == stamp_text", src)
 
     def test_matching_text_is_a_cache_hit_and_changed_text_is_not(self):
         """The decision itself, on the two cases that matter."""
@@ -4017,3 +4017,55 @@ class ItalianNeverShipsBroken(unittest.TestCase):
         with mock.patch.dict("os.environ", {"DEEPSEEK_API_KEY": ""}, clear=False), mock.patch("avp.subtitles.requests.post", fake):
             with self.assertRaises(subtitles.SubtitleQualityError):
                 subtitles.adapt([(1, "Only one hemisphere ever greets us.", 4.0)], "it", self._cfg())
+
+
+class PausesArePartOfTheMessage(unittest.TestCase):
+    """Measured 7/9: the gap between two segments (0.12 s) was shorter than a comma inside one. The voice
+    is now synthesised per breath unit with explicit silence, the segment gap is a real breath, the
+    music sits lower, out of the consonant band, and swells back in the pauses."""
+
+    def test_breath_units_cut_at_full_stops_and_dashes(self):
+        from avp.tts import breath_units, SENTENCE_PAUSE, CLAUSE_PAUSE
+        units = breath_units("The Moon is quietly leaving us — four centimetres a year. Nobody noticed.")
+        self.assertEqual([u for u, _ in units], ["The Moon is quietly leaving us", "four centimetres a year.", "Nobody noticed."])
+        self.assertEqual([p for _, p in units], [CLAUSE_PAUSE, SENTENCE_PAUSE, 0.0])   # the last pause is the segment gap
+        self.assertEqual(breath_units("One sentence, with a comma, no pause added."),
+                         [("One sentence, with a comma, no pause added.", 0.0)])
+        self.assertEqual(breath_units(""), [])
+
+    def test_the_voice_cache_is_keyed_by_the_pause_settings(self):
+        from types import SimpleNamespace
+        from avp import stages
+        a = stages._voice_stamp(SimpleNamespace(speed=1.0, sentence_pause=0.35, clause_pause=0.22))
+        b = stages._voice_stamp(SimpleNamespace(speed=1.0, sentence_pause=0.5, clause_pause=0.22))
+        self.assertNotEqual(a, b)
+        self.assertIn("stamp_text = seg.narration + _voice_stamp(prov)", inspect.getsource(stages.stage_voice))
+
+    def test_defaults_breathe(self):
+        from avp.config import VideoConfig, TTSConfig
+        self.assertGreaterEqual(VideoConfig().segment_gap, 0.4)
+        self.assertGreater(TTSConfig().sentence_pause, TTSConfig().clause_pause)
+        self.assertNotIn("dark", VideoConfig().music_palette)
+
+    def test_the_bed_sits_lower_and_breathes_with_the_voice(self):
+        from avp import ffmpeg
+        src = inspect.getsource(ffmpeg.mix_audio)
+        self.assertIn("loudnorm=I=-21.5", src)                  # 2 dB under the old bed
+        self.assertIn("highshelf=g=-4:f=3200", src)             # out of the consonant band
+        self.assertIn("ratio=4", src)
+        self.assertIn("release=700", src)                       # swells back slowly in the pauses
+
+    def test_off_palette_moods_map_to_their_wonder_equivalent(self):
+        from avp.music import classify_mood
+        palette = ["ethereal", "documentary", "emotional", "cinematic"]
+        d = classify_mood("the void, silence and death, a dark end", palette=palette)
+        self.assertEqual((d["mood_raw"], d["mood"]), ("dark", "ethereal"))
+        self.assertIn("off-palette", d["rationale"])
+        self.assertEqual(classify_mood("the void, silence and death, a dark end")["mood"], "dark")   # no palette: unchanged
+
+    def test_polish_rejects_a_run_on_sentence(self):
+        from avp import polish
+        from avp.models import Script, Segment
+        s = Script(title="T", segments=[Segment(index=1, narration="A line of eleven words that is long enough for the test.")])
+        run_on = " ".join(["word"] * 27) + "."
+        self.assertIn("run-on", polish.apply(s, {"segments": [{"index": 1, "narration": run_on}]})[1])

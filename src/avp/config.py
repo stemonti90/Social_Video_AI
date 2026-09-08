@@ -90,6 +90,10 @@ class TTSConfig:
     chatterbox_ref: str | None = None   # path to a 5-10s reference wav to clone a voice
     device: str = "mps"          # Apple Silicon GPU
     speed: float = 1.0           # Kokoro speech rate; <1 = slower/less rushed (IT auto-eases to 0.94)
+    # Silence inserted by the synthesiser after a full stop and after an em dash / semicolon: the pauses
+    # are part of the message (tts.breath_units). 0 = the model's own minimal pauses.
+    sentence_pause: float = 0.35
+    clause_pause: float = 0.22
 
 
 @dataclass
@@ -110,10 +114,13 @@ class VideoConfig:
     music_mood: str = "ethereal"   # auto (classify from script tone) | ethereal | cinematic | dark | tense | emotional | documentary
     music_steps: int = 100         # Stable Audio diffusion steps (higher = better, slower)
     music_seconds: float = 45.0    # generated bed length (Stable Audio Open max ≈47s; looped to fit)
+    # Moods the auto-classifier may choose. "dark" and "tense" work against a wonder-tone channel (the
+    # word "void" alone used to pick "dark"); they map to ethereal / cinematic unless listed here.
+    music_palette: list[str] = field(default_factory=lambda: ["ethereal", "documentary", "emotional", "cinematic"])
     ken_burns: bool = True
     crf: int = 20
     transition: float = 0.4      # crossfade seconds between clips (0 = hard cut)
-    segment_gap: float = 0.12    # short breath between segments (not after the last → no dead air)
+    segment_gap: float = 0.45    # breath between segments — longer than any pause inside one (was 0.12: shorter than a comma)
     trim_silence: bool = True    # edge-trim each segment's TTS silence (continuous narration)
     loudness_lufs: float = -14.0  # EBU R128 normalization target (0 = disable)
     prefer_video: bool = True    # use NASA *video* clips when available, else stills + Ken Burns
