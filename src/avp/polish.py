@@ -136,6 +136,10 @@ def apply(script: Script, data: dict) -> tuple[Script | None, str]:
     bridge = " ".join(str(data.get("cta_bridge") or "").split())
     if _words(bridge) > 22:              # a two-sentence bridge made the Moon's CTA 14.9 s and the video 63 s
         return None, f"bridge too long ({_words(bridge)} words)"
+    imperial = re.compile(r"\b(inch(es)?|miles?|feet|foot|yards?|pounds?|fahrenheit)\b|°F", re.I)
+    for x in new_lines + [bridge]:
+        if imperial.search(x):                # the audience reads metric; "a four-inch telescope" slipped through
+            return None, f"imperial unit in {x[:40]!r}"
     probe = {"title": title or script.title,
              "segments": [{"narration": x} for x in new_lines],
              "cta_bridge": bridge or script.cta_bridge}

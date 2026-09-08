@@ -3908,6 +3908,16 @@ class PolishInTheChannelsVoice(unittest.TestCase):
             {"index": 1, "narration": "There is a glacier on Pluto made of the gas you breathe."},
             {"index": 2, "narration": "This frozen river moves centimetres a year in the deep cold."}]})[1])
 
+    def test_imperial_units_are_rejected(self):
+        from avp import polish
+        s = self._script()
+        ok1 = "There is a glacier on Pluto made of the gas you breathe."
+        ok2 = "At minus 230 degrees that nitrogen is solid, yet it creeps downhill."
+        self.assertIn("imperial", polish.apply(s, {"segments": [{"index": 1, "narration": ok1}, {"index": 2, "narration": ok2}],
+                                                   "cta_bridge": "Through a four-inch telescope, watch Mars."})[1])
+        self.assertIn("imperial", polish.apply(s, {"segments": [{"index": 1, "narration": ok1},
+                                                                {"index": 2, "narration": "Dust climbs forty miles into the sky, then settles."}]})[1])
+
     def test_run_is_fail_soft_and_off_without_a_key(self):
         from types import SimpleNamespace
         from avp import polish
