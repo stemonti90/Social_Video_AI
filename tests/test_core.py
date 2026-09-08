@@ -4197,3 +4197,29 @@ class NothingShipsWithoutTheEnding(unittest.TestCase):
         src = inspect.getsource(stages._segment_sources)
         self.assertIn("render_endcard(primary, cfg.funnel, cfg.video)", src)
         self.assertLess(src.index('if seg.kind == "cta"'), src.index("if not seg.footage:"))
+
+
+class TikTokDailyCapGoesToARetryQueue(unittest.TestCase):
+    """TikTok allows 15 posts per rolling 24 h; the 16th approved video must not be lost."""
+
+    def test_a_cap_error_queues_the_slug_once(self):
+        import tempfile
+        from pathlib import Path
+        from types import SimpleNamespace
+        from avp import publish
+        with tempfile.TemporaryDirectory() as d:
+            cfg = SimpleNamespace(paths=SimpleNamespace(projects_dir=d), publish=SimpleNamespace(via={"tiktok": "uploadpost"}))
+            root = Path(d) / "my-video"; root.mkdir()
+            proj = SimpleNamespace(root=root)
+            def boom(*a, **k): raise RuntimeError("Upload-Post/tiktok: You have reached the daily posting cap on tiktok (15 posts per 24 h)")
+            with mock.patch("avp.social.uploadpost.post", boom):
+                plan = publish._publish_native([{"platform": "tiktok", "caption": "c"}], root / "v.mp4", {}, cfg, False, proj)
+                publish._publish_native([{"platform": "tiktok", "caption": "c"}], root / "v.mp4", {}, cfg, False, proj)
+            self.assertFalse(plan[0]["posted"])
+            q = Path(d) / "_auto" / "tiktok_retry.txt"
+            self.assertEqual(q.read_text().split(), ["my-video"])          # queued once, not twice
+
+    def test_the_backfill_drains_the_retry_queue_first(self):
+        src = Path(__file__).resolve().parents[1].joinpath("deploy/auto/backfill.sh").read_text()
+        self.assertLess(src.index("tiktok_retry.txt"), src.index("no rebuild queue"))
+        self.assertIn("posting cap", src)

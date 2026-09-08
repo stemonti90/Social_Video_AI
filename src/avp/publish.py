@@ -26,6 +26,7 @@ API contract (verified against https://docs.postiz.com/public-api, 2026-06):
 from __future__ import annotations
 
 import json
+import re
 import os
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
@@ -175,6 +176,21 @@ def _discover(client: PostizClient) -> dict[str, str]:
     return out
 
 
+def _retry_queue_path(cfg: Config) -> Path:
+    return Path(cfg.paths.projects_dir).expanduser() / "_auto" / "tiktok_retry.txt"
+
+
+def _queue_tiktok_retry(project: VideoProject, cfg: Config) -> None:
+    q = _retry_queue_path(cfg)
+    q.parent.mkdir(parents=True, exist_ok=True)
+    slug = project.root.name
+    lines = [x.strip() for x in q.read_text().splitlines()] if q.exists() else []
+    if slug not in lines:
+        with q.open("a") as fh:
+            fh.write(slug + "\n")
+    log.warning("TikTok daily cap: %s queued for retry (%s)", slug, q)
+
+
 def _publish_native(plan: list[dict], video: Path, meta: dict, cfg: Config,
                     disclose_ai: bool, project: VideoProject) -> list[dict]:
     """Post directly to each platform. One dead platform must not take the others down with it — a
@@ -196,6 +212,10 @@ def _publish_native(plan: list[dict], video: Path, meta: dict, cfg: Config,
             it["posted"] = False
             it["error"] = str(e)
             log.error("Post to %s failed: %s", plat, e)
+            if plat == "tiktok" and re.search(r"posting cap|rate.?limit|too many", str(e), re.I):
+                # TikTok allows 15 posts per rolling 24 h. The video is good and approved; it goes to a
+                # retry queue that the backfill agent drains at its next slot, instead of being lost.
+                _queue_tiktok_retry(project, cfg)
     (project.root / "publish_plan.json").write_text(json.dumps(plan, indent=2, ensure_ascii=False))
     ok = [i["platform"] for i in plan if i.get("posted")]
     log.info("Published to %s", ", ".join(ok) if ok else "nothing")

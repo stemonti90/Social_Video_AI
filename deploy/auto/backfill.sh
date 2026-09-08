@@ -29,9 +29,26 @@ mkdir -p "$AUTO"
 exec >>"$AUTO/backfill.log" 2>&1
 echo "=== $(date '+%F %T') backfill run ==="
 
-[ -f "$QUEUE" ] || { echo "no queue file ($QUEUE) — nothing to do"; exit 0; }
 if ! mkdir "$LOCK" 2>/dev/null; then echo "another backfill is running ($LOCK) — skipping this slot"; exit 0; fi
 trap 'rmdir "$LOCK" 2>/dev/null' EXIT
+
+# 1) TikTok retries first: videos that were approved but hit the 15-posts/24h cap. The file is
+#    cleared before posting; a publish that hits the cap again re-queues its slug by itself.
+RETRY="$AUTO/tiktok_retry.txt"
+if [ -s "$RETRY" ]; then
+  PENDING="$(grep -v '^\s*#' "$RETRY" | grep -v '^\s*$' || true)"; : > "$RETRY"
+  CAF=""; command -v caffeinate >/dev/null 2>&1 && CAF="caffeinate -i -m -s"
+  echo "$PENDING" | while read -r rs; do
+    [ -n "$rs" ] || continue
+    echo "--- tiktok retry: $rs $(date '+%T')"
+    OUT="$($CAF "$ROOT/.venv/bin/avp" publish "$rs" --go --platforms tiktok --config "$ROOT/config.yaml" 2>&1)"; echo "$OUT" | tail -3
+    if echo "$OUT" | grep -q "Published to tiktok"; then echo "$(date '+%T') $rs: tiktok retry published" >>"$DONE"
+    elif echo "$OUT" | grep -qi "posting cap"; then echo "cap still in force — the rest stays queued"; break
+    else echo "$(date '+%T') $rs: tiktok retry FAILED (not a cap error) — dropped" >>"$DONE"; fi
+  done
+fi
+
+[ -f "$QUEUE" ] || { echo "no rebuild queue ($QUEUE) — nothing else to do"; exit 0; }
 
 PY="$ROOT/.venv/bin/python"
 SLUG="$("$PY" - "$QUEUE" <<'PY'
