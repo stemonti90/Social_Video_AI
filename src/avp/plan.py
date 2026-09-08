@@ -26,8 +26,9 @@ def _projects_of(cfg, day: date) -> list[Path]:
     root = Path(cfg.paths.projects_dir).expanduser()
     picked: dict[str, float] = {}
     for man in root.glob("*/manifest.json"):
-        try:
-            created = datetime.fromtimestamp(man.parent.stat().st_ctime)
+        try:                                  # birth time, not ctime: a re-assembled old video is not today's
+            st = man.stat()
+            created = datetime.fromtimestamp(getattr(st, "st_birthtime", st.st_mtime))
         except OSError:
             continue
         if created.date() == day:
