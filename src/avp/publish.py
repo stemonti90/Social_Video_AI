@@ -232,6 +232,12 @@ def stage_publish(project: VideoProject, cfg: Config, go: bool = False,
     for it in plan:
         log.info("[%s] %s", it["platform"], (it["caption"][:90] or "(no caption)"))
 
+    if go:                                  # the machine's checklist, and a hard gate (see avp/qa.py)
+        from . import qa
+        problems = qa.check(project, cfg, platforms)
+        if problems:
+            raise RuntimeError("QA: video NOT approved for publishing — " + "; ".join(problems))
+        log.info("QA: approved (%s)", ", ".join(platforms or ["instagram", "tiktok"]))
     if not go:
         how = ("connect the accounts with `avp connect <platform>`"
                if (cfg.publish.backend or "native").lower() == "native" else "configure Postiz")

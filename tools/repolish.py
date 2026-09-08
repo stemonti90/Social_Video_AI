@@ -35,6 +35,7 @@ def main(slug: str) -> int:
     script = stages.load_script(project)
     topic = project.manifest.data.get("topic") or script.topic or script.title
     before = {s.index: s.narration for s in script.segments}
+    old_cta = next((s for s in script.segments if s.kind == "cta"), None)  # keeps its endcard picture
     script.segments = [s for s in script.segments if s.kind != "cta"]      # the CTA is re-composed below
     facts = brief.build(topic, cfg, out_dir=project.root)
     new = polish.run(script, facts, cfg, out_dir=project.root)
@@ -45,7 +46,8 @@ def main(slug: str) -> int:
         log.info("fact-check after polish: %d wrong, %d unsure", len(wrong), len(rep.findings) - len(wrong))
     if cfg.funnel.enabled:
         new.segments.append(Segment(index=len(new.segments) + 1, narration=stages._cta_narration(new, cfg),
-                                    visual="App endcard", keywords=[], kind="cta"))
+                                    visual="App endcard", keywords=[], kind="cta",
+                                    footage=old_cta.footage if old_cta else None))
     project.script_json.write_text(stages._json(new.to_dict()))
     stages.emit_script_md(new, project.script_md)
     project.manifest.data["title"] = new.title

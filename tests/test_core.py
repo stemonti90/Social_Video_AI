@@ -1824,7 +1824,8 @@ class NativePublishDispatch(unittest.TestCase):
                 return {"post_id": "ig1"}
 
             with mock.patch("avp.social.post", side_effect=fake_post):
-                plan = publish.stage_publish(proj, cfg, go=True)
+                with mock.patch("avp.qa.check", lambda *a, **k: []):   # QA is tested on its own; here the file does not exist
+                    plan = publish.stage_publish(proj, cfg, go=True)
             # the outcome is written back, so a scheduled run leaves an auditable record
             saved = json.loads((proj.root / "publish_plan.json").read_text())
         by = {p["platform"]: p for p in plan}
@@ -4149,3 +4150,50 @@ class TheSheetIsAuditedFirst(unittest.TestCase):
         from avp.models import Script, Segment
         s = Script(title="T", segments=[Segment(index=1, narration="A line of about ten words to compare against here.")])
         self.assertIn("number", polish.apply(s, {"segments": [{"index": 1, "narration": "A gold veil a hundred atoms thick catches the light."}]})[1])
+
+
+class NothingShipsWithoutTheEnding(unittest.TestCase):
+    """Seven back-catalogue videos and the James Webb one went out with a black tail instead of the
+    AstroStackerPro endcard (7-8/9). The QA gate looks at the finished file before publish --go."""
+
+    def test_a_black_or_photo_tail_is_not_the_endcard(self):
+        from PIL import Image
+        from avp import qa
+        card = Image.new("L", (270, 480), 25)
+        for x in range(90, 180):
+            for y in range(180, 300):
+                card.putpixel((x, y), 240)                  # a bright block like the button/chip
+        black = Image.new("L", (270, 480), 0)
+        self.assertTrue(qa.frames_match(card, card)[0])
+        self.assertFalse(qa.frames_match(black, card)[0])
+        photo = Image.effect_noise((270, 480), 80)
+        self.assertFalse(qa.frames_match(photo, card)[0])
+
+    def test_watermark_contrast_reads_translucent_text_on_any_background(self):
+        from PIL import Image, ImageDraw
+        from avp import qa
+        wm = Image.new("RGBA", (300, 60), (0, 0, 0, 0))
+        ImageDraw.Draw(wm).rectangle([20, 15, 280, 45], fill=(255, 255, 255, 200))   # "text" block
+        for bg in (10, 120, 200):                             # night sky, grey rock, bright desert
+            frame = Image.new("L", (1080, 1920), bg)
+            frame.paste(Image.new("L", (300, 60), min(255, bg + 60)).crop((0, 0, 300, 60)), (700, 144))
+            # only the text pixels are brightened, as an alpha-composited watermark does
+            region = frame.crop((700, 144, 1000, 204))
+            plate = Image.new("L", (300, 60), bg)
+            plate.paste(region, (0, 0), wm.split()[-1].point(lambda a: 255 if a > 140 else 0))
+            frame.paste(plate, (700, 144))
+            self.assertGreaterEqual(qa.watermark_contrast(frame, wm, 700, 144), 12.0, bg)
+        plain = Image.new("L", (1080, 1920), 120)
+        self.assertLess(qa.watermark_contrast(plain, wm, 700, 144), 12.0)
+
+    def test_publish_go_is_gated_by_qa(self):
+        from avp import publish
+        src = inspect.getsource(publish.stage_publish)
+        self.assertLess(src.index("qa.check(project, cfg, platforms)"), src.index("if not go:"))
+        self.assertIn("NOT approved", src)
+
+    def test_the_cta_never_falls_through_to_black(self):
+        from avp import stages
+        src = inspect.getsource(stages._segment_sources)
+        self.assertIn("render_endcard(primary, cfg.funnel, cfg.video)", src)
+        self.assertLess(src.index('if seg.kind == "cta"'), src.index("if not seg.footage:"))

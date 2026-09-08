@@ -55,6 +55,7 @@ def _build_parser() -> argparse.ArgumentParser:
         ("captions", "generate karaoke captions"),
         ("assemble", "render the final mp4"),
         ("metadata", "generate platform titles/descriptions/hashtags"),
+        ("qa", "pre-publish checklist on the finished mp4 (endcard, watermark, format, captions)"),
     ]:
         s = sub.add_parser(name, parents=[common], help=helptext)
         s.add_argument("slug")
@@ -339,6 +340,9 @@ def main(argv: list[str] | None = None) -> int:
         elif args.cmd == "metadata":
             stages.stage_metadata(project, cfg)
             print(f"📋 {project.root / 'metadata.md'}")
+        elif args.cmd == "qa":
+            from . import qa
+            print(qa.report(project, cfg))
         elif args.cmd == "publish":
             from . import publish as publish_mod
             publish_mod.stage_publish(project, cfg, go=args.go, platforms=args.platforms, when=args.at)

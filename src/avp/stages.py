@@ -388,7 +388,7 @@ MIN_CARD_SECONDS = 1.6     # below this the card is a flash, not something you c
 MIN_BRIDGE_SECONDS = 1.0   # the bridge keeps at least this much of its own picture
 
 
-def _segment_sources(project: VideoProject, seg, last_content: Path | None = None) -> list[Path]:
+def _segment_sources(project: VideoProject, seg, last_content: Path | None = None, cfg: Config | None = None) -> list[Path]:
     """All on-screen visuals for a segment, in play order: the primary (seg.footage) plus any ranked
     runners-up the generator kept (NN_2.png, NN_3.png, …). Splitting a ~10s segment across them halves
     the shot length — one still per segment read as slow.
@@ -398,11 +398,21 @@ def _segment_sources(project: VideoProject, seg, last_content: Path | None = Non
     still going — the card became a wall the viewer waited out. So the bridge plays over the last
     content picture, still inside the story it refers to, and the card arrives only for the closing
     beat. `_cta_split` gives it a fixed short slice rather than an equal share."""
+    if seg.kind == "cta":
+        # The official ending. Seven back-catalogue videos and the James Webb one went out with a BLACK
+        # tail (7-8/9): a re-composed CTA segment had lost its `footage` and this function returned []
+        # → black still. The card is the one picture that must never be missing, so it is rendered
+        # here when absent instead of falling through to black.
+        primary = project.footage_dir / (seg.footage or f"{seg.index:02d}.png")
+        if (not seg.footage or not primary.exists()) and cfg is not None:
+            project.footage_dir.mkdir(parents=True, exist_ok=True)
+            captions_mod.render_endcard(primary, cfg.funnel, cfg.video)
+            seg.footage = primary.name
+            log.warning("CTA segment %d had no endcard on disk — rendered %s", seg.index, primary.name)
+        return [last_content, primary] if last_content and last_content.exists() else [primary]
     if not seg.footage:
         return []
     primary = project.footage_dir / seg.footage
-    if seg.kind == "cta":
-        return [last_content, primary] if last_content and last_content.exists() else [primary]
     if primary.suffix.lower() not in (".png", ".jpg", ".jpeg"):
         return [primary]                     # video clips are never split
     extras = sorted(p for p in project.footage_dir.glob(f"{seg.index:02d}_[0-9]*")
@@ -604,7 +614,7 @@ def _assemble_engine(project: VideoProject, cfg: Config, script: Script, eng: st
             continue
         content = ffmpeg.ffprobe_duration(seg_audio) + gap     # on-screen time incl. trailing gap
         render_dur = content + trans                           # extra tail for the crossfade
-        srcs = [p for p in _segment_sources(project, seg, last_content) if p and p.exists()]
+        srcs = [p for p in _segment_sources(project, seg, last_content, cfg=cfg) if p and p.exists()]
         if not srcs:
             srcs = [ffmpeg.black_still(work / f"black_{seg.index:02d}.png",
                                        cfg.video.width, cfg.video.height)]
