@@ -252,4 +252,9 @@ def run_daily(cfg: Config, count: int | None = None, dry_run: bool = False,
             entry["built"] = False
             entry["error"] = str(e)
         report.append(entry)
+        try:                                   # the day's plan is derived from what was actually made
+            from . import plan as plan_mod
+            plan_mod.build(cfg)
+        except Exception as e:  # noqa: BLE001
+            log.debug("plan not refreshed (%s)", e)
     return report

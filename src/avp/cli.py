@@ -84,6 +84,8 @@ def _build_parser() -> argparse.ArgumentParser:
                         help="metrics: --snapshot saves today's numbers; default writes the period report (Markdown)")
     rp.add_argument("--snapshot", action="store_true", help="collect and save today's snapshot only")
     rp.add_argument("--days", type=int, default=7, help="window of the report in days (default 7)")
+    pl = sub.add_parser("plan", parents=[common], help="the day's plan: one block of 13 fields per video (Markdown)")
+    pl.add_argument("--date", default=None, help="YYYY-MM-DD (default today)")
 
     dl = sub.add_parser("delete", parents=[common],
                         help="permanently delete a project and its folder")
@@ -304,6 +306,13 @@ def main(argv: list[str] | None = None) -> int:
         report = auto_mod.run_daily(cfg, count=args.count, dry_run=args.dry_run,
                                     publish=not args.no_publish, config_path=args.config)
         print(json.dumps(report, indent=2, ensure_ascii=False))
+        return 0
+
+    if args.cmd == "plan":
+        from datetime import date as _date
+        from . import plan
+        day = _date.fromisoformat(args.date) if args.date else _date.today()
+        print(plan.build(cfg, day))
         return 0
 
     if args.cmd == "report":                # measure: a snapshot, or the period report (no project slug)

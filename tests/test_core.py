@@ -4346,3 +4346,33 @@ class MeasureWhatWasPublished(unittest.TestCase):
         from avp import publish
         src = inspect.getsource(publish._publish_native)
         self.assertIn("analytics.record_post(cfg, project.root.name, lane, plat", src)
+
+
+class TheDailyPlanIsDerivedFromTheVideos(unittest.TestCase):
+    def test_thirteen_fields_per_video(self):
+        import json as _json, tempfile
+        from datetime import date
+        from types import SimpleNamespace
+        from avp import plan
+        with tempfile.TemporaryDirectory() as d:
+            root = Path(d) / "my-video"; root.mkdir()
+            (root / "manifest.json").write_text(_json.dumps({"lane": "education", "topic": "Stacking"}))
+            (root / "script.json").write_text(_json.dumps({"title": "Why Stacking Works", "topic": "Stacking", "segments": [
+                {"index": 1, "narration": "One shot is noise. Fifty shots are a picture.", "visual": "phone on a tripod", "duration": 6.0},
+                {"index": 2, "narration": "Stack them and the noise averages out.", "visual": "stack of frames", "duration": 6.0},
+                {"index": 3, "narration": "Try it tonight. Get App — link in bio.", "visual": "App endcard", "duration": 8.0, "kind": "cta"}]}))
+            (root / "metadata.json").write_text(_json.dumps({"instagram": {"caption": "A hook.\nSave this.\n\n#astrophotography #astrostackerpro"},
+                                                              "tiktok": {"caption": "A hook. Save it. #LearnOnTikTok #astrostackerpro"}}))
+            (Path(d) / "_auto").mkdir()
+            (Path(d) / "_auto" / "posts.jsonl").write_text(_json.dumps({"slug": "my-video", "lane": "education", "platform": "instagram", "id": "1",
+                                                                          "at": "2026-09-08T06:02:00+00:00"}) + "\n")
+            cfg = SimpleNamespace(paths=SimpleNamespace(projects_dir=d))
+            text = plan.build(cfg, date(2026, 9, 8), out_path=Path(d) / "plan.md")
+        for field in ("Titolo/idea", "Obiettivo", "Hook", "Script", "Struttura visuale", "Durata", "CTA",
+                      "Caption Instagram", "Caption TikTok", "Hashtag Instagram", "Hashtag TikTok", "Orario Instagram", "Orario TikTok"):
+            self.assertIn(f"**{field}**", text, field)
+        self.assertIn("Value / Education", text)
+        self.assertIn("One shot is noise.", text)
+        self.assertIn("**Durata**: 20 s", text)
+        self.assertIn("#astrophotography #astrostackerpro", text)
+        self.assertIn("**Orario TikTok**: programmato", text)
