@@ -105,6 +105,11 @@ makes the narration worse, not better — it is harder to say, harder to hear, a
 flag a figure when it is wrong by an order of magnitude, in the wrong unit, or invented outright.
 - When you flag something, supply a fix that is TRUE and NO LONGER than the original — count the \
 words. The line is spoken aloud and the video's timing is built from its length.
+- FIGURATIVE LANGUAGE IS NOT AN ERROR. "A lonely sentinel", "a veil of gold", "the mirror must freeze at
+40 kelvin", "braced against the void" are the channel's voice, not claims to audit. Flag a line ONLY
+when a FACT in it is false — a number, a mechanism, a material, a tense, a comparison. If your fix would
+change the style and leave every fact as it was, emit NO finding: a rewrite that only flattens the
+sentence makes the video worse and costs the channel its voice. Never return a fix identical to the claim.
 - If the script is clean, return an empty list. Do not invent problems to look useful.
 - THINK BEFORE YOU ANSWER, NOT INSIDE THE ANSWER. The "why" field is a finished conclusion in one \
 sentence, never a scratchpad. If working through a claim leads you to decide it is acceptable after \
@@ -373,6 +378,10 @@ def _visual_ok(fix: str, original: str) -> tuple[bool, str]:
     return True, ""
 
 
+_STYLE_ONLY = re.compile(r"\b(subjective|not a factual error|figurative|metaphor|wording|phrasing|"
+                         r"calling (it|this|them|the \w+) ['\"]|is misleading but|dramatic|poetic)\b", re.I)
+
+
 def apply(script: Script, findings: list[Finding]) -> int:
     """Rewrite the narration for findings the checker is CONFIDENT about. Returns how many landed.
 
@@ -384,6 +393,17 @@ def apply(script: Script, findings: list[Finding]) -> int:
     applied = 0
     for f in findings:
         if f.verdict != "wrong" or not f.fix or not f.claim:
+            continue
+        # Style is not a fact. The checker returned "wrong" for "a lonely sentinel" and for "freeze at"
+        # with a fix identical to the claim, and the polish's voice was flattened line by line. A fix
+        # that changes nothing, or a "why" that talks about phrasing rather than a fact, is not applied.
+        if " ".join(f.fix.split()).rstrip(".") == " ".join(f.claim.split()).rstrip("."):
+            log.info("Fact-check: segment %s — fix identical to the claim, ignored", f.segment)
+            f.verdict = "unsure"
+            continue
+        if _STYLE_ONLY.search(f.why or ""):
+            log.info("Fact-check: segment %s — stylistic remark, not applied: %s", f.segment, (f.why or "")[:80])
+            f.verdict = "unsure"
             continue
         seg = by_index.get(f.segment)
         if seg is None:

@@ -71,6 +71,53 @@ def render(data: dict) -> str:
     return "\n".join(lines)
 
 
+AUDIT_USER = """A model wrote these facts about the topic "{topic}" for a science video. Audit them as a ruthless
+fact-checker: for EACH fact return "ok" if it is well-established and correctly stated, "wrong" if any
+number, mechanism, comparison or attribution in it is false or misleading (e.g. "silver absorbs infrared"
+— silver reflects it), "unsure" if it cannot be settled from standard references. One line of "why".
+Return JSON exactly: {{"items": [{{"id": 1, "verdict": "ok|wrong|unsure", "why": "..."}}, ...]}}.
+
+Facts:
+{facts}"""
+
+
+def audit(data: dict, topic: str, key: str, model: str) -> dict:
+    """Drop the facts the auditor calls wrong or unsure. The sheet becomes the writer's only fact base,
+    so an error on it is an error in the video: the JWST sheet said silver would absorb infrared (it
+    reflects it), the polish repeated it, the fact-check caught it — one call earlier is cheaper."""
+    facts = [str(f).strip() for f in (data.get("facts") or []) if str(f).strip()]
+    if len(facts) < 2:
+        return data
+    rows = json.dumps([{"id": i + 1, "fact": f} for i, f in enumerate(facts)], ensure_ascii=False, indent=1)
+    r = requests.post(
+        factcheck.DEEPSEEK_URL,
+        headers={"Authorization": f"Bearer {key}", "Content-Type": "application/json"},
+        json={"model": model,
+              "messages": [{"role": "system", "content": factcheck.SYSTEM},
+                           {"role": "user", "content": AUDIT_USER.format(topic=topic, facts=rows)}],
+              "temperature": 0.0, "response_format": {"type": "json_object"}},
+        timeout=getattr(factcheck, "TIMEOUT", (30, 180)),
+    )
+    if r.status_code >= 400:
+        raise RuntimeError(f"{r.status_code}: {(r.text or '')[:200]}")
+    verdicts = factcheck._extract_json(r.json()["choices"][0]["message"]["content"])
+    bad: dict[int, str] = {}
+    for it in (verdicts.get("items") or []) if isinstance(verdicts, dict) else []:
+        try:
+            i = int(it.get("id"))
+        except (TypeError, ValueError, AttributeError):
+            continue
+        if str(it.get("verdict", "ok")).strip().lower() in ("wrong", "unsure") and 1 <= i <= len(facts):
+            bad[i] = str(it.get("why", "")).strip()
+    if bad and len(facts) - len(bad) >= 4:              # never audit the sheet down to nothing
+        for i, why in sorted(bad.items()):
+            log.warning("Fact brief: dropped fact %d — %s (%s)", i, facts[i - 1][:80], why[:100])
+        data["facts"] = [f for i, f in enumerate(facts, 1) if i not in bad]
+        data["dropped"] = [{"fact": facts[i - 1], "why": why} for i, why in sorted(bad.items())]
+    data["audited"] = True
+    return data
+
+
 def build(topic: str, cfg, out_dir: Path | None = None) -> str | None:
     """The fact sheet for `topic`, or None when the brief is off, unconfigured or failed.
 
@@ -89,9 +136,21 @@ def build(topic: str, cfg, out_dir: Path | None = None) -> str | None:
     if cache and cache.exists():
         try:
             old = json.loads(cache.read_text())
-            if old.get("topic") == topic and render(old):
+            if old.get("topic") == topic and render(old) and old.get("audited"):
                 log.info("Fact brief: reusing %s", cache)
                 return render(old)
+            if old.get("topic") == topic and render(old):      # a sheet from before the audit existed
+                try:
+                    model = (str(getattr(cfg.script, "brief_model", "") or "").strip()
+                             or str(getattr(cfg.script, "factcheck_model", "deepseek-chat") or "deepseek-chat"))
+                    old = audit(old, topic, key, model)
+                    (out_dir / "brief.json").write_text(json.dumps(old, indent=2, ensure_ascii=False))
+                    (out_dir / "brief.md").write_text(f"# Fact sheet — {topic}\n\n{render(old)}\n")
+                    log.info("Fact brief: audited the cached sheet (%d facts kept)", len(old.get("facts") or []))
+                    return render(old)
+                except Exception as e:  # noqa: BLE001
+                    log.warning("Fact brief audit failed (%s) — using the cached sheet as is.", e)
+                    return render(old)
         except Exception:  # noqa: BLE001 — a bad cache is just re-researched
             pass
     model = (str(getattr(cfg.script, "brief_model", "") or "").strip()
@@ -113,6 +172,11 @@ def build(topic: str, cfg, out_dir: Path | None = None) -> str | None:
     except Exception as e:  # noqa: BLE001 — the brief is an aid, never a gate
         log.warning("Fact brief failed (%s) — the writer proceeds without a sheet.", e)
         return None
+    if isinstance(data, dict) and data.get("facts"):
+        try:                              # the sheet is audited before it becomes the only fact base
+            data = audit(data, topic, key, model)
+        except Exception as e:  # noqa: BLE001 — an unaudited sheet is still better than none
+            log.warning("Fact brief audit failed (%s) — using the sheet as is.", e)
     text = render(data if isinstance(data, dict) else {})
     if not text:
         log.warning("Fact brief returned no facts — the writer proceeds without a sheet.")

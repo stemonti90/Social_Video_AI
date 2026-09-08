@@ -4069,3 +4069,83 @@ class PausesArePartOfTheMessage(unittest.TestCase):
         s = Script(title="T", segments=[Segment(index=1, narration="A line of eleven words that is long enough for the test.")])
         run_on = " ".join(["word"] * 27) + "."
         self.assertIn("run-on", polish.apply(s, {"segments": [{"index": 1, "narration": run_on}]})[1])
+
+
+class StyleIsNotAFact(unittest.TestCase):
+    """The checker flattened the polished JWST script line by line: 'lonely sentinel' → 'sentinel',
+    'freeze at' → 'be cooled to', and one fix identical to its claim. Style-only findings are not applied."""
+
+    def _script(self):
+        from avp.models import Script, Segment
+        return Script(title="T", segments=[
+            Segment(index=1, narration="A lonely sentinel orbits 1.5 million kilometres from home."),
+            Segment(index=2, narration="To work, the mirror must freeze at 40 degrees above absolute zero."),
+            Segment(index=3, narration="A gold veil a hundred atoms thick catches the oldest light.")])
+
+    def test_identical_and_stylistic_fixes_are_not_applied_but_real_errors_are(self):
+        from avp import factcheck
+        s = self._script()
+        findings = [
+            factcheck.Finding(segment=1, claim="A lonely sentinel orbits 1.5 million kilometres from home.", verdict="wrong",
+                              field="narration", why="calling it 'lonely' is misleading as other spacecraft share L2",
+                              fix="A sentinel orbits 1.5 million kilometres from home."),
+            factcheck.Finding(segment=2, claim="To work, the mirror must freeze at 40 degrees above absolute zero.", verdict="wrong",
+                              field="narration", why="the phrasing 'freeze at' is misleading; it is cooled to that temperature",
+                              fix="To work, the mirror must freeze at 40 degrees above absolute zero."),
+            factcheck.Finding(segment=3, claim="a hundred atoms thick", verdict="wrong", field="narration",
+                              why="the coating is about 100 nanometres, hundreds of atoms, not a hundred",
+                              fix="a hundred nanometres thick"),
+        ]
+        n = factcheck.apply(s, findings)
+        self.assertEqual(n, 1)
+        self.assertIn("lonely", s.segments[0].narration)                 # voice kept
+        self.assertIn("freeze at", s.segments[1].narration)              # identical fix ignored
+        self.assertIn("a hundred nanometres thick", s.segments[2].narration)   # the real error fixed
+        self.assertEqual([f.verdict for f in findings[:2]], ["unsure", "unsure"])
+
+    def test_the_prompt_says_so(self):
+        from avp import factcheck
+        self.assertIn("FIGURATIVE LANGUAGE IS NOT AN ERROR", factcheck.SYSTEM)
+
+
+class TheSheetIsAuditedFirst(unittest.TestCase):
+    def test_wrong_facts_are_dropped_and_the_sheet_is_marked_audited(self):
+        import json as _json
+        from avp import brief
+
+        class R:
+            status_code = 200
+            text = ""
+            def json(self):
+                return {"choices": [{"message": {"content": _json.dumps({"items": [
+                    {"id": 1, "verdict": "ok", "why": ""}, {"id": 2, "verdict": "wrong", "why": "silver reflects infrared"},
+                    {"id": 3, "verdict": "ok", "why": ""}, {"id": 4, "verdict": "ok", "why": ""}, {"id": 5, "verdict": "ok", "why": ""}]})}}]}
+
+        data = {"facts": ["a", "silver absorbs infrared", "c", "d", "e"], "wonder": [], "avoid": []}
+        with mock.patch("avp.brief.requests.post", lambda *a, **k: R()):
+            out = brief.audit(data, "JWST mirrors", "k", "m")
+        self.assertEqual(out["facts"], ["a", "c", "d", "e"])
+        self.assertTrue(out["audited"])
+        self.assertEqual(out["dropped"][0]["fact"], "silver absorbs infrared")
+
+    def test_the_audit_never_empties_the_sheet(self):
+        import json as _json
+        from avp import brief
+
+        class R:
+            status_code = 200
+            text = ""
+            def json(self):
+                return {"choices": [{"message": {"content": _json.dumps({"items": [
+                    {"id": i, "verdict": "wrong", "why": "x"} for i in range(1, 6)]})}}]}
+        data = {"facts": ["a", "b", "c", "d", "e"]}
+        with mock.patch("avp.brief.requests.post", lambda *a, **k: R()):
+            out = brief.audit(data, "t", "k", "m")
+        self.assertEqual(len(out["facts"]), 5)          # fewer than 4 would remain → keep all, still marked audited
+        self.assertTrue(out["audited"])
+
+    def test_a_hook_on_a_spelled_out_number_is_rejected(self):
+        from avp import polish
+        from avp.models import Script, Segment
+        s = Script(title="T", segments=[Segment(index=1, narration="A line of about ten words to compare against here.")])
+        self.assertIn("number", polish.apply(s, {"segments": [{"index": 1, "narration": "A gold veil a hundred atoms thick catches the light."}]})[1])

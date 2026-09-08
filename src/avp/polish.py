@@ -118,8 +118,10 @@ def apply(script: Script, data: dict) -> tuple[Script | None, str]:
             return None, "empty narration"
         new_lines.append(line)
     import re
-    if re.search(r"\d", " ".join(new_lines[0].split()[:6])):
-        return None, "hook opens on a number"
+    head = " ".join(new_lines[0].split()[:6]).lower()
+    if re.search(r"\d", head) or re.search(r"\b(one|two|three|four|five|six|seven|eight|nine|ten|dozen|hundred|thousand|"
+                                            r"million|billion|trillion)\b", head):
+        return None, "hook opens on a number"          # "A gold veil a hundred atoms thick" is a measurement, not a hook
     for x in new_lines:
         if re.match(r"^(This|These|It|Its)\b", x):
             return None, f"explainer opener {x[:32]!r}"
