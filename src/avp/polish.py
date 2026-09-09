@@ -159,7 +159,8 @@ def apply(script: Script, data: dict) -> tuple[Script | None, str]:
     return out, "ok"
 
 
-def run(script: Script, facts: str | None, cfg, out_dir: Path | None = None) -> Script:
+def run(script: Script, facts: str | None, cfg, out_dir: Path | None = None,
+        lane_rules: str | None = None) -> Script:
     """The polished script, or the input unchanged when the pass is off, unconfigured or fails a guard."""
     mode = _mode(cfg)
     if mode == "off":
@@ -183,7 +184,7 @@ def run(script: Script, facts: str | None, cfg, out_dir: Path | None = None) -> 
         "FACT SHEET: none available — use ONLY facts already present in the current script."
     system = SYSTEM + "\n\n" + VOICE.format(
         morbid=", ".join(MORBID_WORDS[:24]) + ", …",
-        exemplars="; ".join(f'"{p}"' for p in EXEMPLAR_PHRASES[:6]))
+        exemplars="; ".join(f'"{p}"' for p in EXEMPLAR_PHRASES[:6])) + (lane_rules or "")
     user = USER.format(facts=facts_block, script=json.dumps(current, ensure_ascii=False, indent=1),
                        budgets=budgets, app=getattr(getattr(cfg, "funnel", None), "app_name", "the app"))
     note = ""

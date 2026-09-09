@@ -118,7 +118,7 @@ def audit(data: dict, topic: str, key: str, model: str) -> dict:
     return data
 
 
-def build(topic: str, cfg, out_dir: Path | None = None) -> str | None:
+def build(topic: str, cfg, out_dir: Path | None = None, focus: str | None = None) -> str | None:
     """The fact sheet for `topic`, or None when the brief is off, unconfigured or failed.
 
     `script.brief`: "auto" (default) = on whenever a fact-check key exists; "on" = required (warns
@@ -161,7 +161,7 @@ def build(topic: str, cfg, out_dir: Path | None = None) -> str | None:
             headers={"Authorization": f"Bearer {key}", "Content-Type": "application/json"},
             json={"model": model,
                   "messages": [{"role": "system", "content": SYSTEM},
-                               {"role": "user", "content": USER.format(topic=topic)}],
+                               {"role": "user", "content": USER.format(topic=topic) + (f"\n\n{focus}" if focus else "")}],
                   "temperature": 0.0,
                   "response_format": {"type": "json_object"}},
             timeout=getattr(factcheck, "TIMEOUT", (30, 180)),
