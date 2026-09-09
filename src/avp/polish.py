@@ -180,6 +180,10 @@ def apply(script: Script, data: dict, topic: str | None = None, facts: str | Non
             return None, f"imperial unit in {x[:40]!r}"
     if sheet_says_unseen(facts) and claims_visible(bridge):
         return None, "bridge claims the viewer can see what the sheet says they cannot"
+    from .llm import competitor_mentions
+    for x in new_lines + [bridge, title or ""]:
+        if (hit := competitor_mentions(x)):
+            return None, f"names another app ({hit[0]}) — say 'a camera app with manual focus'"
     probe = {"title": title or script.title,
              "segments": [{"narration": x} for x in new_lines],
              "cta_bridge": bridge or script.cta_bridge}

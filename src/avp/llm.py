@@ -423,6 +423,64 @@ def names_subject(text: str, topic: str) -> bool:
     return any((kw[:5] if len(kw) > 5 else kw) in low for kw in subject_keywords(topic))
 
 
+# Other apps and products a funnel video must never name (9/9: the polish wrote "Third-party apps like
+# ProCam or Open Camera let you set focus manually" in a video that ends on AstroStackerPro). The
+# channel's own app is named in the CTA only; everything else is "a camera app with manual focus".
+COMPETITOR_APPS = ("ProCam", "Open Camera", "Halide", "NightCap", "PhotoPills", "Stellarium", "SkySafari",
+                   "Star Walk", "SkyView", "Sky Guide", "DeepSkyCamera", "Camera FV-5", "Lightroom", "Snapseed",
+                   "Sequator", "Siril", "DeepSkyStacker", "Starry Landscape Stacker", "Affinity Photo", "Photoshop",
+                   "GIMP", "GCam", "Google Camera", "Spectre", "Slow Shutter", "Nightcap", "Astrospheric",
+                   "Stellarium Mobile", "PixInsight", "Luminar", "Darktable", "RawTherapee", "VSCO", "Filmic",
+                   "Moment", "Obscura", "Manual Camera", "Pro Camera", "Cinema FV-5", "ASIAIR")
+_COMPETITOR_RE = None
+_COMPETITOR_CS_RE = None
+# names that are also ordinary words: matched only with their exact capitalisation
+_AMBIGUOUS_APPS = {"Moment", "Spectre", "Obscura", "Manual Camera", "Pro Camera", "Slow Shutter", "GIMP", "Filmic", "Luminar"}
+_APPS_LIKE_RE = re.compile(r"\b(?:apps?|applicazion[ei]|software|programm[ai])\s+(?:like|such as|come|quali|tipo)\s+([A-Z][\w-]*)", re.I)
+
+
+def competitor_mentions(text: str) -> list[str]:
+    """Names of other apps/products in `text` — the list above plus the "apps like X" pattern."""
+    global _COMPETITOR_RE, _COMPETITOR_CS_RE
+    if _COMPETITOR_RE is None:
+        plain = sorted({n for n in COMPETITOR_APPS if n not in _AMBIGUOUS_APPS}, key=len, reverse=True)
+        exact = sorted(_AMBIGUOUS_APPS, key=len, reverse=True)
+        _COMPETITOR_RE = re.compile(r"(?<![\w#@])(" + "|".join(re.escape(n) for n in plain) + r")(?![\w])", re.I)
+        _COMPETITOR_CS_RE = re.compile(r"(?<![\w#@])(" + "|".join(re.escape(n) for n in exact) + r")(?![\w])")
+    found = [m.group(1) for m in _COMPETITOR_RE.finditer(text or "")]
+    found += [m.group(1) for m in _COMPETITOR_CS_RE.finditer(text or "")]
+    found += [m.group(1) for m in _APPS_LIKE_RE.finditer(text or "") if m.group(1).lower() not in ("astrostackerpro",)]
+    out: list[str] = []
+    for f in found:
+        if f.lower() not in {o.lower() for o in out}:
+            out.append(f)
+    return out
+
+
+def competitors_in_script(script) -> str | None:
+    """The first competitor name found in a script dict/object (narration, Italian card, bridge, title)."""
+    segs = script.get("segments", []) if isinstance(script, dict) else getattr(script, "segments", [])
+    texts = [script.get("title", "") if isinstance(script, dict) else getattr(script, "title", ""),
+             script.get("cta_bridge", "") if isinstance(script, dict) else getattr(script, "cta_bridge", "")]
+    for s in segs:
+        texts.append(s.get("narration", "") if isinstance(s, dict) else getattr(s, "narration", ""))
+        texts.append(s.get("italian", "") if isinstance(s, dict) else getattr(s, "italian", ""))
+    for t in texts:
+        hit = competitor_mentions(str(t or ""))
+        if hit:
+            return hit[0]
+    return None
+
+
+def _strip_competitors(caption: str) -> str:
+    """Drop every sentence of a caption that names another app; keep the rest."""
+    if not isinstance(caption, str) or not competitor_mentions(caption):
+        return caption
+    parts = re.split(r"(?<=[.!?])\s+", caption)
+    kept = [p for p in parts if not competitor_mentions(p)]
+    return " ".join(kept).strip()
+
+
 MORBID_WORDS = ("corpse", "cadaver", "dead", "dying", "died", "death", "kill", "killed", "murder",
                 "tomb", "grave", "graveyard", "autopsy", "hemorrhage", "haemorrhage", "bleed", "bleeding",
                 "wound", "torture", "suicide", "hell", "hellscape", "nightmare", "scream", "screaming",
@@ -967,7 +1025,7 @@ def _clean_metadata(data: dict, script_text: str = "", hashtag_bank: dict | None
     for plat in ("tiktok", "instagram"):
         d = data.get(plat)
         if isinstance(d, dict) and "caption" in d:
-            d["caption"] = _clean_text(_drop_filler(d["caption"]))
+            d["caption"] = _clean_text(_strip_competitors(_drop_filler(d["caption"])))
     _merge_instagram_hashtags(data)
     _ensure_brand_tag(data)
     if script_text:                     # the curated bank + validated narrow tags (avp/hashtags.py)

@@ -135,6 +135,9 @@ def check(project, cfg, platforms: list[str] | None = None) -> list[str]:
     if script and (mw := morbid_in_script(script)):
         problems.append(f"morbid word in the script: {mw!r}")
     problems += context_problems(script)
+    from .llm import competitor_mentions, competitors_in_script
+    if script and (app := competitors_in_script(script)):
+        problems.append(f"another app is named in the script: {app!r} — never")
     sub_lang = getattr(cfg.script, "subtitle_language", None)
     if sub_lang and sub_lang != cfg.script.language:
         subs = project.root / f"subtitles.{sub_lang}.json"
@@ -164,6 +167,8 @@ def check(project, cfg, platforms: list[str] | None = None) -> list[str]:
             tags = re.findall(r"#\w+", cap)
             if not cap:
                 problems.append(f"{plat}: caption missing")
+            elif (apps := competitor_mentions(cap)):
+                problems.append(f"{plat}: another app is named in the caption: {apps[0]!r}")
                 continue
             if "#astrostackerpro" not in [t.lower() for t in tags]:
                 problems.append(f"{plat}: brand hashtag missing")

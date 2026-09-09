@@ -48,6 +48,7 @@ def _build_parser() -> argparse.ArgumentParser:
     sc = sub.add_parser("script", parents=[common], help="(re)generate the script")
     sc.add_argument("slug")
     sc.add_argument("--topic", default=None)
+    sc.add_argument("--italian", action="store_true", help="regenerate ONLY the Italian script from the saved English")
 
     for name, helptext in [
         ("voice", "synthesize narration (TTS)"),
@@ -366,7 +367,10 @@ def main(argv: list[str] | None = None) -> int:
     setup_logging(level, project.log_file)
 
     try:
-        if args.cmd == "script":
+        if args.cmd == "script" and getattr(args, "italian", False):
+            stages.stage_italian(project, cfg)
+            print(f"📝 {project.script_md} — Italian regenerated; then: avp build {args.slug}")
+        elif args.cmd == "script":
             stages.stage_script(project, cfg, args.topic)
             print(f"📝 {project.script_md} — review, then: avp build {args.slug}")
         elif args.cmd == "voice":

@@ -5101,3 +5101,98 @@ class TheColdReaderJudgesTheEnglishToo(unittest.TestCase):
         self.assertTrue(out.segments[0].narration.startswith("Your phone camera cannot focus"))
         self.assertIn("THE HOOK IS TRUE", polish.VOICE)
         self.assertIn("NEVER name another app", polish.VOICE)                          # ProCam / Open Camera in a funnel video, 9/9
+
+
+class NeverAnotherApp(unittest.TestCase):
+    """The owner's rule (9/9): never name competitor apps. The polish wrote "Third-party apps like ProCam or
+    Open Camera" into a funnel video; now the writer, the Italian, the captions and QA all refuse it."""
+
+    def test_competitor_names_are_found_in_both_languages(self):
+        from avp.llm import competitor_mentions, competitors_in_script, _strip_competitors
+        self.assertEqual(competitor_mentions("Third-party apps like ProCam or Open Camera let you set focus manually."), ["ProCam", "Open Camera"])
+        self.assertEqual(competitor_mentions("App come Halide ti permettono la messa a fuoco manuale."), ["Halide"])
+        self.assertEqual(competitor_mentions("Get AstroStackerPro — link in bio. Use a camera app with manual focus."), [])
+        self.assertEqual(competitor_mentions("a gimpy tripod and a moment of calm"), [])          # whole words only
+        self.assertEqual(competitor_mentions("Shot with Moment and edited in GIMP."), ["Moment", "GIMP"])   # exact case for word-names
+        self.assertEqual(competitors_in_script({"title": "t", "segments": [{"narration": "ok", "italian": "Usa Stellarium per orientarti."}]}), "Stellarium")
+        self.assertIsNone(competitors_in_script({"title": "t", "segments": [{"narration": "ok", "italian": "Usa un\'app di mappe stellari."}]}))
+        self.assertEqual(_strip_competitors("Unlock the Milky Way. Apps like Halide help. Would you try this?"), "Unlock the Milky Way. Would you try this?")
+
+    def test_the_polish_rejects_a_line_that_names_another_app(self):
+        from avp import polish
+        s = Script(title="t", topic="How to focus a phone camera on stars", cta_bridge="You can photograph the Milky Way tonight.",
+                   segments=[Segment(index=1, narration="Your phone camera cannot focus on a star, because a star has no edges."),
+                             Segment(index=2, narration="Autofocus needs contrast, and a point of light offers none at all.")])
+        out, why = polish.apply(s, {"segments": [{"index": 1, "narration": "Your phone camera cannot focus on a star, because a star has no edges."},
+                                                 {"index": 2, "narration": "Third-party apps like ProCam let you set the focus by hand."}]})
+        self.assertIsNone(out)
+        self.assertIn("names another app (ProCam)", why)
+
+    def test_the_captions_cleaner_drops_the_sentence_and_qa_refuses_the_rest(self):
+        from avp.llm import _clean_metadata
+        out = _clean_metadata({"instagram": {"caption": "Focus your phone on the stars. Try Halide for manual focus. Would you? #space"},
+                               "tiktok": {"caption": "Stars without blur #space"}})
+        self.assertNotIn("Halide", out["instagram"]["caption"])
+        self.assertIn("Focus your phone on the stars.", out["instagram"]["caption"])
+        from avp import qa
+        src = inspect.getsource(qa.check)
+        self.assertIn("competitors_in_script(script)", src)
+        self.assertIn("competitor_mentions(cap)", src)
+
+    def test_the_italian_check_flags_a_competitor_and_the_editor_raises_the_bar(self):
+        from avp import italian
+        s = Script(title="t", topic="How to focus a phone camera on stars when autofocus fails",
+                   segments=[Segment(index=1, narration="Your phone searches for a surface that is not there: stars are single points."),
+                             Segment(index=2, narration="No manual focus? Lock onto a distant streetlight, then swing to the sky.")])
+        texts = {1: "Il tuo telefono cerca una superficie che non c\'è: le stelle sono punti singoli.",
+                 2: "Niente messa a fuoco manuale? Usa ProCam e aggancia un lampione lontano, poi ruota verso il cielo."}
+        en = {1: s.segments[0].narration, 2: s.segments[1].narration}
+
+        class B:
+            def chat(self, system, user, temperature=0.2):
+                if "caporedattore" in system:
+                    return {"items": [{"id": 1, "natural": False, "why": "letterale",
+                                       "better": "Il tuo telefono cerca una superficie che non esiste: le stelle sono semplici punti."},
+                                      {"id": 2, "natural": True}]}
+                if "Translate each Italian" in user:
+                    return {"items": [{"id": i, "text": t} for i, t in texts.items()]}
+                if "Decide whether the Italian says the same thing" in user:
+                    return {"items": [{"id": i, "same": True, "why": "ok"} for i in texts]}
+                if "correttore" in user:
+                    return {"items": [{"id": i, "ok": True} for i in texts]}
+                return {"subject_en": "phone focus on stars", "clear_by_card": 1, "unclear_cards": []}
+        with mock.patch("avp.italian.factcheck._judge", return_value=[]):
+            problems, notes = italian._check(texts, en, s, "FACTS", self._cfg(), B(), [1, 2])
+        self.assertEqual(texts[1], "Il tuo telefono cerca una superficie che non esiste: le stelle sono semplici punti.")   # the editor's card
+        self.assertTrue(any("redazione: scheda 1" in n for n in notes))
+        self.assertTrue(any("nomina un\'altra app (ProCam)" in p for p in problems[2]))
+        # the editor's proposal must pass the guards: a calque or a lost name is refused
+        class Bad(B):
+            def chat(self, system, user, temperature=0.2):
+                if "caporedattore" in system:
+                    return {"items": [{"id": 1, "natural": False, "why": "x", "better": "Solo un emisfero ci saluta mai."}]}
+                return super().chat(system, user, temperature)
+        texts2 = dict(texts)
+        with mock.patch("avp.italian.factcheck._judge", return_value=[]):
+            italian._check(texts2, en, s, "FACTS", self._cfg(), Bad(), [1, 2], editorial=True)
+        self.assertEqual(texts2[1], texts[1])
+        self.assertIn("EDITORIAL_USER", dir(italian))
+        self.assertIn("Mai nominare altre app", italian.TERMS)
+
+    def _cfg(self):
+        from types import SimpleNamespace
+        return SimpleNamespace(script=SimpleNamespace(subtitle_editor="auto", factcheck_key="k", factcheck_model="m",
+                                                      brief_model="", factcheck="fix"),
+                               captions=SimpleNamespace(reading_cps=17.0), llm=SimpleNamespace(model="x"),
+                               funnel=SimpleNamespace(app_name="App"))
+
+    def test_no_italian_script_means_no_subtitles_and_the_italian_can_be_redone_alone(self):
+        from avp import stages, cli
+        src = inspect.getsource(stages.stage_captions)
+        self.assertIn("copione italiano mancante", src)
+        self.assertNotIn("percorso legacy", src)
+        self.assertIn("def stage_italian", inspect.getsource(stages))
+        self.assertIn("--italian", inspect.getsource(cli._build_parser))
+        it = inspect.getsource(stages.stage_italian)
+        self.assertIn("italian.run(script, facts, cfg, out_dir=project.root)", it)
+        self.assertIn('project.manifest.mark(stage, "pending")', it)                   # cards and render are redone

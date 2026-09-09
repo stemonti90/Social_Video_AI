@@ -226,6 +226,26 @@ def _voice_stamp(prov) -> str:
     return ("\n#voice " + " ".join(parts)) if parts else ""
 
 
+def stage_italian(project: VideoProject, cfg: Config) -> Script:
+    """Regenerate ONLY the Italian script from the saved English (no draft, no polish): the way to raise
+    or repair the cards in half a minute instead of a full script run. The fact sheet is reused."""
+    from . import brief, italian
+    script = load_script(project)
+    topic = script.topic or str(project.manifest.data.get("topic") or "")
+    facts = None
+    try:
+        facts = brief.build(topic, cfg, out_dir=project.root)      # cached in brief.json
+    except Exception as e:  # noqa: BLE001
+        log.warning("Fact sheet unavailable for the Italian script (%s)", e)
+    italian.run(script, facts, cfg, out_dir=project.root)
+    project.script_json.write_text(_json(script.to_dict()))
+    emit_script_md(script, project.script_md)
+    for stage in ("captions", "assemble"):          # the cards changed: they must be cut and rendered again
+        project.manifest.mark(stage, "pending")
+    log.info("Copione italiano rigenerato: %d schede", len(italian.cards(script)))
+    return script
+
+
 def stage_voice(project: VideoProject, cfg: Config) -> Script:
     script = load_script(project)
     providers = tts_mod.get_providers(cfg)
@@ -406,8 +426,14 @@ def stage_captions(project: VideoProject, cfg: Config) -> None:
             sub_path.write_text(_json([{"index": i, "text": t, "source": src, "seconds": round(sec, 2)}
                                        for (i, src, sec), t in zip(items, texts)]))
             log.info("Sottotitoli: %d schede dal copione italiano", len(texts))
-        elif subs_mod.stale(existing, items):     # legacy: adapted from the English (no Italian script)
-            log.warning("Nessun copione italiano completo: sottotitoli adattati dall'inglese (percorso legacy)")
+        elif sub_lang == "it":
+            # The compressed-from-English route is retired (9/9): a video without its Italian script is
+            # not subtitled — write the ITALIAN lines in script.md or run `avp script <slug> --italian`.
+            missing = [i for i, _, _ in items if i not in italian_mod.cards(script)]
+            raise subs_mod.SubtitleQualityError(
+                f"copione italiano mancante per i segmenti {missing}: scrivi le righe ITALIAN in script.md "
+                f"oppure lancia `avp script {project.root.name} --italian`")
+        elif subs_mod.stale(existing, items):     # another language: adapted from the English
             texts = subs_mod.adapt(items, sub_lang, cfg,
                                    topic=script.topic or str(project.manifest.data.get("topic") or ""))
             sub_path.write_text(_json([{"index": i, "text": t, "source": src, "seconds": round(sec, 2)}

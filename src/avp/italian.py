@@ -32,6 +32,7 @@ from pathlib import Path
 
 from . import factcheck
 from .models import Script, Segment
+from .llm import competitor_mentions
 from .subtitles import (_backend, _items_json, _parse, comprehension, dropped_names, italian_lint)
 
 log = logging.getLogger(__name__)
@@ -69,7 +70,12 @@ Regole, tutte obbligatorie:
   passato remoto, mai calchi dall'inglese ("realizzare" per capire, "attualmente" per in realtà, "mai" per
   ever in frase affermativa, "fare senso").
 - Terminologia corretta: {terms}.
-- Numeri in formato italiano (8,87 millimetri; 12 milioni di chilometri; 1916), unità metriche.
+- Numeri in cifre, formato italiano (15 secondi; 8,87 millimetri; 26.000 anni; 12 milioni di chilometri;
+  1916), unità metriche; in lettere solo i numeri fino a dieci quando non sono misure.
+- Italiano da redazione scientifica, non da traduttore: niente parole letterali ("punti singoli" → "punti"),
+  niente colloquialismi ("agganciati a un lampione" → "blocca la messa a fuoco su un lampione lontano"),
+  niente ridondanze ("provala per trovarla"). Ogni scheda deve sembrare scritta in italiano da chi conosce
+  l'argomento.
 - Lunghezza: dal 90% al 125% dei caratteri dell'inglese. Se un'immagine inglese non ha un equivalente
   naturale, scrivi il fatto in chiaro.
 - Il segmento con role "cta_bridge" è la frase che collega il tema al fotografare il cielo: onesta, in
@@ -118,6 +124,19 @@ rimandano a nulla. Hai anche l'inglese originale per capire il senso: correggi S
 innaturale, senza aggiungere informazioni. Per ogni voce restituisci "ok": true se la frase era già
 perfetta, altrimenti "ok": false e il testo corretto.
 Restituisci JSON esatto: {{"items": [{{"id": 1, "ok": true, "text": "..."}}, ...]}}.
+
+Voci:
+{items}"""
+
+EDITORIAL_USER = """Sei il caporedattore di una rivista scientifica italiana. Queste sono le schede dei sottotitoli di un video
+di astronomia; sono già corrette. Il tuo compito è alzare il livello: segnala ogni scheda che un redattore
+riscriverebbe perché letterale ("punti singoli", "corsie di polvere"), colloquiale ("agganciati a un
+lampione"), goffa, ridondante ("provala per trovarla"), con ordine delle parole inglese o con un termine che un
+appassionato di astrofotografia non userebbe. Hai l'inglese originale per il senso: la versione migliore deve
+dire le stesse cose, con gli stessi numeri e nomi, in italiano naturale da redazione, e restare tra il 90% e il
+125% dei caratteri dell'inglese. Non toccare le schede già buone. Per ogni voce restituisci "natural": true se la
+scheda è già da pubblicare, altrimenti "natural": false, "why" (in italiano, breve) e "better" con la scheda
+riscritta. Restituisci JSON esatto: {{"items": [{{"id": 1, "natural": true, "why": "", "better": ""}}, ...]}}.
 
 Voci:
 {items}"""
@@ -200,6 +219,31 @@ def _proof(texts: dict[int, str], en: dict[int, str], backend) -> int:
     return fixed
 
 
+def _editorial(texts: dict[int, str], en: dict[int, str], backend) -> list[str]:
+    """The bar above correctness: a magazine editor's pass. A better card replaces the current one when
+    it keeps the names, the terms and the length; the other checks then verify the new text."""
+    rows = [{"id": i, "english": en[i], "text": texts[i]} for i in sorted(texts)]
+    data = backend.chat("Sei il caporedattore di una rivista scientifica italiana. Restituisci SOLO JSON.",
+                        EDITORIAL_USER.format(items=_items_json(rows)), temperature=0.0)
+    notes: list[str] = []
+    for it in (data.get("items") or []) if isinstance(data, dict) else []:
+        try:
+            i = int(it.get("id"))
+        except (TypeError, ValueError, AttributeError):
+            continue
+        better = " ".join(str(it.get("better") or "").split())
+        if i not in texts or it.get("natural") is not False or not better or better == texts[i]:
+            continue
+        ratio = len(better) / max(1, len(en[i]))
+        if italian_lint(better) or bad_sense(better) or dropped_names(en[i], better) or not (LEN_MIN <= ratio <= LEN_MAX):
+            notes.append(f"redazione: proposta per la scheda {i} scartata dalle guardie ({better[:60]!r})")
+            continue
+        log.info("Redazione: scheda %d %r → %r (%s)", i, texts[i], better, str(it.get("why", ""))[:80])
+        notes.append(f"redazione: scheda {i} rialzata — {str(it.get('why', ''))[:80]}")
+        texts[i] = better
+    return notes
+
+
 def _factcheck(texts: dict[int, str], script: Script, facts: str | None, cfg) -> list[str]:
     """The sheet is the ground truth for the Italian too. Confident fixes are applied; 'unsure' is noted."""
     content = [s for s in script.segments if s.kind != "cta" and s.index in texts]
@@ -245,7 +289,7 @@ def _meaning(texts: dict[int, str], en: dict[int, str], backend) -> dict[int, st
 
 
 def _check(texts: dict[int, str], en: dict[int, str], script: Script, facts: str | None, cfg, backend,
-           content_ids: list[int]) -> tuple[dict[int, list[str]], list[str]]:
+           content_ids: list[int], editorial: bool = True) -> tuple[dict[int, list[str]], list[str]]:
     """Every check on the current Italian. Corrections (proofreader, fact-check) are applied in place;
     what remains wrong comes back as reasons per card, for the rewrite."""
     notes: list[str] = []
@@ -255,6 +299,11 @@ def _check(texts: dict[int, str], en: dict[int, str], script: Script, facts: str
             notes.append(f"correttore: {n} schede corrette")
     except Exception as e:  # noqa: BLE001
         log.warning("Correttore saltato (%s)", e)
+    if editorial:
+        try:
+            notes += _editorial(texts, en, backend)
+        except Exception as e:  # noqa: BLE001
+            log.warning("Passata di redazione saltata (%s)", e)
     notes += _factcheck(texts, script, facts, cfg)
 
     problems: dict[int, list[str]] = {}
@@ -267,6 +316,8 @@ def _check(texts: dict[int, str], en: dict[int, str], script: Script, facts: str
             add(i, f"italiano scorretto: {p}")
         for w in bad_sense(t):
             add(i, f"termine nel senso sbagliato: {w!r} (una tacca del cursore non è uno scatto; lens è obiettivo; niente miglia)")
+        for app in competitor_mentions(t):
+            add(i, f"nomina un'altra app ({app}): mai; scrivi 'un'app con messa a fuoco manuale'")
         lost = dropped_names(en[i], t)
         if lost:
             add(i, f"manca il nome che l'inglese ha: {', '.join(lost)}")
@@ -318,7 +369,7 @@ def run(script: Script, facts: str | None, cfg, out_dir: Path | None = None) -> 
 
     report: dict = {"model": model, "rounds": []}
     for round_no in range(1, MAX_ROUNDS + 1):
-        problems, notes = _check(texts, en, script, facts, cfg, backend, content_ids)
+        problems, notes = _check(texts, en, script, facts, cfg, backend, content_ids, editorial=round_no < MAX_ROUNDS)
         report["rounds"].append({"round": round_no, "notes": notes,
                                  "problems": {str(i): p for i, p in problems.items()},
                                  "texts": {str(i): texts[i] for i in ids}})
