@@ -50,6 +50,10 @@ Rules:
   ha rimbalzato), never the literary passato remoto (atterrò, tacque, seppe). Short, plain words.
 - Numbers as digits with the {name} thousands separator (16.000 km, 430 km/h, 60 ore); units abbreviated.
 - Keep proper nouns. Use the same term for the same thing in every segment.
+- EVERY CARD STANDS ALONE. A viewer reads the cards without the voice: never drop the grammatical
+  subject ("Your camera hunts for edges" → "La fotocamera cerca bordi", NOT "Cerca bordi", which
+  reads as an order) and never drop a name to save room ("the Milky Way's dust lanes" keeps "della
+  Via Lattea"). Cut adjectives and asides instead. A pronoun with nothing to point to is a defect.
 - A subtitle never ends on an article or preposition and never splits a name across cards.
 - Punctuation marks the PAUSES a reader needs: a comma where one breathes, a full stop before the
   key fact, at most 14 words per sentence, never a semicolon.
@@ -98,21 +102,76 @@ Sottotitoli:
 COMPREHENSION_USER = """Read ONLY these Italian subtitles, in order, as a viewer who has not heard the English voice and
 knows nothing about the video. Answer in JSON exactly: {{"subject_en": "the subject of the video in 2-4 ENGLISH
 words (e.g. 'black hole radius', 'Jupiter moon Io')", "clear_by_card": <number of the FIRST card after which a
-general viewer knows what the video is about, or null if never>, "why": "one sentence"}}.
+general viewer knows what the video is about, or null if never>, "unclear_cards": [numbers of the cards a viewer
+cannot understand ON THEIR OWN: no grammatical subject (an order where a statement was meant), a pronoun or
+"it" with nothing to point to, a thing described but never named], "why": "one sentence"}}.
 
 {items}"""
 
-MAKE_CLEAR_USER = """These Italian subtitles never tell the viewer what the video is about: the subject is "{subject}".
-Rewrite cards 1 and 2 (max_chars respected) so that by card 2 the subject is named in plain Italian, keeping
-the facts and the surprise, correct spoken Italian, passato prossimo. Return JSON: {{"items": [{{"id": 1, "text": "..."}},
-{{"id": 2, "text": "..."}}]}}.
+MAKE_CLEAR_USER = """These Italian subtitles do not work on their own. The subject of the video is "{subject}"; {why}
+Rewrite the cards below (max_chars respected) so that each card is understandable by itself — a grammatical
+subject in every sentence, no dangling pronoun, the thing named — and by card 2 the subject of the video is
+named in plain Italian. Keep the facts and the surprise, correct spoken Italian, passato prossimo.
+Return JSON: {{"items": [{{"id": 1, "text": "..."}}, ...]}}.
 
 {items}"""
 
+RESTORE_NAMES_USER = """These Italian subtitles dropped a name that the English narration carries ("restore" lists it per
+card). A card must be understandable on its own: rewrite each card so that the name appears in Italian (Milky Way →
+Via Lattea, Earth → Terra, Sun → Sole, Moon → Luna, Jupiter → Giove, Saturn → Saturno, Mars → Marte), keeping the
+facts, within max_chars — cut adjectives and asides instead. Correct spoken Italian, passato prossimo.
+Return JSON: {{"items": [{{"id": 1, "text": "..."}}, ...]}}.
 
-def comprehension(texts: dict[int, str], topic: str, backend) -> tuple[bool, str]:
+{items}"""
+
+# English proper noun → forms accepted in the Italian card (lower case; matched on the first 5 letters)
+_NAME_MAP: dict[str, tuple[str, ...]] = {
+    "milky way": ("via lattea",), "earth": ("terra",), "sun": ("sole",), "moon": ("luna",), "mars": ("marte",),
+    "jupiter": ("giove",), "saturn": ("saturno",), "venus": ("venere",), "mercury": ("mercurio",),
+    "uranus": ("urano",), "neptune": ("nettuno",), "pluto": ("plutone",), "titan": ("titano",),
+    "enceladus": ("encelado",), "ceres": ("cerere",), "orion": ("orione",), "pleiades": ("pleiadi",),
+    "sirius": ("sirio",), "polaris": ("polare", "polaris"), "andromeda": ("andromeda",),
+    "great red spot": ("grande macchia rossa",), "olympus mons": ("olympus mons", "monte olimpo"),
+    "world war": ("guerra mondiale",), "russian": ("russ",), "soviet": ("soviet",), "american": ("americ",),
+    "european": ("europe",), "italian": ("italian",), "james webb": ("webb",), "north": ("nord",),
+    "south": ("sud",), "solar system": ("sistema solare",), "big bang": ("big bang",),
+}
+_SENTENCE_START = re.compile(r"(?:^|[.!?]\s+)([A-Z])")
+
+
+def proper_nouns(english: str) -> list[str]:
+    """The names an English line carries: runs of capitalised words, minus the word that opens a
+    sentence (capitalised for that reason alone: "Squeeze Earth" → Earth, "Karl Schwarzschild" → Schwarzschild)."""
+    starts = {m.start(1) for m in _SENTENCE_START.finditer(english or "")}
+    out: list[str] = []
+    for m in re.finditer(r"(?:[A-Z][\w*'\-]*)(?:\s+[A-Z][\w*'\-]*)*", english or ""):
+        words = [w for w in m.group(0).split() if w != "I"]
+        words = [re.sub(r"'s$", "", w) for w in words]
+        if m.start() in starts:
+            words = words[1:]      # capitalised only because it opens the sentence ("Squeeze Earth", "The Milky Way")
+        if not words:
+            continue
+        name = " ".join(words)
+        if len(name.replace("*", "")) >= 4:
+            out.append(name)
+    return out
+
+
+def dropped_names(english: str, italian: str) -> list[str]:
+    """Names of the English line that the Italian card lost (accepting the Italian form of the name)."""
+    low = (italian or "").lower()
+    missing = []
+    for name in proper_nouns(english):
+        forms = _NAME_MAP.get(name.lower()) or tuple(w.lower() for w in name.split() if len(w) >= 4) or (name.lower(),)
+        if not any((f[:5] if len(f) > 5 else f) in low for f in forms):
+            missing.append(name)
+    return missing
+
+
+def comprehension(texts: dict[int, str], topic: str, backend) -> tuple[bool, str, list[int]]:
     """Can a reader of the subtitles ALONE tell what the video is about? The model names the subject in
-    English; it passes if that matches a keyword of the topic or the subject is clear by card 2."""
+    English; it passes if that matches a keyword of the topic or the subject is clear by card 2. It also
+    lists the cards that do not work on their own (no subject, dangling pronoun, thing never named)."""
     from .llm import names_subject
     rows = [{"card": i, "text": texts[i]} for i in sorted(texts)]
     data = backend.chat("You are a careful reader. Return STRICT JSON only.",
@@ -123,8 +182,17 @@ def comprehension(texts: dict[int, str], topic: str, backend) -> tuple[bool, str
         clear = int(clear) if clear is not None else None
     except (TypeError, ValueError):
         clear = None
+    unclear: list[int] = []
+    for c in (data or {}).get("unclear_cards") or []:
+        try:
+            unclear.append(int(c))
+        except (TypeError, ValueError):
+            continue
     ok = names_subject(subject, topic) or (clear is not None and clear <= 2)
-    return ok, f"a reader of the subtitles alone says the video is about {subject!r}, clear by card {clear}"
+    why = f"a reader of the subtitles alone says the video is about {subject!r}, clear by card {clear}"
+    if unclear:
+        why += f", cards {unclear} do not stand on their own"
+    return ok, why, unclear
 
 
 class SubtitleQualityError(RuntimeError):
@@ -338,6 +406,27 @@ def adapt(segments: list[tuple[int, str, float]], target_lang: str, cfg,
         still = [i for i in ids if i in texts and len(texts[i]) > limits[i] * 1.10]
         if still:
             log.warning("Subtitles over budget after shortening: segments %s (limit %s cps).", still, cps)
+        if italian and texts:   # a name the English carries is not what you cut to fit the budget
+            src_by_id = {i: txt for i, txt, _ in segments}
+            missing = {i: dropped_names(src_by_id[i], texts[i]) for i in ids if i in texts}
+            missing = {i: m for i, m in missing.items() if m}
+            if missing:
+                log.warning("Subtitles dropped a name: %s — asking for it back", missing)
+                try:
+                    rows_n = [{"id": i, "english": src_by_id[i], "text": texts[i], "max_chars": limits[i], "restore": m}
+                              for i, m in missing.items()]
+                    fixed = _parse(backend.chat(system, RESTORE_NAMES_USER.format(items=_items_json(rows_n)),
+                                                temperature=0.2), ids)
+                    for i, t in fixed.items():
+                        if i in missing and len(t) <= limits[i] * 1.2 and not italian_lint(t) \
+                                and not dropped_names(src_by_id[i], t):
+                            texts[i] = t
+                except Exception as e:  # noqa: BLE001
+                    log.debug("restore-names pass skipped (%s)", e)
+                still = {i: dropped_names(src_by_id[i], texts[i]) for i in missing if i in texts}
+                still = {i: m for i, m in still.items() if m}
+                if still:
+                    log.warning("Subtitles: names still missing after the restore pass: %s", still)
         if italian:        # the hard gate: broken Italian never ships
             broken = {i: italian_lint(texts[i]) for i in ids if i in texts and italian_lint(texts[i])}
             if broken:
@@ -345,24 +434,31 @@ def adapt(segments: list[tuple[int, str, float]], target_lang: str, cfg,
                     f"seg {i}: {texts[i]!r} — {', '.join(p)}" for i, p in broken.items()))
         if italian and topic and texts:   # the subject must be understandable from the Italian ALONE
             content_ids = ids[:-1] if len(ids) > 1 else ids      # the CTA bridge is not the subject
-            ok, why = comprehension({i: texts[i] for i in content_ids if i in texts}, topic, backend)
-            if ok:
+            anchor = content_ids[:2]                             # the two cards that give the viewer the context
+            ok, why, unclear = comprehension({i: texts[i] for i in content_ids if i in texts}, topic, backend)
+            weak = [i for i in unclear if i in content_ids]
+            if ok and not weak:
                 log.info("Subtitles: %s.", why)                       # on the record: what a cold reader understood
             else:
-                log.warning("Subtitles: %s — asking for the subject to be named by card 2", why)
+                log.warning("Subtitles: %s — asking for cards that stand on their own", why)
                 try:
                     from .llm import subject_keywords
-                    rows2 = [{"id": i, "text": texts[i], "max_chars": limits[i]} for i in content_ids[:2] if i in texts]
+                    redo = sorted(set(anchor if not ok else []) | set(weak))
+                    rows2 = [{"id": i, "text": texts[i], "max_chars": limits[i]} for i in redo if i in texts]
                     fixed = _parse(backend.chat(system, MAKE_CLEAR_USER.format(
-                        subject=" ".join(subject_keywords(topic)), items=_items_json(rows2)), temperature=0.2), ids)
+                        subject=" ".join(subject_keywords(topic)), why=why, items=_items_json(rows2)), temperature=0.2), ids)
                     for i, t in fixed.items():
-                        if len(t) <= limits[i] * 1.2 and not italian_lint(t):
+                        if i in redo and len(t) <= limits[i] * 1.2 and not italian_lint(t):
                             texts[i] = t
                 except Exception as e:  # noqa: BLE001
                     log.debug("make-clear pass skipped (%s)", e)
-                ok, why = comprehension({i: texts[i] for i in content_ids if i in texts}, topic, backend)
+                ok, why, unclear = comprehension({i: texts[i] for i in content_ids if i in texts}, topic, backend)
                 if not ok:
                     raise SubtitleQualityError("i sottotitoli da soli non fanno capire di cosa parla il video — " + why)
+                if any(i in unclear for i in anchor):
+                    raise SubtitleQualityError("le prime schede non si capiscono da sole — " + why)
+                if unclear:
+                    log.warning("Subtitles: cards %s still weak on their own (kept: not the anchor)", unclear)
     out = [texts.get(i) or txt for i, txt, _ in segments]
     made = sum(1 for i in ids if i in texts)
     log.info("Subtitles: %d/%d segments adapted to %s by %s (budget %.0f cps).", made, len(ids), name, model, cps)

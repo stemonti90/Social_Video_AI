@@ -4639,17 +4639,23 @@ class TheViewerMustKnowWhatTheVideoIsAbout(unittest.TestCase):
                 ans = clear_answers[min(calls["comprehension"], len(clear_answers) - 1)]
                 calls["comprehension"] += 1
                 return R(ans)
-            if "never tell the viewer what the video is about" in user:
+            if "do not work on their own" in user:
                 calls["make_clear"] += 1
                 self.assertIn("schwarzschild radius black hole", user)
+                return R({"items": [{"id": 1, "text": "Il punto di non ritorno della Terra sta nel palmo della mano."},
+                                    {"id": 2, "text": "Comprimi la Terra a nove millimetri e diventa un buco nero."}]})
+            if "dropped a name" in user:
+                calls["restore"] = calls.get("restore", 0) + 1
                 return R({"items": [{"id": 2, "text": "Comprimi la Terra a nove millimetri e diventa un buco nero."}]})
             if "correttore di bozze" in user:
                 return R({"items": [{"id": 1, "ok": True}, {"id": 2, "ok": True}]})
             return R({"items": [{"id": i, "text": t} for i, t in cards.items()]})
         return fake_post, calls
 
-    def _segments(self):
-        return [(1, self.RIDDLE1, 5.0), (2, self.NAMED2, 5.0)]
+    def _segments(self, extra=0):
+        """Two content cards and the CTA bridge (adapt treats the LAST card as the bridge)."""
+        mid = [(3 + k, f"Concrete fact number {k} about the horizon, ten words long here.", 5.0) for k in range(extra)]
+        return [(1, self.RIDDLE1, 5.0), (2, self.NAMED2, 5.0)] + mid + [(3 + extra, self.HONEST, 4.0)]
 
     def _cfg(self):
         from types import SimpleNamespace
@@ -4695,12 +4701,61 @@ class TheViewerMustKnowWhatTheVideoIsAbout(unittest.TestCase):
                 self.user = user
                 return {"subject_en": "black hole radius", "clear_by_card": 2}
         b = B()
-        ok, why = subtitles.comprehension({1: "Prima scheda.", 2: "Seconda scheda."}, self.TOPIC, b)
+        ok, why, unclear = subtitles.comprehension({1: "Prima scheda.", 2: "Seconda scheda."}, self.TOPIC, b)
         self.assertTrue(ok)
+        self.assertEqual(unclear, [])
         self.assertIn("Prima scheda.", b.user)
         self.assertNotIn(self.TOPIC, b.user)                        # the reader must not be told the answer
         self.assertNotIn(self.RIDDLE1, b.user)
         self.assertIn("black hole radius", why)
+
+    def test_an_anchor_card_that_does_not_stand_alone_is_rewritten(self):
+        """11:50 run, 9/9: card 1 read "Cerca bordi che una stella non ha." — the subject (la fotocamera)
+        dropped, so a statement became an order. The cold reader now lists such cards; the anchor ones
+        are rewritten, and stop the build if they stay weak."""
+        from avp import subtitles
+        fake, calls = self._fake_subtitles([{"subject_en": "black hole", "clear_by_card": 2, "unclear_cards": [1]},
+                                            {"subject_en": "black hole", "clear_by_card": 2, "unclear_cards": []}])
+        with mock.patch.dict("os.environ", {"DEEPSEEK_API_KEY": ""}, clear=False), mock.patch("avp.subtitles.requests.post", fake):
+            out = subtitles.adapt(self._segments(), "it", self._cfg(), topic=self.TOPIC)
+        self.assertEqual(out[0], "Il punto di non ritorno della Terra sta nel palmo della mano.")
+        self.assertEqual((calls["comprehension"], calls["make_clear"]), (2, 1))
+        fake, calls = self._fake_subtitles([{"subject_en": "black hole", "clear_by_card": 2, "unclear_cards": [1]}])
+        with mock.patch.dict("os.environ", {"DEEPSEEK_API_KEY": ""}, clear=False), mock.patch("avp.subtitles.requests.post", fake):
+            with self.assertRaises(subtitles.SubtitleQualityError) as ctx:
+                subtitles.adapt(self._segments(), "it", self._cfg(), topic=self.TOPIC)
+        self.assertIn("prime schede", str(ctx.exception))
+        # a weak card AFTER the anchor is rewritten once and then tolerated
+        fake, calls = self._fake_subtitles([{"subject_en": "black hole", "clear_by_card": 2, "unclear_cards": [3]}])
+        with mock.patch.dict("os.environ", {"DEEPSEEK_API_KEY": ""}, clear=False), mock.patch("avp.subtitles.requests.post", fake):
+            subtitles.adapt(self._segments(extra=1), "it", self._cfg(), topic=self.TOPIC)
+        self.assertEqual((calls["comprehension"], calls["make_clear"]), (2, 1))
+
+    def test_names_the_english_carries_survive_the_budget(self):
+        """Card 5 of the 11:50 video: "The Milky Way's dust lanes appear" became "appariranno le bande di
+        polvere" — the name cut to fit, the sentence meaningless. A dropped name is asked back."""
+        from avp.subtitles import proper_nouns, dropped_names
+        en = "Lock that focus, then stack twenty 15-second shots. The Milky Way's dust lanes appear."
+        self.assertEqual(proper_nouns(en), ["Milky Way"])
+        self.assertEqual(dropped_names(en, "Scatta venti foto da quindici secondi: appariranno le bande di polvere."), ["Milky Way"])
+        self.assertEqual(dropped_names(en, "Scatta venti foto: appaiono le bande di polvere della Via Lattea."), [])
+        kar = "Karl Schwarzschild calculated it in 1916, from the Russian front, during World War I."
+        self.assertEqual(proper_nouns(kar), ["Schwarzschild", "Russian", "World War"])
+        self.assertEqual(proper_nouns("Squeeze Earth to a radius of 8.87 millimeters and it becomes a black hole."), ["Earth"])
+        self.assertEqual(dropped_names(kar, "Karl Schwarzschild lo ha calcolato nel 1916, dal fronte russo, durante la Prima Guerra Mondiale."), [])
+        self.assertEqual(dropped_names("Force manual focus, aim at infinity. Test on a bright star.", "Imposta la messa a fuoco manuale."), [])
+        self.assertEqual(dropped_names("At our galaxy's heart, Sagittarius A* weighs 4.1 million suns.", "Al centro della galassia, Sagittarius A* pesa 4,1 milioni di soli."), [])
+        self.assertEqual(dropped_names("Even you have one. Crushed to a point, a human body becomes a black hole.", "Anche tu ne hai uno."), [])
+
+    def test_the_restore_pass_brings_the_name_back(self):
+        from avp import subtitles
+        fake, calls = self._fake_subtitles([{"subject_en": "black hole", "clear_by_card": 2, "unclear_cards": []}])
+        segs = [(1, self.RIDDLE1, 5.0), (2, "Squeeze Earth to nine millimetres and it becomes a black hole.", 5.0)]
+        with mock.patch.dict("os.environ", {"DEEPSEEK_API_KEY": ""}, clear=False), mock.patch("avp.subtitles.requests.post", fake):
+            out = subtitles.adapt(segs, "it", self._cfg(), topic=self.TOPIC)
+        # the editor's card 2 ("Comprimi la Terra…") already carries Terra → nothing to restore
+        self.assertEqual(calls.get("restore", 0), 0)
+        self.assertIn("Terra", out[1])
 
     def test_qa_flags_a_script_without_context(self):
         from avp import qa
