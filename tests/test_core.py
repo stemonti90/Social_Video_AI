@@ -2221,6 +2221,39 @@ class StaleImagesAreNotManualOverrides(unittest.TestCase):
             self.assertFalse(_stale_from_a_previous_script(mock.Mock(root=Path(tmp)),
                                                            self._seg("new words")))
 
+    def test_our_endcard_is_never_kept_as_a_picture(self):
+        """9/9: a 6-line script grew to 7 lines and the previous build's endcard, sitting at 07.png with
+        no report row, became line 7's "manual" picture — the AstroStackerPro card played under
+        "Even you have one…". The endcard is now on the record and always stale: re-rendered for a CTA,
+        deleted for a content line."""
+        from avp import footage
+        from avp.footage import _stale_from_a_previous_script
+        with tempfile.TemporaryDirectory() as tmp:
+            p = self._project(tmp, [{"index": 1, "segment": "Get the app — link in bio.", "outcome": "endcard",
+                                     "asset": "app endcard"}])
+            self.assertTrue(_stale_from_a_previous_script(p, self._seg("Even you have one, far smaller than a proton.")))
+            self.assertTrue(_stale_from_a_previous_script(p, self._seg("Get the app — link in bio.")))   # same words too
+        src = inspect.getsource(footage.resolve_footage)
+        cta = src.index('if seg.kind == "cta"')
+        self.assertIn('"endcard"', src[cta:src.index("continue", cta)])        # the CTA branch writes its row
+        self.assertLess(cta, src.index("manual = sorted"))                       # and runs BEFORE the manual glob
+
+    def test_a_leftover_endcard_with_no_report_row_is_recognised_by_its_bytes(self):
+        """Projects built before the endcard had a report row: the render is deterministic, so a
+        content segment's picture that IS the endcard, byte for byte, is ours — and stale."""
+        from avp import captions
+        from avp.footage import _is_our_endcard
+        cfg = Config()
+        with tempfile.TemporaryDirectory() as tmp:
+            ref, left, other = Path(tmp, "ref.png"), Path(tmp, "07.png"), Path(tmp, "03.png")
+            captions.render_endcard(ref, cfg.funnel, cfg.video)
+            captions.render_endcard(left, cfg.funnel, cfg.video)
+            from PIL import Image
+            Image.new("RGB", (8, 8), (10, 20, 30)).save(other)
+            self.assertTrue(_is_our_endcard(left, ref.read_bytes()))
+            self.assertFalse(_is_our_endcard(other, ref.read_bytes()))
+            self.assertFalse(_is_our_endcard(Path(tmp, "missing.png"), ref.read_bytes()))
+
     def test_the_narration_is_compared_the_way_the_report_stores_it(self):
         """The report truncates to 120 chars; comparing against the full line would call every long
         segment stale and regenerate the whole video on every resume."""
@@ -3851,7 +3884,8 @@ class SubtitlesYouCanRead(unittest.TestCase):
         from avp import stages
         src = inspect.getsource(stages.stage_captions)
         self.assertIn("subs_mod.stale(existing, items)", src)
-        self.assertIn("subs_mod.adapt(items, sub_lang, cfg)", src)
+        self.assertIn("subs_mod.adapt(items, sub_lang, cfg,", src)
+        self.assertIn("topic=script.topic", src)          # the Italian must name the subject on its own
         self.assertNotIn("translate_segments", src)
         asm = inspect.getsource(stages._translated_subtitle_items)
         self.assertIn("max_chars = int(cfg.captions.reading_cps * cfg.captions.phrase_max_seconds)", asm)
@@ -3889,16 +3923,19 @@ class PolishInTheChannelsVoice(unittest.TestCase):
         from avp import polish
         s = self._script()
         self.assertIsNone(polish.apply(s, {"segments": [{"index": 1, "narration": "Only one."}]})[0])
-        self.assertIn("length", polish.apply(s, {"segments": [{"index": 1, "narration": "Short."},
-                                                              {"index": 2, "narration": "Also short."}]})[1])
+        self.assertIn("line too short", polish.apply(s, {"segments": [{"index": 1, "narration": "Short."},
+                                                                      {"index": 2, "narration": "Also short."}]})[1])
+        fat = "There is a glacier on Pluto made of the very same gas that you are breathing right now today."
+        self.assertIn("length", polish.apply(s, {"segments": [{"index": 1, "narration": fat},
+                                                              {"index": 2, "narration": fat.replace("There is", "And there is")}]})[1])
         long1 = "There is a glacier on Pluto made of the gas you breathe."
         ok2 = "At minus 230 degrees that nitrogen is solid, yet it creeps downhill."
         self.assertIn("bridge too long", polish.apply(s, {"segments": [{"index": 1, "narration": long1}, {"index": 2, "narration": ok2}],
                                                           "cta_bridge": " ".join(["word"] * 23)})[1])
         self.assertIn("morbid", polish.apply(s, {"segments": [{"index": 1, "narration": long1},
-                                                              {"index": 2, "narration": "A frozen corpse of nitrogen creeps downhill."}]})[1])
+                                                              {"index": 2, "narration": "A frozen corpse of nitrogen creeps downhill across the plain."}]})[1])
         self.assertIn("exemplar", polish.apply(s, {"segments": [{"index": 1, "narration": long1},
-                                                                {"index": 2, "narration": "A place where it rains gasoline, slowly."}]})[1])
+                                                                {"index": 2, "narration": "A place where it rains gasoline, slowly, on the dunes."}]})[1])
 
     def test_a_hook_on_a_number_or_an_explainer_opener_is_rejected(self):
         from avp import polish
@@ -4447,3 +4484,212 @@ class OneVariableAtATime(unittest.TestCase):
         from avp import analytics
         self.assertIn("Esperimenti", inspect.getsource(analytics.report))
         self.assertIn("variant", inspect.getsource(analytics.record_post))
+
+
+class TheViewerMustKnowWhatTheVideoIsAbout(unittest.TestCase):
+    """Published 9/9: six lines about the Schwarzschild radius that never said "black hole" — "a planet's point
+    of no return fits in your hand" — unwatchable in Italian. The subject is now named by segment 2 (writer,
+    polish, QA), no line is a flash, the fact-check reads the sheet as ground truth, the bridge may not
+    promise what the sheet denies, and the Italian cards must explain the subject on their own."""
+
+    TOPIC = "The Schwarzschild Radius of a Black Hole"
+    RIDDLE1 = "A planet's point of no return fits in the palm of your hand."
+    RIDDLE2 = "Squeeze all of Earth into nine millimetres and it becomes a trap for light."
+    NAMED2 = "Squeeze all of Earth into nine millimetres and it becomes a black hole."
+    HONEST = "You can't see one, but the Milky Way you can photograph hides millions."
+
+    def _script(self):
+        return Script(title="The Radius of No Return", topic=self.TOPIC, cta_bridge=self.HONEST,
+                      segments=[Segment(index=1, narration="A black hole's edge is a distance, not a surface, and it is small.",
+                                        visual="a dark disk against stars"),
+                                Segment(index=2, narration="Compress the Earth to nine millimetres and light can no longer escape.",
+                                        visual="a marble-sized sphere")])
+
+    def test_topic_keywords_and_the_subject_check(self):
+        from avp.llm import subject_keywords, names_subject
+        self.assertEqual(subject_keywords(self.TOPIC), ["schwarzschild", "radius", "black", "hole"])
+        self.assertFalse(names_subject(f"{self.RIDDLE1} {self.RIDDLE2}", self.TOPIC))
+        self.assertTrue(names_subject(f"{self.RIDDLE1} {self.NAMED2}", self.TOPIC))
+        self.assertTrue(names_subject("Stack fifty photos from your phone and the noise fades.",     # stem match
+                                      "Why stacking 50 phone photos beats one long exposure"))
+        self.assertTrue(names_subject("Uranus spins lying down.", "Uranus rolls on its side"))
+        self.assertFalse(names_subject("anything at all", ""))
+
+    def test_polish_rejects_a_script_that_never_names_its_subject(self):
+        from avp import polish
+        s = self._script()
+        out, why = polish.apply(s, {"segments": [{"index": 1, "narration": self.RIDDLE1},
+                                                 {"index": 2, "narration": self.RIDDLE2}], "cta_bridge": self.HONEST})
+        self.assertIsNone(out)
+        self.assertEqual(why, "subject not named by segment 2")
+        out, why = polish.apply(s, {"segments": [{"index": 1, "narration": self.RIDDLE1},
+                                                 {"index": 2, "narration": self.NAMED2}], "cta_bridge": self.HONEST})
+        self.assertEqual(why, "ok")
+        self.assertEqual(out.segments[1].narration, self.NAMED2)
+
+    def test_polish_rejects_a_flash_of_a_line(self):
+        from avp import polish
+        out, why = polish.apply(self._script(), {"segments": [{"index": 1, "narration": self.RIDDLE1},
+                                                              {"index": 2, "narration": "Earth becomes a black hole."}]})
+        self.assertIsNone(out)
+        self.assertIn("line too short", why)
+
+    def test_the_bridge_may_not_promise_what_the_sheet_denies(self):
+        from avp import polish
+        no = ("FACTS\n- Karl Schwarzschild, 1916.\nCAN THE VIEWER SEE IT: You cannot see the Schwarzschild radius itself, "
+              "but you can see the shadow of M87* with a network of radio telescopes.\n")
+        yes = "CAN THE VIEWER SEE IT: Yes, with a small telescope you can see Io as a tiny dot, but you cannot see its volcanoes."
+        self.assertTrue(polish.sheet_says_unseen(no))
+        self.assertFalse(polish.sheet_says_unseen(yes))
+        self.assertFalse(polish.sheet_says_unseen(None))
+        self.assertTrue(polish.claims_visible("Your phone can capture it tonight."))
+        self.assertTrue(polish.claims_visible("Point your phone at Jupiter and catch it."))
+        self.assertFalse(polish.claims_visible(self.HONEST))
+        self.assertFalse(polish.claims_visible("You cannot see it, yet the sky above you is full of stars to stack."))
+        segs = [{"index": 1, "narration": self.RIDDLE1}, {"index": 2, "narration": self.NAMED2}]
+        out, why = polish.apply(self._script(), {"segments": segs, "cta_bridge": "Point your phone up tonight and capture it too."},
+                                facts=no)
+        self.assertIsNone(out)
+        self.assertIn("sheet says they cannot", why)
+        self.assertEqual(polish.apply(self._script(), {"segments": segs, "cta_bridge": self.HONEST}, facts=no)[1], "ok")
+        self.assertEqual(polish.apply(self._script(), {"segments": segs, "cta_bridge": "Point your phone at Jupiter and catch it."},
+                                      facts=yes)[1], "ok")                       # the sheet said yes
+
+    def test_polish_run_hands_the_topic_and_the_sheet_to_the_guards(self):
+        from avp import polish, stages
+        self.assertIn("apply(script, data, topic=script.topic, facts=facts)", inspect.getsource(polish.run))
+        self.assertIn("CONTEXT ANCHOR", polish.VOICE)
+        self.assertIn("CONTEXT ANCHOR", llm.SYSTEM + "".join(getattr(llm, n, "") for n in dir(llm) if isinstance(getattr(llm, n), str)))
+        self.assertIn("factcheck.run(script, cfg, out_dir=project.root, facts=facts)", inspect.getsource(stages.stage_script))
+        repolish = (Path(__file__).resolve().parents[1] / "tools" / "repolish.py").read_text()
+        self.assertIn("factcheck.run(new, cfg, out_dir=project.root, facts=facts)", repolish)
+
+    def test_the_fact_check_reads_the_sheet_as_ground_truth(self):
+        from types import SimpleNamespace
+        from avp import factcheck
+        self.assertEqual(factcheck._sheet_note(None), "")
+        self.assertEqual(factcheck._sheet_note("   "), "")
+        note = factcheck._sheet_note("FACTS\n- Karl Schwarzschild, 1916.")
+        self.assertIn("GROUND TRUTH", note)
+        self.assertIn("Karl Schwarzschild, 1916", note)
+        sent: dict = {}
+
+        class R:
+            status_code = 200
+            text = ""
+            def json(self): return {"choices": [{"message": {"content": '{"findings": []}'}}]}
+
+        def fake_post(url, headers=None, json=None, timeout=None):
+            sent.update(json); return R()
+        cfg = SimpleNamespace(script=SimpleNamespace(factcheck_key="k", factcheck_model="m"))
+        with mock.patch.dict("os.environ", {"DEEPSEEK_API_KEY": ""}, clear=False), mock.patch("avp.factcheck.requests.post", fake_post):
+            self.assertEqual(factcheck._judge(self._script(), cfg, facts="FACTS\n- Karl Schwarzschild, 1916."), [])
+        user = sent["messages"][1]["content"]
+        self.assertIn("Karl Schwarzschild, 1916", user)
+        self.assertLess(user.index("segment 1"), user.index("GROUND TRUTH"))       # the script first, then the sheet
+        with mock.patch.dict("os.environ", {"DEEPSEEK_API_KEY": ""}, clear=False), mock.patch("avp.factcheck.requests.post", fake_post):
+            factcheck._judge(self._script(), cfg)
+        self.assertNotIn("GROUND TRUTH", sent["messages"][1]["content"])           # no sheet, no note
+
+    def _fake_subtitles(self, clear_answers):
+        """A DeepSeek stand-in: editor/reviser return two Italian cards, the proofreader approves, the
+        comprehension reader answers from `clear_answers` in order, the make-clear pass names the subject."""
+        import json as _json
+        calls = {"comprehension": 0, "make_clear": 0}
+
+        class R:
+            status_code = 200
+            text = ""
+            def __init__(self, payload): self._p = payload
+            def json(self): return {"choices": [{"message": {"content": _json.dumps(self._p)}}]}
+
+        cards = {1: "Il punto di non ritorno di un pianeta sta nel palmo della mano.",
+                 2: "Comprimi la Terra a nove millimetri e la luce resta intrappolata."}
+
+        def fake_post(url, headers=None, json=None, timeout=None):
+            user = json["messages"][1]["content"]
+            if "Read ONLY these Italian subtitles" in user:
+                ans = clear_answers[min(calls["comprehension"], len(clear_answers) - 1)]
+                calls["comprehension"] += 1
+                return R(ans)
+            if "never tell the viewer what the video is about" in user:
+                calls["make_clear"] += 1
+                self.assertIn("schwarzschild radius black hole", user)
+                return R({"items": [{"id": 2, "text": "Comprimi la Terra a nove millimetri e diventa un buco nero."}]})
+            if "correttore di bozze" in user:
+                return R({"items": [{"id": 1, "ok": True}, {"id": 2, "ok": True}]})
+            return R({"items": [{"id": i, "text": t} for i, t in cards.items()]})
+        return fake_post, calls
+
+    def _segments(self):
+        return [(1, self.RIDDLE1, 5.0), (2, self.NAMED2, 5.0)]
+
+    def _cfg(self):
+        from types import SimpleNamespace
+        return SimpleNamespace(script=SimpleNamespace(subtitle_editor="auto", factcheck_key="k", factcheck_model="m", brief_model=""),
+                               captions=SimpleNamespace(reading_cps=15.0), llm=SimpleNamespace(model="x"))
+
+    def test_italian_cards_that_hide_the_subject_are_made_clear(self):
+        from avp import subtitles
+        fake, calls = self._fake_subtitles([{"subject_en": "a tiny object in a hand", "clear_by_card": None, "why": "no subject"},
+                                            {"subject_en": "black hole", "clear_by_card": 2, "why": "card 2 names it"}])
+        with mock.patch.dict("os.environ", {"DEEPSEEK_API_KEY": ""}, clear=False), mock.patch("avp.subtitles.requests.post", fake):
+            out = subtitles.adapt(self._segments(), "it", self._cfg(), topic=self.TOPIC)
+        self.assertEqual(out[1], "Comprimi la Terra a nove millimetri e diventa un buco nero.")
+        self.assertEqual((calls["comprehension"], calls["make_clear"]), (2, 1))
+
+    def test_italian_cards_that_stay_obscure_stop_the_build(self):
+        from avp import subtitles
+        fake, calls = self._fake_subtitles([{"subject_en": "a tiny object", "clear_by_card": None, "why": "never"}])
+        with mock.patch.dict("os.environ", {"DEEPSEEK_API_KEY": ""}, clear=False), mock.patch("avp.subtitles.requests.post", fake):
+            with self.assertRaises(subtitles.SubtitleQualityError) as ctx:
+                subtitles.adapt(self._segments(), "it", self._cfg(), topic=self.TOPIC)
+        self.assertIn("non fanno capire", str(ctx.exception))
+        self.assertEqual(calls["comprehension"], 2)
+
+    def test_a_clear_subject_passes_first_time_and_no_topic_means_no_gate(self):
+        from avp import subtitles
+        fake, calls = self._fake_subtitles([{"subject_en": "Schwarzschild radius", "clear_by_card": 2, "why": "ok"}])
+        with mock.patch.dict("os.environ", {"DEEPSEEK_API_KEY": ""}, clear=False), mock.patch("avp.subtitles.requests.post", fake):
+            out = subtitles.adapt(self._segments(), "it", self._cfg(), topic=self.TOPIC)
+        self.assertEqual(out[1], "Comprimi la Terra a nove millimetri e la luce resta intrappolata.")
+        self.assertEqual((calls["comprehension"], calls["make_clear"]), (1, 0))
+        fake, calls = self._fake_subtitles([{"subject_en": "nothing", "clear_by_card": None}])
+        with mock.patch.dict("os.environ", {"DEEPSEEK_API_KEY": ""}, clear=False), mock.patch("avp.subtitles.requests.post", fake):
+            subtitles.adapt(self._segments(), "it", self._cfg())
+        self.assertEqual(calls["comprehension"], 0)
+
+    def test_the_comprehension_reader_only_sees_the_italian(self):
+        from avp import subtitles
+
+        class B:
+            def __init__(self): self.user = ""
+            def chat(self, system, user, temperature=0.2):
+                self.user = user
+                return {"subject_en": "black hole radius", "clear_by_card": 2}
+        b = B()
+        ok, why = subtitles.comprehension({1: "Prima scheda.", 2: "Seconda scheda."}, self.TOPIC, b)
+        self.assertTrue(ok)
+        self.assertIn("Prima scheda.", b.user)
+        self.assertNotIn(self.TOPIC, b.user)                        # the reader must not be told the answer
+        self.assertNotIn(self.RIDDLE1, b.user)
+        self.assertIn("black hole radius", why)
+
+    def test_qa_flags_a_script_without_context(self):
+        from avp import qa
+        old = {"topic": self.TOPIC, "segments": [
+            {"index": 1, "kind": "content", "narration": "A planet's point of no return fits in your hand."},
+            {"index": 2, "kind": "content", "narration": "Squeeze all of Earth into 8.87 millimeters, and it becomes a trap for light itself."},
+            {"index": 3, "kind": "content", "narration": "Karl Schwarzschild found it in 1916."},
+            {"index": 4, "kind": "cta", "narration": "Short."}]}
+        probs = qa.context_problems(old)
+        self.assertEqual(len(probs), 2)
+        self.assertIn("not named in the first two lines", probs[0])
+        self.assertIn("[3]", probs[1])                              # the CTA is not a content line
+        good = {"topic": self.TOPIC, "segments": [
+            {"index": 1, "kind": "content", "narration": self.RIDDLE1},
+            {"index": 2, "kind": "content", "narration": self.NAMED2},
+            {"index": 3, "kind": "content", "narration": "Karl Schwarzschild worked it out in 1916, in the trenches of a war."}]}
+        self.assertEqual(qa.context_problems(good), [])
+        self.assertEqual(qa.context_problems(None), [])
+        self.assertIn("context_problems(script)", inspect.getsource(qa.check))

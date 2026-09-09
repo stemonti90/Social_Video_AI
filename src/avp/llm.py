@@ -59,6 +59,13 @@ by a calm verb; any line that paraphrases an earlier one; "ensuring", "allowing"
 - LENGTH: about the per-segment word count given below, in one or two spoken sentences. A shorter script in which every line earns its place beats a longer one with a single soft line. NEVER pad to reach a count.
 - DRAMATURGY, not exposition: a fact that shouldn't be possible → why it shouldn't be → how it is anyway → what that means. Explanation arrives as the answer to a tension you opened, never as a lecture.
 TRUTH RULES (every one of these has cost a science channel its credibility in the comments):
+- CONTEXT ANCHOR — non-negotiable. The hook may withhold the subject; SEGMENT 2 MAY NOT: by the end of \
+segment 2 the subject is named in plain words ("a black hole", "Jupiter's moon Io", "stacking photos on a \
+phone"). Every segment carries one CONCRETE fact — a number, a name, a date, a place; a line that is only \
+an image is banned. At most ONE metaphor in the whole script, and it must be explained by the next line. \
+A viewer who cannot say what the video is about after two lines was lost; a script published this way \
+("a planet's point of no return fits in your hand", six lines, never the words black hole) was \
+unwatchable in translation. Every segment is at least 10 spoken words.
 - Segment 1 must NOT begin with the subject's name, and must not announce what the subject is. It states the single strangest concrete thing in the whole script — the fact you would lead with if you had one sentence to stop someone scrolling. The viewer should work out what the video is about from that fact, not be told. ("Voyager 1 carries a golden record into the void" is still an announcement; "A machine 25 billion kilometres away is still talking to us" is a hook.)
 - Every segment must leave the next one NECESSARY: end on a consequence, a number that begs a question, or an unresolved tension. If a segment could be the last one, it is written wrong.
 - Every segment must make a DISTINCT point. NEVER repeat, restate or paraphrase an earlier line to reach the segment count — if you genuinely run out of distinct facts, broaden the angle (history, mechanism, scale, discovery, what's next) rather than repeating.
@@ -393,6 +400,27 @@ EXEMPLAR_PHRASES = ("younger than the dinosaurs", "rains gasoline", "three earth
                     "quietly leaving us", "driving on mars right now", "the sun has never once lit",
                     "graveyard of shattered moons", "planetary autopsy", "suicide mission",
                     "scream into the void", "screaming into the void")   # the old voice, still off-limits   # "into the void" alone matched honest lines
+
+
+_SUBJECT_STOP = {"the", "a", "an", "of", "in", "on", "and", "or", "that", "this", "these", "why", "how", "what",
+                 "its", "it", "is", "are", "was", "were", "to", "for", "with", "from", "by", "our", "your", "at",
+                 "as", "than", "when", "does", "do", "one", "into", "s", "you", "can", "we", "us", "not", "no",
+                 "beats", "long", "own", "side", "their", "hidden", "secret", "story", "great", "big"}
+
+
+def subject_keywords(topic: str) -> list[str]:
+    """The words of a topic that name its subject — "The Schwarzschild Radius of a Black Hole" →
+    schwarzschild, radius, black, hole. Used to check that a script and its subtitles actually SAY
+    what the video is about."""
+    words = re.findall(r"[a-zA-Z][a-zA-Z'\-]+", (topic or "").lower())
+    return [w.strip("'-").replace("'s", "") for w in words if len(w) >= 3 and w not in _SUBJECT_STOP]
+
+
+def names_subject(text: str, topic: str) -> bool:
+    """Does `text` name the topic's subject? A keyword matches on its first five letters, so "planets"
+    finds "planet" and "stacking" finds "stack"."""
+    low = (text or "").lower()
+    return any((kw[:5] if len(kw) > 5 else kw) in low for kw in subject_keywords(topic))
 
 
 MORBID_WORDS = ("corpse", "cadaver", "dead", "dying", "died", "death", "kill", "killed", "murder",

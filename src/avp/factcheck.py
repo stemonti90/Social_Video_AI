@@ -205,7 +205,7 @@ def _extract_json(text: str) -> dict:
             return {}
 
 
-def _judge(script: Script, cfg) -> list[Finding]:
+def _judge(script: Script, cfg, facts: str | None = None) -> list[Finding]:
     """One DeepSeek call over the whole script. Returns [] on any failure — never raises."""
     key = _api_key(cfg)
     if not key:
@@ -223,7 +223,7 @@ def _judge(script: Script, cfg) -> list[Finding]:
         json={
             "model": model,
             "messages": [{"role": "system", "content": SYSTEM},
-                         {"role": "user", "content": USER.format(body=body)}],
+                         {"role": "user", "content": USER.format(body=body) + _sheet_note(facts)}],
             # Deterministic: a fact-checker that returns different verdicts on the same script is
             # not a fact-checker. DeepSeek documents 0.0 as the setting for this kind of task.
             "temperature": 0.0,
@@ -438,7 +438,18 @@ def apply(script: Script, findings: list[Finding]) -> int:
     return applied
 
 
-def run(script: Script, cfg, out_dir: Path | None = None) -> Report:
+def _sheet_note(facts: str | None) -> str:
+    """The fact sheet the script was written from, as ground truth for the checker: a line whose
+    implication contradicts the sheet is wrong even when it is phrased as an image."""
+    if not facts or not facts.strip():
+        return ""
+    return ("\n\nGROUND TRUTH — the fact sheet this script was written from:\n" + facts.strip() +
+            "\n\nA line whose meaning contradicts the sheet is WRONG even when phrased figuratively: "
+            "'its architect stayed nameless' is wrong when the sheet names Karl Schwarzschild; "
+            "'the only' is wrong when the sheet lists a sibling. Style that leaves the facts intact is still not an error.")
+
+
+def run(script: Script, cfg, out_dir: Path | None = None, facts: str | None = None) -> Report:
     """Check a script and, under mode "fix", correct what the checker is sure about.
 
     Modes (`script.factcheck`): "off" skips entirely, "flag" reports without touching the script,
@@ -454,7 +465,7 @@ def run(script: Script, cfg, out_dir: Path | None = None) -> Report:
         return rep
 
     try:
-        rep.findings = _judge(script, cfg)
+        rep.findings = _judge(script, cfg, facts)
         rep.checked = True
     except Exception as e:  # noqa: BLE001 — a checker outage must never sink a build
         rep.reason = f"checker unavailable: {e}"

@@ -95,6 +95,38 @@ Sottotitoli:
 {items}"""
 
 
+COMPREHENSION_USER = """Read ONLY these Italian subtitles, in order, as a viewer who has not heard the English voice and
+knows nothing about the video. Answer in JSON exactly: {{"subject_en": "the subject of the video in 2-4 ENGLISH
+words (e.g. 'black hole radius', 'Jupiter moon Io')", "clear_by_card": <number of the FIRST card after which a
+general viewer knows what the video is about, or null if never>, "why": "one sentence"}}.
+
+{items}"""
+
+MAKE_CLEAR_USER = """These Italian subtitles never tell the viewer what the video is about: the subject is "{subject}".
+Rewrite cards 1 and 2 (max_chars respected) so that by card 2 the subject is named in plain Italian, keeping
+the facts and the surprise, correct spoken Italian, passato prossimo. Return JSON: {{"items": [{{"id": 1, "text": "..."}},
+{{"id": 2, "text": "..."}}]}}.
+
+{items}"""
+
+
+def comprehension(texts: dict[int, str], topic: str, backend) -> tuple[bool, str]:
+    """Can a reader of the subtitles ALONE tell what the video is about? The model names the subject in
+    English; it passes if that matches a keyword of the topic or the subject is clear by card 2."""
+    from .llm import names_subject
+    rows = [{"card": i, "text": texts[i]} for i in sorted(texts)]
+    data = backend.chat("You are a careful reader. Return STRICT JSON only.",
+                        COMPREHENSION_USER.format(items=_items_json(rows)), temperature=0.0)
+    subject = str((data or {}).get("subject_en") or "")
+    clear = (data or {}).get("clear_by_card")
+    try:
+        clear = int(clear) if clear is not None else None
+    except (TypeError, ValueError):
+        clear = None
+    ok = names_subject(subject, topic) or (clear is not None and clear <= 2)
+    return ok, f"a reader of the subtitles alone says the video is about {subject!r}, clear by card {clear}"
+
+
 class SubtitleQualityError(RuntimeError):
     """A subtitle still fails the Italian lint after the proofreader and the fix passes. Raised so the
     build STOPS: the channel's owner asked that a sentence like "Solo un emisfero ci saluta mai" never
@@ -226,7 +258,7 @@ def _backend(cfg):
 
 
 def adapt(segments: list[tuple[int, str, float]], target_lang: str, cfg,
-          cps: float | None = None) -> list[str]:
+          cps: float | None = None, topic: str | None = None) -> list[str]:
     """(index, english_text, seconds) per segment → the {target_lang} subtitle text per segment,
     same order. Adapted under budget, revised, shortened once if still over; falls back per segment
     to the source text."""
@@ -311,6 +343,26 @@ def adapt(segments: list[tuple[int, str, float]], target_lang: str, cfg,
             if broken:
                 raise SubtitleQualityError("subtitles still fail the Italian lint: " + "; ".join(
                     f"seg {i}: {texts[i]!r} — {', '.join(p)}" for i, p in broken.items()))
+        if italian and topic and texts:   # the subject must be understandable from the Italian ALONE
+            content_ids = ids[:-1] if len(ids) > 1 else ids      # the CTA bridge is not the subject
+            ok, why = comprehension({i: texts[i] for i in content_ids if i in texts}, topic, backend)
+            if ok:
+                log.info("Subtitles: %s.", why)                       # on the record: what a cold reader understood
+            else:
+                log.warning("Subtitles: %s — asking for the subject to be named by card 2", why)
+                try:
+                    from .llm import subject_keywords
+                    rows2 = [{"id": i, "text": texts[i], "max_chars": limits[i]} for i in content_ids[:2] if i in texts]
+                    fixed = _parse(backend.chat(system, MAKE_CLEAR_USER.format(
+                        subject=" ".join(subject_keywords(topic)), items=_items_json(rows2)), temperature=0.2), ids)
+                    for i, t in fixed.items():
+                        if len(t) <= limits[i] * 1.2 and not italian_lint(t):
+                            texts[i] = t
+                except Exception as e:  # noqa: BLE001
+                    log.debug("make-clear pass skipped (%s)", e)
+                ok, why = comprehension({i: texts[i] for i in content_ids if i in texts}, topic, backend)
+                if not ok:
+                    raise SubtitleQualityError("i sottotitoli da soli non fanno capire di cosa parla il video — " + why)
     out = [texts.get(i) or txt for i, txt, _ in segments]
     made = sum(1 for i in ids if i in texts)
     log.info("Subtitles: %d/%d segments adapted to %s by %s (budget %.0f cps).", made, len(ids), name, model, cps)

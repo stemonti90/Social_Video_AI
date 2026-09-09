@@ -20,6 +20,7 @@ is left as it was.
 from __future__ import annotations
 
 import json
+import re
 import logging
 from pathlib import Path
 
@@ -61,6 +62,12 @@ VOICE = """THE VOICE:
   words; a comma exactly where a listener needs a breath; a full stop before the reveal, so the pause
   gives it weight; an em dash only for the twist ("The Moon is leaving us — four centimetres a year");
   never a semicolon, never a parenthesis, never three clauses in one breath.
+- CONTEXT ANCHOR: by the end of segment 2 the subject is NAMED in plain words ("a black hole", "the moon
+  Io"). Every segment carries one concrete fact from the sheet; a line that is only an image is banned;
+  at most ONE metaphor in the whole script, explained by the next line. Each segment at least 10 words.
+  A riddle is not a hook: a viewer must know what the video is about after two lines, in any language.
+- The cta_bridge respects the sheet's "CAN THE VIEWER SEE IT" line: if the subject cannot be seen or
+  photographed by a viewer, say so honestly and bridge to the sky they CAN photograph.
 """
 
 USER = """{facts}
@@ -104,7 +111,26 @@ def _chat(key: str, model: str, system: str, user: str) -> dict:
     return factcheck._extract_json(r.json()["choices"][0]["message"]["content"])
 
 
-def apply(script: Script, data: dict) -> tuple[Script | None, str]:
+def sheet_says_unseen(facts: str | None) -> bool:
+    """Does the fact sheet's "CAN THE VIEWER SEE IT" line open with a no? Only the FIRST clause counts:
+    "Yes, a small telescope shows Io as a dot, but not its volcanoes" is a yes; "You cannot see the
+    Schwarzschild radius itself, but…" is a no."""
+    m = re.search(r"CAN THE VIEWER SEE IT:\s*(.+)", facts or "", re.I)
+    if not m:
+        return False
+    first = re.split(r"[,;:.]|\bbut\b|\byet\b", m.group(1), 1)[0]
+    return bool(re.search(r"\b(no|not|cannot|can't|never|invisible|impossible|too (faint|small|far|dim))\b", first, re.I))
+
+
+def claims_visible(bridge: str) -> bool:
+    """Does the bridge tell the viewer they can see or photograph the subject ITSELF? A negated clause
+    ("you can't see it, but the Milky Way that hides one…") is honest and does not count."""
+    b = re.sub(r"\b(can(?:no|')t|cannot|never|not|won't|no)\b[^,.;]*", " ", bridge or "", flags=re.I)
+    return bool(re.search(r"\b(see|spot|capture|photograph|catch|image|shoot|stack|find|watch)\s+(it|this|that|them|its|one|the same)\b",
+                          b, re.I))
+
+
+def apply(script: Script, data: dict, topic: str | None = None, facts: str | None = None) -> tuple[Script | None, str]:
     """A new Script from the model's reply, or (None, reason) when the reply fails a guard."""
     from .llm import copied_exemplar, morbid_in_script
     content = [s for s in script.segments if s.kind != "cta"]
@@ -117,7 +143,6 @@ def apply(script: Script, data: dict) -> tuple[Script | None, str]:
         if not line:
             return None, "empty narration"
         new_lines.append(line)
-    import re
     head = " ".join(new_lines[0].split()[:6]).lower()
     if re.search(r"\d", head) or re.search(r"\b(one|two|three|four|five|six|seven|eight|nine|ten|dozen|hundred|thousand|"
                                             r"million|billion|trillion)\b", head):
@@ -128,6 +153,13 @@ def apply(script: Script, data: dict) -> tuple[Script | None, str]:
         for sent in re.split(r"(?<=[.!?])\s+", x):
             if _words(sent) > 26:
                 return None, f"run-on sentence ({_words(sent)} words): {sent[:40]!r}"
+    from .llm import names_subject
+    topic = topic or script.topic
+    if topic and not names_subject(" ".join(new_lines[:2]), topic):
+        return None, "subject not named by segment 2"     # six riddles about a black hole never said "black hole"
+    for x in new_lines:
+        if _words(x) < 9:
+            return None, f"line too short ({_words(x)} words, < 4 s): {x[:40]!r}"
     before = sum(_words(s.narration) for s in content)
     after = sum(_words(x) for x in new_lines)
     if not (0.75 * before <= after <= 1.25 * before):      # ±25% ≈ ±5 s on a 50 s video; the fit already sized it
@@ -140,6 +172,8 @@ def apply(script: Script, data: dict) -> tuple[Script | None, str]:
     for x in new_lines + [bridge]:
         if imperial.search(x):                # the audience reads metric; "a four-inch telescope" slipped through
             return None, f"imperial unit in {x[:40]!r}"
+    if sheet_says_unseen(facts) and claims_visible(bridge):
+        return None, "bridge claims the viewer can see what the sheet says they cannot"
     probe = {"title": title or script.title,
              "segments": [{"narration": x} for x in new_lines],
              "cta_bridge": bridge or script.cta_bridge}
@@ -195,7 +229,7 @@ def run(script: Script, facts: str | None, cfg, out_dir: Path | None = None,
         except Exception as e:  # noqa: BLE001 — a polish must never sink a build
             log.warning("Polish pass failed (%s) — keeping the script as written.", e)
             return script
-        out, why = apply(script, data)
+        out, why = apply(script, data, topic=script.topic, facts=facts)
         if out is not None:
             log.info("Polish: script rewritten in the channel's voice by %s (%d segments).", model, len(content))
             if out_dir:

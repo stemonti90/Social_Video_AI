@@ -41,7 +41,7 @@ def main(slug: str) -> int:
     new = polish.run(script, facts, cfg, out_dir=project.root)
     accepted = new is not script
     if accepted:
-        rep = factcheck.run(new, cfg, out_dir=project.root)
+        rep = factcheck.run(new, cfg, out_dir=project.root, facts=facts)
         wrong = [f for f in rep.findings if f.verdict == "wrong"]
         log.info("fact-check after polish: %d wrong, %d unsure", len(wrong), len(rep.findings) - len(wrong))
     if cfg.funnel.enabled:

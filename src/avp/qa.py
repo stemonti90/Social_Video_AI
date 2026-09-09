@@ -134,6 +134,7 @@ def check(project, cfg, platforms: list[str] | None = None) -> list[str]:
     script = _script_dict(project)
     if script and (mw := morbid_in_script(script)):
         problems.append(f"morbid word in the script: {mw!r}")
+    problems += context_problems(script)
     sub_lang = getattr(cfg.script, "subtitle_language", None)
     if sub_lang and sub_lang != cfg.script.language:
         subs = project.root / f"subtitles.{sub_lang}.json"
@@ -174,6 +175,23 @@ def check(project, cfg, platforms: list[str] | None = None) -> list[str]:
         if ig and tt and ig.split("\n")[0].strip() == tt.split("#")[0].strip():
             problems.append("Instagram and TikTok captions are identical — adapt them")
     return problems
+
+
+def context_problems(script: dict | None) -> list[str]:
+    """The viewer must know what the video is about by the second line, and no line may be a flash:
+    the subject named in segments 1-2 (topic keywords), every content line at least 9 words."""
+    from .llm import names_subject
+    if not script:
+        return []
+    segs = [s for s in script.get("segments", []) if s.get("kind") != "cta"]
+    out = []
+    topic = script.get("topic") or ""
+    if topic and segs and not names_subject(" ".join(s.get("narration", "") for s in segs[:2]), topic):
+        out.append(f"the subject ({topic!r}) is not named in the first two lines — no context for the viewer")
+    short = [s["index"] for s in segs if len(str(s.get("narration", "")).split()) < 9]
+    if short:
+        out.append(f"line(s) {short} shorter than 9 words (< 4 s on screen)")
+    return out
 
 
 def _script_dict(project) -> dict | None:

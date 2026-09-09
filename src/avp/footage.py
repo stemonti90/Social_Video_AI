@@ -463,7 +463,7 @@ def _try_wikimedia(project: VideoProject, seg, queries, used_ids) -> bool:
     return True
 
 
-_OURS = frozenset({"generated", "nasa", "wikimedia", "fallback"})
+_OURS = frozenset({"generated", "nasa", "wikimedia", "fallback", "endcard"})
 
 
 def _stale_from_a_previous_script(project, seg) -> bool:
@@ -488,17 +488,52 @@ def _stale_from_a_previous_script(project, seg) -> bool:
             continue
         if r.get("outcome") not in _OURS:
             return False                       # ours only; "manual" and unknowns are the operator's
+        if r.get("outcome") == "endcard":
+            # Our endcard is never kept: re-rendered every build (cheap, deterministic, always the
+            # current design) and, when a longer script turns its index into a CONTENT segment, it
+            # must not survive as that segment's "manual" picture. Observed 9/9: a 6-line script grew
+            # to 7 lines and line 7 ("Even you have one…") played over the AstroStackerPro endcard.
+            return True
         return (r.get("segment") or "") != (seg.narration or "")[:120]
     return False
+
+
+def _is_our_endcard(path: Path, endcard_png: bytes) -> bool:
+    """Byte-for-byte the official endcard (the render is deterministic): a leftover from an earlier,
+    shorter build whose CTA sat at this index — never a picture the operator placed."""
+    try:
+        return path.suffix.lower() == ".png" and path.stat().st_size == len(endcard_png) \
+            and path.read_bytes() == endcard_png
+    except OSError:
+        return False
 
 
 def resolve_footage(project: VideoProject, script: Script, cfg, allow_download: bool = True) -> Script:
     fdir = project.footage_dir
     used_ids: set[str] = set()   # dedup the same asset across segments
     report: list[dict] = []      # per-segment relevance audit (text, query, asset, score, outcome)
+    from . import captions as captions_mod  # lazy: uses Pillow
+    ref = project.root / "work" / "endcard_ref.png"        # a fresh render, to recognise leftovers by bytes
+    ref.parent.mkdir(parents=True, exist_ok=True)
+    captions_mod.render_endcard(ref, cfg.funnel, cfg.video)
+    endcard_png = ref.read_bytes()
     for seg in script.segments:
+        if seg.kind == "cta":
+            # The official endcard is mandatory (QA rejects anything else): re-rendered every build,
+            # never a manual override — a leftover from an earlier design or a stray file cannot ship.
+            dest = fdir / f"{seg.index:02d}.png"
+            for old_file in sorted(fdir.glob(f"{seg.index:02d}.*")) + sorted(fdir.glob(f"{seg.index:02d}_[0-9]*")):
+                if old_file != dest:
+                    old_file.unlink(missing_ok=True)
+            captions_mod.render_endcard(dest, cfg.funnel, cfg.video)
+            seg.footage = dest.name
+            # on the record, so the next build knows this file is ours (see _stale_from_a_previous_script)
+            report.append(_report_entry(seg, {"title": "app endcard"}, 1.0, 0.0, "endcard",
+                                        f"rendered from the funnel config ({cfg.funnel.app_name})"))
+            log.info("Segment %d ← app endcard (%s)", seg.index, cfg.funnel.app_name)
+            continue
         manual = sorted(fdir.glob(f"{seg.index:02d}.*")) or sorted(fdir.glob(f"{seg.index}.*"))
-        if manual and _stale_from_a_previous_script(project, seg):
+        if manual and (_stale_from_a_previous_script(project, seg) or _is_our_endcard(manual[0], endcard_png)):
             log.info("Segment %d: the picture on disk was made for the previous script — regenerating",
                      seg.index)
             for old_file in manual + sorted(fdir.glob(f"{seg.index:02d}_[0-9]*")):
@@ -508,13 +543,6 @@ def resolve_footage(project: VideoProject, script: Script, cfg, allow_download: 
             seg.footage = manual[0].name
             used_ids.add(manual[0].stem)
             log.info("Segment %d ← manual %s", seg.index, manual[0].name)
-            continue
-        if seg.kind == "cta":
-            from . import captions as captions_mod  # lazy: uses Pillow
-            dest = fdir / f"{seg.index:02d}.png"
-            captions_mod.render_endcard(dest, cfg.funnel, cfg.video)
-            seg.footage = dest.name
-            log.info("Segment %d ← app endcard (%s)", seg.index, cfg.funnel.app_name)
             continue
         if not allow_download:
             log.warning("Segment %d has no footage (drop a file at %s/%02d.jpg)",

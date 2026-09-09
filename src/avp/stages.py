@@ -168,7 +168,7 @@ def stage_script(project: VideoProject, cfg: Config, topic: str | None) -> Scrip
     # a correction is free here and costs a full rebuild once the voice has been synthesised.
     try:
         from . import factcheck
-        factcheck.run(script, cfg, out_dir=project.root)
+        factcheck.run(script, cfg, out_dir=project.root, facts=facts)
     except Exception as e:  # noqa: BLE001 — the checker is a safety net, never a gate
         log.warning("Fact-check stage skipped (%s)", e)
 
@@ -353,7 +353,8 @@ def stage_captions(project: VideoProject, cfg: Config) -> None:
                 items.append((s.index, bridge, max(1.0, min(window, float(s.duration)))))
         existing = json.loads(sub_path.read_text()) if sub_path.exists() else None
         if subs_mod.stale(existing, items):     # keyed by SOURCE text: an edited line gets a new subtitle
-            texts = subs_mod.adapt(items, sub_lang, cfg)
+            texts = subs_mod.adapt(items, sub_lang, cfg,
+                                   topic=script.topic or str(project.manifest.data.get("topic") or ""))
             sub_path.write_text(_json([{"index": i, "text": t, "source": src, "seconds": round(sec, 2)}
                                        for (i, src, sec), t in zip(items, texts)]))
             log.info("Adapted %d segments → %s subtitles", len(texts), sub_lang)
