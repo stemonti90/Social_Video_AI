@@ -99,12 +99,12 @@ Sottotitoli:
 {items}"""
 
 
-COMPREHENSION_USER = """Read ONLY these Italian subtitles, in order, as a viewer who has not heard the English voice and
+COMPREHENSION_USER = """Read ONLY these {lang} subtitles, in order, as a viewer who has not heard the voice and
 knows nothing about the video. Answer in JSON exactly: {{"subject_en": "the subject of the video in 2-4 ENGLISH
 words (e.g. 'black hole radius', 'Jupiter moon Io')", "clear_by_card": <number of the FIRST card after which a
 general viewer knows what the video is about, or null if never>, "unclear_cards": [numbers of the cards a viewer
-cannot understand ON THEIR OWN: no grammatical subject (an order where a statement was meant), a pronoun or
-"it" with nothing to point to, a thing described but never named], "why": "one sentence"}}.
+cannot understand EVEN AFTER READING THE CARDS BEFORE IT: no grammatical subject where a statement was meant, a
+pronoun with nothing to point to, a thing described but never named, a riddle whose answer never comes], "why": "one sentence"}}.
 
 {items}"""
 
@@ -168,14 +168,33 @@ def dropped_names(english: str, italian: str) -> list[str]:
     return missing
 
 
-def comprehension(texts: dict[int, str], topic: str, backend) -> tuple[bool, str, list[int]]:
+SAME_SUBJECT_USER = """A cold reader summarised a short science video as: "{subject}". The video's working title is:
+"{topic}". Is the reader describing the same video — the same thing being explained, not merely a related
+field? Return JSON exactly: {{"same": true or false, "why": "one sentence"}}."""
+
+
+def same_subject(subject: str, topic: str, backend) -> bool:
+    """Semantic fallback for the keyword match: "photographing the Milky Way with a phone" IS the video
+    "How to photograph the Milky Way with your phone" even though no keyword lines up."""
+    if not subject.strip() or not topic.strip():
+        return False
+    try:
+        data = backend.chat("You compare descriptions. Return STRICT JSON only.",
+                            SAME_SUBJECT_USER.format(subject=subject.strip(), topic=topic.strip()), temperature=0.0)
+        return bool(isinstance(data, dict) and data.get("same") is True)
+    except Exception as e:  # noqa: BLE001
+        log.debug("same_subject skipped (%s)", e)
+        return False
+
+
+def comprehension(texts: dict[int, str], topic: str, backend, lang: str = "Italian") -> tuple[bool, str, list[int]]:
     """Can a reader of the subtitles ALONE tell what the video is about? The model names the subject in
     English; it passes if that matches a keyword of the topic or the subject is clear by card 2. It also
     lists the cards that do not work on their own (no subject, dangling pronoun, thing never named)."""
     from .llm import names_subject
     rows = [{"card": i, "text": texts[i]} for i in sorted(texts)]
     data = backend.chat("You are a careful reader. Return STRICT JSON only.",
-                        COMPREHENSION_USER.format(items=_items_json(rows)), temperature=0.0)
+                        COMPREHENSION_USER.format(lang=lang, items=_items_json(rows)), temperature=0.0)
     subject = str((data or {}).get("subject_en") or "")
     clear = (data or {}).get("clear_by_card")
     try:
@@ -188,7 +207,7 @@ def comprehension(texts: dict[int, str], topic: str, backend) -> tuple[bool, str
             unclear.append(int(c))
         except (TypeError, ValueError):
             continue
-    ok = names_subject(subject, topic) or (clear is not None and clear <= 2)
+    ok = names_subject(subject, topic) or (clear is not None and clear <= 2) or same_subject(subject, topic, backend)
     why = f"a reader of the subtitles alone says the video is about {subject!r}, clear by card {clear}"
     if unclear:
         why += f", cards {unclear} do not stand on their own"

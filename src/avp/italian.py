@@ -27,6 +27,7 @@ from __future__ import annotations
 
 import json
 import logging
+import re
 from pathlib import Path
 
 from . import factcheck
@@ -40,8 +41,8 @@ class ItalianScriptError(RuntimeError):
     """The Italian script could not be brought to the standard — the video must not be built."""
 
 
-TERMS = ("obiettivo (lens: mai 'lente'), messa a fuoco (focus), cursore (slider), tacca o passo (a click of a "
-         "slider: mai 'scatto'), scatto = una singola foto, esposizione e posa lunga (exposure), sovrapporre o "
+TERMS = ("obiettivo (lens: mai 'lente'), messa a fuoco (focus), cursore (slider), tacca (a click or step of a "
+         "slider: mai 'scatto', mai 'passo'), scatto = una singola foto, esposizione e posa lunga (exposure), sovrapporre o "
          "sommare le foto (stacking), rumore (noise), sensore, treppiede, orizzonte degli eventi, raggio e "
          "diametro (non confonderli), anno luce, chilometri e metri (mai miglia e piedi), ammasso, nebulosa, "
          "galassia, sonda, lander, rover")
@@ -124,6 +125,31 @@ IT_NOTE = ("\n\nNOTE: this script is written in ITALIAN. Judge the facts exactly
            "every fix in Italian, in the same register.")
 
 MAX_ROUNDS = 3          # one writing, two rewrites with reasons — then the stage fails
+
+# Words in a sense no Italian photographer uses — the proofreader itself once turned a correct "tacca"
+# into "scatto" (a photo), so a correction that introduces one is refused and a card that has one fails.
+_BAD_SENSE = (re.compile(r"\bscatt[oi]\s+(indietro|avanti|prima|dopo|più|meno)\b", re.I),
+              re.compile(r"\b(la|una|delle?|alla)\s+lent[ei]\b", re.I),
+              re.compile(r"\bmigli[ao]\b", re.I))
+
+
+def bad_sense(text: str) -> list[str]:
+    return [m.group(0) for rx in _BAD_SENSE if (m := rx.search(text or ""))]
+
+
+def _parse_any(data: dict, ids: list[int]) -> dict[int, str]:
+    """Like subtitles._parse, but a rewrite that echoes the input schema ("italian" instead of "text")
+    is still read — observed 9/9: two rewrite rounds were silently dropped for that."""
+    out: dict[int, str] = {}
+    for it in (data.get("items") or []) if isinstance(data, dict) else []:
+        try:
+            i = int(it.get("id"))
+        except (TypeError, ValueError, AttributeError):
+            continue
+        text = " ".join(str(it.get("text") or it.get("italian") or it.get("testo") or "").split())
+        if i in ids and text:
+            out[i] = text
+    return out
 LEN_MIN, LEN_MAX = 0.6, 1.6   # Italian chars vs English chars: outside this the card lost or padded content
 
 
@@ -165,7 +191,7 @@ def _proof(texts: dict[int, str], en: dict[int, str], backend) -> int:
         except (TypeError, ValueError, AttributeError):
             continue
         t = " ".join(str(it.get("text", "")).split())
-        if i in texts and it.get("ok") is False and t and t != texts[i] and not italian_lint(t):
+        if i in texts and it.get("ok") is False and t and t != texts[i] and not italian_lint(t) and not bad_sense(t):
             log.info("Correttore: scheda %d %r → %r", i, texts[i], t)
             texts[i] = t
             fixed += 1
@@ -237,6 +263,8 @@ def _check(texts: dict[int, str], en: dict[int, str], script: Script, facts: str
     for i, t in texts.items():
         for p in italian_lint(t):
             add(i, f"italiano scorretto: {p}")
+        for w in bad_sense(t):
+            add(i, f"termine nel senso sbagliato: {w!r} (una tacca del cursore non è uno scatto; lens è obiettivo; niente miglia)")
         lost = dropped_names(en[i], t)
         if lost:
             add(i, f"manca il nome che l'inglese ha: {', '.join(lost)}")
@@ -255,9 +283,12 @@ def _check(texts: dict[int, str], en: dict[int, str], script: Script, facts: str
         if not ok:
             for i in content_ids[:2]:
                 add(i, "il soggetto del video non è chiaro entro la scheda 2 — " + why)
+        anchor = content_ids[:2]                    # the two cards that must give the viewer the context
         for i in unclear:
-            if i in content_ids:
+            if i in anchor:
                 add(i, "la scheda non si capisce da sola (soggetto mancante, riferimento vago o cosa mai nominata)")
+            elif i in content_ids:
+                notes.append(f"lettore a freddo: la scheda {i} non si regge da sola (tollerato: non è l'ancora)")
         notes.append("lettore a freddo: " + why)
     except Exception as e:  # noqa: BLE001
         log.warning("Lettore a freddo saltato (%s)", e)
@@ -295,11 +326,15 @@ def run(script: Script, facts: str | None, cfg, out_dir: Path | None = None) -> 
                     "; ".join(f"{i}: {p[0][:70]}" for i, p in sorted(problems.items())))
         if round_no == MAX_ROUNDS:
             _write(report, out_dir)
-            raise ItalianScriptError("il copione italiano non raggiunge lo standard dopo %d giri: %s" % (
+            raise ItalianScriptError("il copione italiano non raggiunge lo standard dopo %d giri: %s. "
+                                     "Il copione inglese è salvato in script.md: scrivi a mano le righe ITALIAN "
+                                     "mancanti o sbagliate e lancia `avp build`." % (
                 MAX_ROUNDS, "; ".join(f"scheda {i}: {' / '.join(p)}" for i, p in sorted(problems.items()))))
         redo = [{"id": i, "english": en[i], "italian": texts[i], "problems": problems[i]} for i in sorted(problems)]
-        fixed = _parse(backend.chat(WRITER_SYSTEM, REWRITE_USER.format(terms=TERMS, items=_items_json(redo)),
-                                    temperature=0.3), ids)
+        fixed = _parse_any(backend.chat(WRITER_SYSTEM, REWRITE_USER.format(terms=TERMS, items=_items_json(redo)),
+                                        temperature=0.3), ids)
+        if not any(i in fixed for i in problems):
+            log.warning("Riscrittura non leggibile (nessuna scheda restituita per %s)", sorted(problems))
         for i, t in fixed.items():
             if i in problems:
                 texts[i] = t

@@ -4851,6 +4851,9 @@ class TwoScriptsItalianAndEnglish(unittest.TestCase):
             if "Read ONLY these Italian subtitles" in user:
                 hit("reader")
                 return R({"subject_en": "phone camera focus on stars", "clear_by_card": 1, "unclear_cards": []})
+            if "Is the reader describing the same video" in user:
+                hit("same_subject")
+                return R({"same": True, "why": "same"})
             if "Fix ONLY grammar, punctuation and syntax" in user:
                 hit("en_proof")
                 return R({"items": [{"index": 1, "ok": True}]})
@@ -4922,6 +4925,51 @@ class TwoScriptsItalianAndEnglish(unittest.TestCase):
         self.assertIn("senso diverso", str(ctx.exception))
         self.assertEqual(calls["rewrite"], italian.MAX_ROUNDS - 1)
 
+    def test_rewrites_that_echo_the_input_schema_are_still_read(self):
+        from avp import italian
+        self.assertEqual(italian._parse_any({"items": [{"id": 3, "italian": "Testo."}, {"id": 4, "testo": "Altro."},
+                                                       {"id": 5, "text": "Terzo."}, {"id": 9, "text": "fuori"}]}, [3, 4, 5]),
+                         {3: "Testo.", 4: "Altro.", 5: "Terzo."})
+        self.assertEqual(italian.bad_sense("Il punto giusto è qualche scatto indietro."), ["scatto indietro"])
+        self.assertEqual(italian.bad_sense("Ha fatto uno scatto della Luna con la lente d'ingrandimento."), ["la lente"])
+        self.assertEqual(italian.bad_sense("Il cursore va qualche tacca indietro; lo scatto dura 15 secondi."), [])
+
+    def test_the_proofreader_may_not_introduce_a_wrong_sense(self):
+        from avp import italian
+
+        class B:
+            def chat(self, system, user, temperature=0.2):
+                return {"items": [{"id": 4, "ok": False, "text": "Il vero punto di infinito è qualche scatto indietro."}]}
+        texts = {4: "Il vero punto di infinito è qualche tacca indietro."}
+        self.assertEqual(italian._proof(texts, {4: "The true infinity point is a few clicks back."}, B()), 0)
+        self.assertEqual(texts[4], "Il vero punto di infinito è qualche tacca indietro.")
+
+    def test_only_the_anchor_cards_must_stand_alone_and_the_subject_match_is_semantic(self):
+        from avp import italian
+        s = self._script()
+        texts = {1: self.IT[1], 2: self.IT[2], 3: self.IT[3], 4: self.BRIDGE_IT}
+        en = {1: self.EN[1], 2: self.EN[2], 3: self.EN[3], 4: self.BRIDGE_EN}
+        asked = []
+
+        class B:
+            def chat(self, system, user, temperature=0.2):
+                if "Translate each Italian" in user:
+                    return {"items": [{"id": i, "text": t} for i, t in texts.items()]}
+                if "Decide whether the Italian says the same thing" in user:
+                    return {"items": [{"id": i, "same": True, "why": "ok"} for i in texts]}
+                if "correttore" in user:
+                    return {"items": [{"id": i, "ok": True} for i in texts]}
+                if "Is the reader describing the same video" in user:
+                    asked.append(user)
+                    return {"same": True, "why": "same video"}
+                return {"subject_en": "photographing the Milky Way", "clear_by_card": 6, "unclear_cards": [3]}
+        with mock.patch("avp.italian.factcheck._judge", return_value=[]):
+            problems, notes = italian._check(texts, en, s, "FACTS", self._cfg(), B(), [1, 2, 3])
+        self.assertEqual(problems, {})                                   # card 3 weak: a note, not a problem
+        self.assertTrue(any("scheda 3 non si regge" in n for n in notes))
+        self.assertEqual(len(asked), 1)                                  # the keyword match failed → semantic match
+        self.assertIn(self.TOPIC, asked[0])
+
     def test_a_dropped_name_and_a_calque_are_reasons_for_a_rewrite(self):
         from avp import italian
         s = self._script()
@@ -4950,7 +4998,9 @@ class TwoScriptsItalianAndEnglish(unittest.TestCase):
         self.assertIn("italian_mod.complete(script)", src)
         self.assertIn("italian_mod.verify(script, cfg)", src)
         self.assertLess(src.index("italian_mod.complete(script)"), src.index("subs_mod.adapt("))   # legacy is the fallback
-        self.assertIn("italian.run(script, facts, cfg, out_dir=project.root)", inspect.getsource(stages.stage_script))
+        src_script = inspect.getsource(stages.stage_script)
+        self.assertIn("italian.run(script, facts, cfg, out_dir=project.root)", src_script)
+        self.assertLess(src_script.index("project.script_json.write_text"), src_script.index("italian.run("))  # English saved first
         self.assertIn("polish.proofread(script, cfg)", inspect.getsource(stages.stage_script))
         self.assertIn("reading_pause(seg.italian", inspect.getsource(stages.stage_voice))
         self.assertAlmostEqual(stages.reading_pause("x" * 136, 6.0, 17.0), 2.0 if 2.0 < stages.READING_PAUSE_MAX else stages.READING_PAUSE_MAX, places=2)
@@ -4993,3 +5043,53 @@ class TwoScriptsItalianAndEnglish(unittest.TestCase):
         with mock.patch.dict("os.environ", {"DEEPSEEK_API_KEY": ""}, clear=False), \
              mock.patch("avp.polish.requests.post", side_effect=AssertionError("must not be called")):
             self.assertIs(polish.proofread(s, cfg), s)
+
+
+class TheColdReaderJudgesTheEnglishToo(unittest.TestCase):
+    """9/9 trial: the polish delivered "A relic of a vanished galaxy hides in your pocket." as the hook of a
+    video about focusing a phone on stars — grammatical, fact-checked, meaningless. The same cold reader
+    that judges the Italian cards now reads the English lines inside the polish loop."""
+
+    def test_an_unreadable_hook_sends_the_polish_back_with_the_reason(self):
+        import json as _json
+        from types import SimpleNamespace
+        from avp import polish
+        cfg = SimpleNamespace(script=SimpleNamespace(polish="auto", factcheck_key="k", factcheck_model="m", brief_model="",
+                                                      subtitle_editor="auto"),
+                              funnel=SimpleNamespace(app_name="App"), llm=SimpleNamespace(model="x"),
+                              captions=SimpleNamespace(reading_cps=17.0))
+        script = Script(title="t", topic="How to focus a phone camera on stars when autofocus fails",
+                        cta_bridge="You can photograph the Milky Way tonight with a tripod.",
+                        segments=[Segment(index=1, narration="Your camera hunts for edges a star does not have, and fails.", visual="v"),
+                                  Segment(index=2, narration="Autofocus needs contrast, and a star is a single point with no shape to grip.", visual="v")])
+        prompts = []
+
+        class R:
+            status_code = 200
+            text = ""
+            def __init__(self, p): self._p = p
+            def json(self): return {"choices": [{"message": {"content": _json.dumps(self._p)}}]}
+
+        def fake_post(url, headers=None, json=None, timeout=None):
+            user = json["messages"][1]["content"]
+            if "Read ONLY these English subtitles" in user:
+                riddle = "relic of a vanished galaxy" in user
+                return R({"subject_en": "phone focus on stars" if not riddle else "unclear", "clear_by_card": 1 if not riddle else None,
+                          "unclear_cards": [1] if riddle else []})
+            if "Is the reader describing the same video" in user:
+                return R({"same": False, "why": "no"})
+            prompts.append(user)
+            first = len(prompts) == 1
+            hook = "A relic of a vanished galaxy hides in your pocket, waiting for the dark." if first \
+                else "Your phone camera cannot focus on a star, because a star has no edges to grip."
+            return R({"title": "The Star-Blind Lens",
+                      "segments": [{"index": 1, "narration": hook},
+                                   {"index": 2, "narration": "Autofocus needs contrast, and a star is a single point with no shape to grip."}],
+                      "cta_bridge": "You can photograph the Milky Way tonight with a tripod."})
+        with mock.patch.dict("os.environ", {"DEEPSEEK_API_KEY": ""}, clear=False), \
+             mock.patch("avp.polish.requests.post", fake_post), mock.patch("avp.subtitles.requests.post", fake_post):
+            out = polish.run(script, "FACTS", cfg)
+        self.assertEqual(len(prompts), 2)                                            # rejected once, then accepted
+        self.assertIn("cold reader", prompts[1])                                     # the retry carries the reason
+        self.assertTrue(out.segments[0].narration.startswith("Your phone camera cannot focus"))
+        self.assertIn("THE HOOK IS TRUE", polish.VOICE)

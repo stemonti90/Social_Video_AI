@@ -199,6 +199,8 @@ def stage_script(project: VideoProject, cfg: Config, topic: str | None) -> Scrip
             visual="App endcard", keywords=[], kind="cta"))
     # The SECOND script: the Italian one, written as a text of its own and checked by back-translation,
     # proofreader, fact-check and a cold reader. It IS the subtitles. Without it there is no video.
+    project.script_json.write_text(_json(script.to_dict()))      # the English first: a failed Italian step
+    emit_script_md(script, project.script_md)                    # leaves script.md there to finish by hand
     from . import italian
     italian.run(script, facts, cfg, out_dir=project.root)
     project.script_json.write_text(_json(script.to_dict()))

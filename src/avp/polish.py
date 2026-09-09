@@ -66,6 +66,9 @@ VOICE = """THE VOICE:
   Io"). Every segment carries one concrete fact from the sheet; a line that is only an image is banned;
   at most ONE metaphor in the whole script, explained by the next line. Each segment at least 10 words.
   A riddle is not a hook: a viewer must know what the video is about after two lines, in any language.
+- THE HOOK IS TRUE AND ABOUT THE SUBJECT: a surprising fact or a concrete question from the sheet. A
+  riddle that is not literally true or whose referent the viewer cannot name ("a relic of a vanished
+  galaxy hides in your pocket") is banned — a cold reader must be able to say what line 1 is about.
 - The cta_bridge respects the sheet's "CAN THE VIEWER SEE IT" line: if the subject cannot be seen or
   photographed by a viewer, say so honestly and bridge to the sky they CAN photograph.
 """
@@ -258,6 +261,24 @@ def proofread(script: Script, cfg) -> Script:
     return script
 
 
+def _cold_reader(out: Script, cfg) -> str:
+    """Empty when the English lines pass a cold reading; otherwise the reason for the polish to retry.
+    Fail-soft: a reader outage never blocks the script."""
+    try:
+        from . import subtitles as subs
+        backend, _ = subs._backend(cfg)
+        lines = {s.index: s.narration for s in out.segments if s.kind != "cta" and s.narration.strip()}
+        ok, why, unclear = subs.comprehension(lines, out.topic, backend, lang="English")
+        anchor = sorted(lines)[:2]
+        if not ok:
+            return "a cold reader cannot tell what the video is about after two lines — " + why
+        if any(i in unclear for i in anchor):
+            return "line 1 or 2 does not stand on its own for a cold reader (name the thing, no riddle) — " + why
+    except Exception as e:  # noqa: BLE001
+        log.debug("cold reader skipped (%s)", e)
+    return ""
+
+
 def run(script: Script, facts: str | None, cfg, out_dir: Path | None = None,
         lane_rules: str | None = None) -> Script:
     """The polished script, or the input unchanged when the pass is off, unconfigured or fails a guard."""
@@ -295,6 +316,12 @@ def run(script: Script, facts: str | None, cfg, out_dir: Path | None = None,
             log.warning("Polish pass failed (%s) — keeping the script as written.", e)
             return script
         out, why = apply(script, data, topic=script.topic, facts=facts)
+        if out is not None and script.topic:
+            # The same cold reader that judges the Italian cards judges the English lines: can a
+            # viewer say what the video is about after two lines, and does line 1 stand on its own?
+            cold = _cold_reader(out, cfg)
+            if cold:
+                out, why = None, cold
         if out is not None:
             log.info("Polish: script rewritten in the channel's voice by %s (%d segments).", model, len(content))
             if out_dir:
