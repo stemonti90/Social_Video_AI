@@ -44,8 +44,9 @@ class ItalianScriptError(RuntimeError):
 TERMS = ("obiettivo (lens: mai 'lente'), messa a fuoco (focus), cursore (slider), tacca (a click or step of a "
          "slider: mai 'scatto', mai 'passo'), scatto = una singola foto, esposizione e posa lunga (exposure), sovrapporre o "
          "sommare le foto (stacking), rumore (noise), sensore, treppiede, orizzonte degli eventi, raggio e "
-         "diametro (non confonderli), anno luce, chilometri e metri (mai miglia e piedi), ammasso, nebulosa, "
-         "galassia, sonda, lander, rover")
+         "diametro (non confonderli), anno luce, chilometri e metri (mai miglia e piedi), bande di polvere (dust "
+         "lanes: mai 'corsie'), ammasso, nebulosa, galassia, sonda, lander, rover. Mai nominare altre app o "
+         "marchi: il nome dell'app del canale sta solo sulla scheda finale")
 
 WRITER_SYSTEM = ("Sei uno sceneggiatore scientifico madrelingua italiano per un canale di astronomia. Scrivi il "
                  "copione ITALIANO di un video la cui voce narrante è in inglese: il tuo testo diventa i sottotitoli, "
@@ -130,7 +131,8 @@ MAX_ROUNDS = 3          # one writing, two rewrites with reasons — then the st
 # into "scatto" (a photo), so a correction that introduces one is refused and a card that has one fails.
 _BAD_SENSE = (re.compile(r"\bscatt[oi]\s+(indietro|avanti|prima|dopo|più|meno)\b", re.I),
               re.compile(r"\b(la|una|delle?|alla)\s+lent[ei]\b", re.I),
-              re.compile(r"\bmigli[ao]\b", re.I))
+              re.compile(r"\bmigli[ao]\b", re.I),
+              re.compile(r"\bcorsi[ae]\s+di\s+polvere\b", re.I))      # dust lanes are "bande", not traffic lanes
 
 
 def bad_sense(text: str) -> list[str]:

@@ -4933,6 +4933,9 @@ class TwoScriptsItalianAndEnglish(unittest.TestCase):
         self.assertEqual(italian.bad_sense("Il punto giusto è qualche scatto indietro."), ["scatto indietro"])
         self.assertEqual(italian.bad_sense("Ha fatto uno scatto della Luna con la lente d'ingrandimento."), ["la lente"])
         self.assertEqual(italian.bad_sense("Il cursore va qualche tacca indietro; lo scatto dura 15 secondi."), [])
+        self.assertEqual(italian.bad_sense("Emergono corsie di polvere e nebulose."), ["corsie di polvere"])   # 9/9 trial calque
+        self.assertEqual(italian.bad_sense("Emergono le bande di polvere della Via Lattea."), [])
+        self.assertIn("Mai nominare altre app", italian.TERMS)
 
     def test_the_proofreader_may_not_introduce_a_wrong_sense(self):
         from avp import italian
@@ -5008,6 +5011,10 @@ class TwoScriptsItalianAndEnglish(unittest.TestCase):
         self.assertEqual(stages.reading_pause("x" * 104, 6.0, 17.0), 0.0)                     # 0.12 s short: not worth a pause
         self.assertEqual(stages.reading_pause("", 6.0, 17.0), 0.0)
         self.assertEqual(stages.reading_pause("x" * 400, 6.0, 17.0), stages.READING_PAUSE_MAX)  # capped
+        src_script = inspect.getsource(stages.stage_script)
+        self.assertIn("SUBTITLE_READING_FACTOR", src_script)                         # the voice pays for the reading pauses
+        self.assertLess(stages.SUBTITLE_READING_FACTOR, 1.0)
+        self.assertLessEqual(stages.READING_PAUSE_MAX, 1.2)
 
     def test_verify_reads_the_italian_on_disk_again(self):
         from avp import italian
@@ -5093,3 +5100,4 @@ class TheColdReaderJudgesTheEnglishToo(unittest.TestCase):
         self.assertIn("cold reader", prompts[1])                                     # the retry carries the reason
         self.assertTrue(out.segments[0].narration.startswith("Your phone camera cannot focus"))
         self.assertIn("THE HOOK IS TRUE", polish.VOICE)
+        self.assertIn("NEVER name another app", polish.VOICE)                          # ProCam / Open Camera in a funnel video, 9/9

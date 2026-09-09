@@ -68,7 +68,10 @@ VOICE = """THE VOICE:
   A riddle is not a hook: a viewer must know what the video is about after two lines, in any language.
 - THE HOOK IS TRUE AND ABOUT THE SUBJECT: a surprising fact or a concrete question from the sheet. A
   riddle that is not literally true or whose referent the viewer cannot name ("a relic of a vanished
-  galaxy hides in your pocket") is banned — a cold reader must be able to say what line 1 is about.
+  galaxy hides in your pocket", "a hidden galaxy waits in your pocket") is banned — a cold reader must be
+  able to say what line 1 is about: name the concrete thing (the phone, the star, the camera, the Moon).
+- NEVER name another app, brand or product ("ProCam", "Open Camera"): the channel's own app is named in
+  the CTA only. Say "a camera app with manual focus" instead.
 - The cta_bridge respects the sheet's "CAN THE VIEWER SEE IT" line: if the subject cannot be seen or
   photographed by a viewer, say so honestly and bridge to the sky they CAN photograph.
 """

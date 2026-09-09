@@ -108,7 +108,8 @@ def load_script(project: VideoProject) -> Script:
     return base
 
 
-READING_PAUSE_MAX = 1.5      # seconds of silence a segment may gain so its Italian card can be read
+READING_PAUSE_MAX = 1.2      # seconds of silence a segment may gain so its Italian card can be read
+SUBTITLE_READING_FACTOR = 0.92   # the spoken content shrinks by this much to pay for the reading pauses
 
 
 def reading_pause(italian: str, spoken_seconds: float, cps: float, cap: float = READING_PAUSE_MAX) -> float:
@@ -165,6 +166,10 @@ def stage_script(project: VideoProject, cfg: Config, topic: str | None) -> Scrip
     # 9, not 8: the spoken CTA plus its silent tail was measured at 6.4-8.9s across builds, and the
     # budget has to hold at the WORST case or the video crosses 60s exactly when the bridge runs long.
     content_target = cfg.script.target_seconds - (9 if cfg.funnel.enabled else 0)
+    if cfg.script.subtitle_language and cfg.script.subtitle_language != cfg.script.language:
+        # The Italian card is a full text and the voice waits for the reader (reading_pause): the spoken
+        # content must leave that room, or a 48 s target lands past 60 s.
+        content_target = int(round(content_target * SUBTITLE_READING_FACTOR))
     from . import brief
     from . import lanes as lanes_mod
     lane = lanes_mod.spec(lanes_mod.of(project))
