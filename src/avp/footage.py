@@ -517,6 +517,13 @@ def resolve_footage(project: VideoProject, script: Script, cfg, allow_download: 
     ref.parent.mkdir(parents=True, exist_ok=True)
     captions_mod.render_endcard(ref, cfg.funnel, cfg.video)
     endcard_png = ref.read_bytes()
+    # Provenance must survive a resume: the report is rewritten from scratch each run, and a kept
+    # picture that gets no row becomes "the operator's" on the NEXT build — after which a rewritten
+    # script would never regenerate it. Rows of kept pictures are carried over.
+    try:
+        prev_rows = {r.get("index"): r for r in json.loads((project.root / "footage_report.json").read_text())}
+    except Exception:  # noqa: BLE001
+        prev_rows = {}
     for seg in script.segments:
         if seg.kind == "cta":
             # The official endcard is mandatory (QA rejects anything else): re-rendered every build,
@@ -542,7 +549,14 @@ def resolve_footage(project: VideoProject, script: Script, cfg, allow_download: 
         if manual:
             seg.footage = manual[0].name
             used_ids.add(manual[0].stem)
-            log.info("Segment %d ← manual %s", seg.index, manual[0].name)
+            prev = prev_rows.get(seg.index)
+            if prev and prev.get("outcome") in _OURS:        # ours, same words: the row travels with the picture
+                report.append(prev)
+                log.info("Segment %d ← kept %s (ours, same words)", seg.index, manual[0].name)
+            else:                                            # the operator's file: recorded as such, never deleted
+                report.append(_report_entry(seg, {"title": manual[0].name}, 1.0, 0.0, "manual",
+                                            "file placed in footage/ by the operator"))
+                log.info("Segment %d ← manual %s", seg.index, manual[0].name)
             continue
         if not allow_download:
             log.warning("Segment %d has no footage (drop a file at %s/%02d.jpg)",

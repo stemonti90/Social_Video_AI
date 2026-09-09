@@ -2254,6 +2254,33 @@ class StaleImagesAreNotManualOverrides(unittest.TestCase):
             self.assertFalse(_is_our_endcard(other, ref.read_bytes()))
             self.assertFalse(_is_our_endcard(Path(tmp, "missing.png"), ref.read_bytes()))
 
+    def test_a_resume_keeps_the_provenance_of_the_pictures_it_kept(self):
+        """The report is rewritten every run. Before: a kept picture got no row, so on the NEXT build
+        it was "the operator's" and a rewritten script never regenerated it (the second resume of the
+        black-hole video kept only the endcard row). Ours travels with its row; a real operator file
+        is recorded as manual."""
+        from avp import footage
+        cfg = Config()
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp); fdir = root / "footage"; fdir.mkdir()
+            from PIL import Image
+            for n in (1, 2):
+                Image.new("RGB", (8, 8), (n, n, n)).save(fdir / f"{n:02d}.png")
+            (root / "footage_report.json").write_text(json.dumps(
+                [{"index": 1, "segment": "Ours, same words.", "outcome": "generated", "asset": "AI-generated"}]))
+            project = mock.Mock(root=root, footage_dir=fdir)
+            script = Script(title="t", segments=[
+                Segment(index=1, narration="Ours, same words.", visual="v", keywords=[]),
+                Segment(index=2, narration="A picture the operator dropped in.", visual="v", keywords=[]),
+                Segment(index=3, narration="Get the app — link in bio.", visual="App endcard", keywords=[], kind="cta")])
+            footage.resolve_footage(project, script, cfg, allow_download=False)
+            rows = {r["index"]: r for r in json.loads((root / "footage_report.json").read_text())}
+            self.assertEqual(rows[1]["outcome"], "generated")            # carried over
+            self.assertEqual(rows[2]["outcome"], "manual")               # recorded, never ours
+            self.assertEqual(rows[3]["outcome"], "endcard")
+            self.assertTrue((fdir / "02.png").exists())                  # the operator's file untouched
+            self.assertEqual([s.footage for s in script.segments], ["01.png", "02.png", "03.png"])
+
     def test_the_narration_is_compared_the_way_the_report_stores_it(self):
         """The report truncates to 120 chars; comparing against the full line would call every long
         segment stale and regenerate the whole video on every resume."""
