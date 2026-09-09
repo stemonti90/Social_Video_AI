@@ -27,7 +27,7 @@ from . import factcheck
 log = logging.getLogger(__name__)
 
 LANG_NAME = {"en": "English", "it": "Italian"}
-DEFAULT_CPS = 15.0            # characters per second a viewer reads comfortably (Netflix adult max: 17)
+DEFAULT_CPS = 17.0            # characters per second a viewer reads (Netflix adult guideline)
 MIN_BUDGET = 24               # even a half-second segment gets room for a few words
 
 EDITOR_SYSTEM = (

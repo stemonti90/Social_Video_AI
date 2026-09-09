@@ -205,7 +205,7 @@ def _extract_json(text: str) -> dict:
             return {}
 
 
-def _judge(script: Script, cfg, facts: str | None = None) -> list[Finding]:
+def _judge(script: Script, cfg, facts: str | None = None, note: str = "") -> list[Finding]:
     """One DeepSeek call over the whole script. Returns [] on any failure — never raises."""
     key = _api_key(cfg)
     if not key:
@@ -223,7 +223,7 @@ def _judge(script: Script, cfg, facts: str | None = None) -> list[Finding]:
         json={
             "model": model,
             "messages": [{"role": "system", "content": SYSTEM},
-                         {"role": "user", "content": USER.format(body=body) + _sheet_note(facts)}],
+                         {"role": "user", "content": USER.format(body=body) + _sheet_note(facts) + (note or "")}],
             # Deterministic: a fact-checker that returns different verdicts on the same script is
             # not a fact-checker. DeepSeek documents 0.0 as the setting for this kind of task.
             "temperature": 0.0,

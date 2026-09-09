@@ -193,7 +193,8 @@ class CaptionStyle:
     phrase_fontsize: int = 68        # 0 = same as fontsize
     phrase_max_lines: int = 4
     phrase_max_seconds: float = 7.0  # a card longer than this is cut at a sentence end
-    reading_cps: float = 15.0        # characters per second the subtitle text is budgeted for
+    reading_cps: float = 17.0        # characters per second a viewer reads (Netflix adult guideline); the Italian
+                                     # card is a full text, the voice waits for the reader beyond this (stages.reading_pause)
 
 
 @dataclass

@@ -35,6 +35,9 @@ class Segment:
     duration: float | None = None         # seconds, measured after TTS
     kind: str = "content"                 # "content" | "cta" (app endcard)
     credit: str = ""                      # source credit to display (e.g. "NASA/JPL-Caltech")
+    # The ITALIAN script for this beat — the subtitle card, written as a text of its own from the fact
+    # sheet and this line (avp/italian.py), never a compression of the English. For the CTA: the bridge.
+    italian: str = ""
 
 
 @dataclass

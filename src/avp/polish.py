@@ -193,6 +193,71 @@ def apply(script: Script, data: dict, topic: str | None = None, facts: str | Non
     return out, "ok"
 
 
+PROOF_SYSTEM = "You are a meticulous English copy editor for a spoken science script. Return STRICT JSON only."
+PROOF_USER = """Fix ONLY grammar, punctuation and syntax in these spoken lines: broken punctuation (". —"), agreement,
+a dangling clause, a sentence that does not parse, a missing word. Do not change facts, numbers, names, word
+choice or rhythm; do not shorten or lengthen beyond what the fix needs. Return "ok": true for a line that is
+already correct, otherwise "ok": false and the corrected line.
+Return JSON exactly: {{"items": [{{"index": 1, "ok": true, "text": "..."}}, ...]}}
+
+Lines:
+{items}"""
+
+
+def proofread(script: Script, cfg) -> Script:
+    """A cold copy-editing pass over the English: grammar, punctuation, syntax — never meaning. Each
+    correction must keep the line's length (±15% words) and pass the voice guards; anything else is
+    dropped. Fail-soft: no key, no network → the script is returned as it was."""
+    from .llm import copied_exemplar, morbid_in_script
+    key = factcheck._api_key(cfg)
+    if not key:
+        return script
+    content = [s for s in script.segments if s.kind != "cta" and s.narration.strip()]
+    rows = [{"index": s.index, "text": s.narration.strip()} for s in content]
+    if (script.cta_bridge or "").strip():
+        rows.append({"index": 0, "text": script.cta_bridge.strip(), "role": "cta_bridge"})
+    try:
+        r = requests.post(factcheck.DEEPSEEK_URL,
+                          headers={"Authorization": f"Bearer {key}", "Content-Type": "application/json"},
+                          json={"model": str(getattr(cfg.script, "factcheck_model", "deepseek-chat") or "deepseek-chat"),
+                                "messages": [{"role": "system", "content": PROOF_SYSTEM},
+                                             {"role": "user", "content": PROOF_USER.format(items=json.dumps(rows, ensure_ascii=False, indent=1))}],
+                                "temperature": 0.0, "response_format": {"type": "json_object"}}, timeout=factcheck.TIMEOUT)
+        if r.status_code >= 400:
+            raise RuntimeError(f"{r.status_code}: {(r.text or '')[:120]}")
+        data = factcheck._extract_json(r.json()["choices"][0]["message"]["content"])
+    except Exception as e:  # noqa: BLE001
+        log.warning("English proofread skipped (%s)", e)
+        return script
+    by_index = {s.index: s for s in content}
+    fixed = 0
+    for it in (data.get("items") or []) if isinstance(data, dict) else []:
+        try:
+            i = int(it.get("index"))
+        except (TypeError, ValueError, AttributeError):
+            continue
+        t = " ".join(str(it.get("text", "")).split())
+        if it.get("ok") is not False or not t:
+            continue
+        before = script.cta_bridge if i == 0 else by_index.get(i).narration if i in by_index else None
+        if before is None or t == before:
+            continue
+        if abs(_words(t) - _words(before)) > max(2, 0.15 * _words(before)):
+            log.info("Proofread: line %d rewritten beyond a fix — kept as it was", i)
+            continue
+        if morbid_in_script({"segments": [{"narration": t}]}) or copied_exemplar({"segments": [{"narration": t}]}):
+            continue
+        log.info("Proofread: line %d %r → %r", i, before, t)
+        if i == 0:
+            script.cta_bridge = t
+        else:
+            by_index[i].narration = t
+        fixed += 1
+    if fixed:
+        log.info("English proofread: %d line(s) corrected.", fixed)
+    return script
+
+
 def run(script: Script, facts: str | None, cfg, out_dir: Path | None = None,
         lane_rules: str | None = None) -> Script:
     """The polished script, or the input unchanged when the pass is off, unconfigured or fails a guard."""

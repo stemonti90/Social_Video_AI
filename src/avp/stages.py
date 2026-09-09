@@ -42,13 +42,15 @@ def emit_script_md(script: Script, path: Path) -> None:
         f"<!-- avp  topic: {script.topic} | target: {script.target_seconds}s | "
         f"disclosure_ai: {str(script.disclosure_ai).lower()} -->",
         "",
-        "_Edit the NARRATION lines freely — **check every fact**. Keep the `## n` headers._",
+        "_Edit the NARRATION (English voice) and ITALIAN (subtitle card) lines freely — **check every fact**. "
+        "Keep the `## n` headers._",
         "",
     ]
     for s in script.segments:
         lines += [
             f"## {s.index}",
             f"NARRATION: {s.narration}",
+            f"ITALIAN: {s.italian}",
             f"VISUAL: {s.visual}",
             f"KEYWORDS: {', '.join(s.keywords)}",
             "",
@@ -77,6 +79,8 @@ def parse_script_md(path: Path, base: Script) -> Script:
             upper = line.upper()
             if upper.startswith("NARRATION:"):
                 seg.narration = line.split(":", 1)[1].strip()
+            elif upper.startswith("ITALIAN:"):
+                seg.italian = line.split(":", 1)[1].strip()
             elif upper.startswith("VISUAL:"):
                 seg.visual = line.split(":", 1)[1].strip()
             elif upper.startswith("KEYWORDS:"):
@@ -102,6 +106,19 @@ def load_script(project: VideoProject) -> Script:
     if len(base.segments) < n:
         log.info("Coherence check: dropped %d duplicate segment(s) from the script.", n - len(base.segments))
     return base
+
+
+READING_PAUSE_MAX = 1.5      # seconds of silence a segment may gain so its Italian card can be read
+
+
+def reading_pause(italian: str, spoken_seconds: float, cps: float, cap: float = READING_PAUSE_MAX) -> float:
+    """Silence to add after a spoken line so a viewer can finish reading its Italian card at `cps`
+    characters per second. The Italian is a full text now, not a compression, so it may run a little
+    longer than the English voice; the voice waits — up to `cap` seconds — instead of the card being cut."""
+    if not (italian or "").strip() or spoken_seconds <= 0 or cps <= 0:
+        return 0.0
+    need = len(italian.strip()) / cps - spoken_seconds
+    return round(min(need, cap), 2) if need > 0.15 else 0.0
 
 
 def _cta_hook(cfg: Config) -> str:
@@ -171,12 +188,19 @@ def stage_script(project: VideoProject, cfg: Config, topic: str | None) -> Scrip
         factcheck.run(script, cfg, out_dir=project.root, facts=facts)
     except Exception as e:  # noqa: BLE001 — the checker is a safety net, never a gate
         log.warning("Fact-check stage skipped (%s)", e)
+    # A cold English copy editor: grammar, punctuation and syntax only (a fact-check fix once left
+    # "2.95 kilometers in radius. — a puncture in space" in a spoken line).
+    script = polish.proofread(script, cfg)
 
     if cfg.funnel.enabled:
         script.segments.append(Segment(
             index=len(script.segments) + 1,
             narration=_cta_narration(script, cfg),
             visual="App endcard", keywords=[], kind="cta"))
+    # The SECOND script: the Italian one, written as a text of its own and checked by back-translation,
+    # proofreader, fact-check and a cold reader. It IS the subtitles. Without it there is no video.
+    from . import italian
+    italian.run(script, facts, cfg, out_dir=project.root)
     project.script_json.write_text(_json(script.to_dict()))
     emit_script_md(script, project.script_md)
 
@@ -216,7 +240,7 @@ def stage_voice(project: VideoProject, cfg: Config) -> Script:
                 stamp = out.with_suffix(".txt")
                 spoken_before = stamp.read_text() if stamp.exists() else None
                 # text + the voice parameters (pauses, speed): a changed pause setting must re-synthesise
-                stamp_text = seg.narration + _voice_stamp(prov)
+                stamp_text = seg.narration + _voice_stamp(prov) + (f"|it{len(seg.italian.strip())}" if (seg.italian or "").strip() else "")
                 if out.exists() and spoken_before == stamp_text:
                     log.info("[%s] segment %d/%d (cached)", prov.name, seg.index, len(script.segments))
                 elif out.exists() and spoken_before is None:
@@ -258,6 +282,17 @@ def stage_voice(project: VideoProject, cfg: Config) -> Script:
                             raw.replace(out)
                     else:
                         raw.replace(out)
+                    # the voice waits for the reader: the Italian card is a full text, not a compression
+                    pause = reading_pause(seg.italian, ffmpeg.ffprobe_duration(out), cfg.captions.reading_cps)
+                    if pause:
+                        spoken = adir / f"{seg.index:02d}.spoken.wav"
+                        tail = adir / f"{seg.index:02d}.read_tail.wav"
+                        out.replace(spoken)
+                        ffmpeg.silence(tail, pause)
+                        ffmpeg.concat_audio([spoken, tail], out, gap=0.0)
+                        for tmp in (spoken, tail):
+                            tmp.unlink(missing_ok=True)
+                        log.info("[%s] segment %d: +%.1fs so the Italian card can be read", prov.name, seg.index, pause)
                 # Record the exact words this wav says, so an edited line is re-voiced next time
                 # instead of being served from cache in its old wording.
                 try:
@@ -352,7 +387,20 @@ def stage_captions(project: VideoProject, cfg: Config) -> None:
                 window = len(bridge.split()) / rate - CARD_LEAD
                 items.append((s.index, bridge, max(1.0, min(window, float(s.duration)))))
         existing = json.loads(sub_path.read_text()) if sub_path.exists() else None
-        if subs_mod.stale(existing, items):     # keyed by SOURCE text: an edited line gets a new subtitle
+        from . import italian as italian_mod
+        if sub_lang == "it" and italian_mod.complete(script):
+            # The Italian SCRIPT is the subtitles (two scripts, one per language — the owner's rule).
+            # Hand edits in script.md land here; they are re-verified (lint, names, cold reader).
+            it_cards = italian_mod.cards(script)
+            texts = [it_cards[i] for i, _, _ in items]
+            problems = italian_mod.verify(script, cfg)
+            if problems:
+                raise subs_mod.SubtitleQualityError("copione italiano non pubblicabile: " + "; ".join(problems))
+            sub_path.write_text(_json([{"index": i, "text": t, "source": src, "seconds": round(sec, 2)}
+                                       for (i, src, sec), t in zip(items, texts)]))
+            log.info("Sottotitoli: %d schede dal copione italiano", len(texts))
+        elif subs_mod.stale(existing, items):     # legacy: adapted from the English (no Italian script)
+            log.warning("Nessun copione italiano completo: sottotitoli adattati dall'inglese (percorso legacy)")
             texts = subs_mod.adapt(items, sub_lang, cfg,
                                    topic=script.topic or str(project.manifest.data.get("topic") or ""))
             sub_path.write_text(_json([{"index": i, "text": t, "source": src, "seconds": round(sec, 2)}

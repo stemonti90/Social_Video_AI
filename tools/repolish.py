@@ -48,6 +48,8 @@ def main(slug: str) -> int:
         new.segments.append(Segment(index=len(new.segments) + 1, narration=stages._cta_narration(new, cfg),
                                     visual="App endcard", keywords=[], kind="cta",
                                     footage=old_cta.footage if old_cta else None))
+    from avp import italian
+    italian.run(new, facts, cfg, out_dir=project.root)     # the Italian script follows the English
     project.script_json.write_text(stages._json(new.to_dict()))
     stages.emit_script_md(new, project.script_md)
     project.manifest.data["title"] = new.title

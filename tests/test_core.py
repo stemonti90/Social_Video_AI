@@ -4775,3 +4775,221 @@ class TheViewerMustKnowWhatTheVideoIsAbout(unittest.TestCase):
         self.assertEqual(qa.context_problems(good), [])
         self.assertEqual(qa.context_problems(None), [])
         self.assertIn("context_problems(script)", inspect.getsource(qa.check))
+
+
+class TwoScriptsItalianAndEnglish(unittest.TestCase):
+    """The owner's rule (9/9): two distinct scripts, both written with full care — the English is the
+    voice, the Italian IS the subtitles. Written as a text of its own from the fact sheet, checked by
+    back-translation, a strict proofreader, the fact-check and a cold reader; rewritten with reasons;
+    a script that stays wrong stops the stage. The voice waits for the reader when a card runs long."""
+
+    TOPIC = "How to focus a phone camera on stars when autofocus fails"
+    EN = {1: "Your camera hunts for edges a star doesn't have.",
+          2: "Autofocus needs contrast, but a star is a single point with no shape to grip, so the lens stays blurry.",
+          3: "That sweet spot is a few clicks back from the end of the slider, not the maximum."}
+    IT = {1: "La fotocamera cerca dei bordi che una stella non ha.",
+          2: "L'autofocus ha bisogno di contrasto, ma una stella è un punto senza forma: l'immagine resta sfocata.",
+          3: "Il punto giusto è qualche tacca prima della fine del cursore, non il massimo."}
+    BAD3 = "Il punto giusto è qualche scatto indietro, non al massimo."
+    BRIDGE_EN = "Find a bright star tonight and let your phone hold its light."
+    BRIDGE_IT = "Stanotte cerca una stella luminosa e lascia che il telefono ne raccolga la luce."
+
+    def _script(self):
+        segs = [Segment(index=i, narration=self.EN[i], visual="v", keywords=["k"]) for i in (1, 2, 3)]
+        segs.append(Segment(index=4, narration=self.BRIDGE_EN + " Get App — link in bio.", visual="App endcard", kind="cta"))
+        return Script(title="The Star-Blind Lens", topic=self.TOPIC, cta_bridge=self.BRIDGE_EN, segments=segs)
+
+    def _cfg(self):
+        from types import SimpleNamespace
+        return SimpleNamespace(script=SimpleNamespace(subtitle_editor="auto", factcheck_key="k", factcheck_model="m",
+                                                      brief_model="", factcheck="fix"),
+                               captions=SimpleNamespace(reading_cps=17.0), llm=SimpleNamespace(model="x"),
+                               funnel=SimpleNamespace(app_name="App"))
+
+    def _fake(self, *, third_card=None, compare_bad_rounds=0, judge=None):
+        """DeepSeek stand-in for the whole Italian flow; routes on the prompt, counts the calls."""
+        import json as _json
+        calls: dict[str, int] = {}
+        state = {"compare": 0}
+        third = third_card or self.IT[3]
+
+        class R:
+            status_code = 200
+            text = ""
+            def __init__(self, payload): self._p = payload
+            def json(self): return {"choices": [{"message": {"content": _json.dumps(self._p)}}]}
+
+        def fake_post(url, headers=None, json=None, timeout=None):
+            user = json["messages"][1]["content"]
+            def hit(name):
+                calls[name] = calls.get(name, 0) + 1
+            if "Scheda fatti (gli UNICI fatti ammessi)" in user:
+                hit("writer")
+                return R({"items": [{"id": 1, "text": self.IT[1]}, {"id": 2, "text": self.IT[2]},
+                                    {"id": 3, "text": third}, {"id": 4, "text": self.BRIDGE_IT}]})
+            if "Riscrivi SOLO le schede elencate" in user:
+                hit("rewrite")
+                self.assertIn("problems", user)
+                return R({"items": [{"id": 3, "text": self.IT[3]}]})
+            if "Translate each Italian subtitle card" in user:
+                hit("backtranslate")
+                items = _json.loads(user.split("Cards:", 1)[1].strip())
+                return R({"items": [{"id": it["id"], "text": "back: " + it["text"]} for it in items]})
+            if "Decide whether the Italian says the same thing" in user:
+                hit("compare")
+                state["compare"] += 1
+                bad = state["compare"] <= compare_bad_rounds
+                return R({"items": [{"id": 1, "same": True, "why": "ok"}, {"id": 2, "same": True, "why": "ok"},
+                                    {"id": 3, "same": not bad, "why": "'scatto' è una foto, l'inglese parla della tacca del cursore" if bad else "ok"},
+                                    {"id": 4, "same": True, "why": "ok"}]})
+            if "correttore di bozze" in user:
+                hit("proof")
+                return R({"items": [{"id": i, "ok": True} for i in (1, 2, 3, 4)]})
+            if "Script to check" in user:
+                hit("judge")
+                return R(judge or {"findings": []})
+            if "Read ONLY these Italian subtitles" in user:
+                hit("reader")
+                return R({"subject_en": "phone camera focus on stars", "clear_by_card": 1, "unclear_cards": []})
+            if "Fix ONLY grammar, punctuation and syntax" in user:
+                hit("en_proof")
+                return R({"items": [{"index": 1, "ok": True}]})
+            raise AssertionError("unexpected prompt: " + user[:80])
+        return fake_post, calls
+
+    def _patched(self, fake):
+        return (mock.patch.dict("os.environ", {"DEEPSEEK_API_KEY": ""}, clear=False),
+                mock.patch("avp.subtitles.requests.post", fake), mock.patch("avp.factcheck.requests.post", fake),
+                mock.patch("avp.polish.requests.post", fake))
+
+    def test_the_segment_carries_its_italian_and_script_md_round_trips(self):
+        from avp import stages
+        s = self._script()
+        for seg in s.segments:
+            seg.italian = self.IT.get(seg.index, self.BRIDGE_IT)
+        again = Script.from_dict(json.loads(json.dumps(s.to_dict())))
+        self.assertEqual(again.segments[2].italian, self.IT[3])
+        old = {"title": "t", "segments": [{"index": 1, "narration": "x"}]}                # scripts from before the field
+        self.assertEqual(Script.from_dict(old).segments[0].italian, "")
+        with tempfile.TemporaryDirectory() as tmp:
+            md = Path(tmp) / "script.md"
+            stages.emit_script_md(s, md)
+            text = md.read_text()
+            self.assertIn("ITALIAN: " + self.IT[1], text)
+            edited = text.replace(self.IT[1], "La fotocamera cerca i bordi, e una stella non ne ha.")
+            md.write_text(edited)
+            back = stages.parse_script_md(md, Script.from_dict(s.to_dict()))
+            self.assertEqual(back.segments[0].italian, "La fotocamera cerca i bordi, e una stella non ne ha.")
+            self.assertEqual(back.segments[1].italian, self.IT[2])
+
+    def test_the_italian_script_is_written_checked_and_stored(self):
+        from avp import italian
+        fake, calls = self._fake()
+        s = self._script()
+        with tempfile.TemporaryDirectory() as tmp:
+            p = self._patched(fake)
+            with p[0], p[1], p[2], p[3]:
+                italian.run(s, "FACT SHEET\n- a star is a point source", self._cfg(), out_dir=Path(tmp))
+            report = json.loads((Path(tmp) / "italian_report.json").read_text())
+        self.assertEqual([seg.italian for seg in s.segments], [self.IT[1], self.IT[2], self.IT[3], self.BRIDGE_IT])
+        self.assertEqual(len(report["rounds"]), 1)
+        for name in ("writer", "backtranslate", "compare", "proof", "judge", "reader"):
+            self.assertEqual(calls.get(name), 1, name)
+        self.assertNotIn("rewrite", calls)
+        self.assertTrue(italian.complete(s))
+        self.assertEqual(italian.cards(s)[4], self.BRIDGE_IT)
+
+    def test_a_wrong_sense_is_caught_by_back_translation_and_rewritten(self):
+        from avp import italian
+        fake, calls = self._fake(third_card=self.BAD3, compare_bad_rounds=1)
+        s = self._script()
+        p = self._patched(fake)
+        with p[0], p[1], p[2], p[3]:
+            italian.run(s, "FACTS", self._cfg())
+        self.assertEqual(s.segments[2].italian, self.IT[3])
+        self.assertEqual(calls["rewrite"], 1)
+        self.assertEqual(calls["compare"], 2)
+
+    def test_italian_that_stays_wrong_stops_the_script(self):
+        from avp import italian
+        fake, calls = self._fake(third_card=self.BAD3, compare_bad_rounds=99)
+        s = self._script()
+        p = self._patched(fake)
+        with p[0], p[1], p[2], p[3]:
+            with self.assertRaises(italian.ItalianScriptError) as ctx:
+                italian.run(s, "FACTS", self._cfg())
+        self.assertIn("scheda 3", str(ctx.exception))
+        self.assertIn("senso diverso", str(ctx.exception))
+        self.assertEqual(calls["rewrite"], italian.MAX_ROUNDS - 1)
+
+    def test_a_dropped_name_and_a_calque_are_reasons_for_a_rewrite(self):
+        from avp import italian
+        s = self._script()
+        s.segments[1].narration = "The Milky Way's dust lanes appear when you stack the frames."
+        texts = {1: self.IT[1], 2: "Le bande di polvere appaiono quando sovrapponi i fotogrammi.", 3: "Solo un emisfero ci saluta mai.", 4: self.BRIDGE_IT}
+        en = {1: self.EN[1], 2: s.segments[1].narration, 3: self.EN[3], 4: self.BRIDGE_EN}
+
+        class Quiet:      # a backend whose every task says "fine", so only the code checks speak
+            def chat(self, system, user, temperature=0.2):
+                if "Translate each Italian" in user:
+                    return {"items": [{"id": i, "text": t} for i, t in texts.items()]}
+                if "literal back-translation" in user:
+                    return {"items": [{"id": i, "same": True, "why": "ok"} for i in texts]}
+                if "correttore" in user:
+                    return {"items": [{"id": i, "ok": True} for i in texts]}
+                return {"subject_en": "phone focus", "clear_by_card": 1, "unclear_cards": []}
+        with mock.patch("avp.italian.factcheck._judge", return_value=[]):
+            problems, notes = italian._check(texts, en, s, "FACTS", self._cfg(), Quiet(), [1, 2, 3])
+        self.assertIn("Milky Way", " ".join(problems[2]))
+        self.assertTrue(any("italiano scorretto" in p for p in problems[3]))
+        self.assertNotIn(1, problems)
+
+    def test_the_captions_stage_uses_the_italian_script_and_the_voice_waits(self):
+        from avp import stages
+        src = inspect.getsource(stages.stage_captions)
+        self.assertIn("italian_mod.complete(script)", src)
+        self.assertIn("italian_mod.verify(script, cfg)", src)
+        self.assertLess(src.index("italian_mod.complete(script)"), src.index("subs_mod.adapt("))   # legacy is the fallback
+        self.assertIn("italian.run(script, facts, cfg, out_dir=project.root)", inspect.getsource(stages.stage_script))
+        self.assertIn("polish.proofread(script, cfg)", inspect.getsource(stages.stage_script))
+        self.assertIn("reading_pause(seg.italian", inspect.getsource(stages.stage_voice))
+        self.assertAlmostEqual(stages.reading_pause("x" * 136, 6.0, 17.0), 2.0 if 2.0 < stages.READING_PAUSE_MAX else stages.READING_PAUSE_MAX, places=2)
+        self.assertEqual(stages.reading_pause("x" * 90, 6.0, 17.0), 0.0)                      # fits: no pause
+        self.assertEqual(stages.reading_pause("x" * 104, 6.0, 17.0), 0.0)                     # 0.12 s short: not worth a pause
+        self.assertEqual(stages.reading_pause("", 6.0, 17.0), 0.0)
+        self.assertEqual(stages.reading_pause("x" * 400, 6.0, 17.0), stages.READING_PAUSE_MAX)  # capped
+
+    def test_verify_reads_the_italian_on_disk_again(self):
+        from avp import italian
+        s = self._script()
+        for seg in s.segments:
+            seg.italian = self.IT.get(seg.index, self.BRIDGE_IT)
+        s.segments[0].italian = "Solo un emisfero ci saluta mai."                 # a hand edit that broke the Italian
+        fake, calls = self._fake()
+        p = self._patched(fake)
+        with p[0], p[1], p[2], p[3]:
+            problems = italian.verify(s, self._cfg())
+        self.assertTrue(problems and "scheda 1" in problems[0])
+        self.assertEqual(calls.get("reader"), 1)
+
+    def test_the_english_proofread_fixes_punctuation_and_nothing_else(self):
+        import json as _json
+        from avp import polish
+        s = self._script()
+        s.segments[2].narration = "The Sun would collapse to a shadow just 2.95 kilometers in radius. — a puncture in space."
+
+        class R:
+            status_code = 200
+            text = ""
+            def json(self): return {"choices": [{"message": {"content": _json.dumps({"items": [
+                {"index": 3, "ok": False, "text": "The Sun would collapse to a shadow just 2.95 kilometers in radius, a puncture in space."},
+                {"index": 1, "ok": False, "text": "Your camera hunts for edges a star doesn't have, and it fails, and it hunts again, and again."},
+                {"index": 2, "ok": True}]})}}]}
+        with mock.patch.dict("os.environ", {"DEEPSEEK_API_KEY": ""}, clear=False), mock.patch("avp.polish.requests.post", lambda *a, **k: R()):
+            out = polish.proofread(s, self._cfg())
+        self.assertEqual(out.segments[2].narration, "The Sun would collapse to a shadow just 2.95 kilometers in radius, a puncture in space.")
+        self.assertEqual(out.segments[0].narration, self.EN[1])                       # a rewrite is not a fix
+        cfg = self._cfg(); cfg.script.factcheck_key = ""
+        with mock.patch.dict("os.environ", {"DEEPSEEK_API_KEY": ""}, clear=False), \
+             mock.patch("avp.polish.requests.post", side_effect=AssertionError("must not be called")):
+            self.assertIs(polish.proofread(s, cfg), s)
