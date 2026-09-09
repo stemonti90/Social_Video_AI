@@ -29,8 +29,8 @@ cat > "$PLIST" <<PL
     <dict><key>Hour</key><integer>23</integer><key>Minute</key><integer>40</integer></dict>
     <dict><key>Weekday</key><integer>0</integer><key>Hour</key><integer>21</integer><key>Minute</key><integer>0</integer></dict>
   </array>
-  <key>StandardOutPath</key><string>$ROOT/projects/_auto/metrics.log</string>
-  <key>StandardErrorPath</key><string>$ROOT/projects/_auto/metrics.log</string>
+  <key>StandardOutPath</key><string>$ROOT/projects/_auto/metrics.out.log</string>
+  <key>StandardErrorPath</key><string>$ROOT/projects/_auto/metrics.err.log</string>
   <key>RunAtLoad</key><false/>
 </dict></plist>
 PL
