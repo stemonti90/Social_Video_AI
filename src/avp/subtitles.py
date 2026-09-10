@@ -175,7 +175,8 @@ def names_to_keep(english: str) -> list[str]:
             continue
         if name in units and (english or "").count(name) <= len([m for m in _UNIT_NAME.finditer(english or "") if m.group(1) == name]):
             continue
-        out.append(name)
+        if name not in out:
+            out.append(name)
     return out
 
 
