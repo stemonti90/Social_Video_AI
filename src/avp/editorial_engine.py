@@ -130,10 +130,15 @@ def _call(cfg, system: str, user: str, editor: bool = False, temperature: float 
         raise EditorialError("no API key for the editorial engine (DEEPSEEK_API_KEY or script.factcheck_key; "
                              "AVP_EDITOR_API_KEY for an independent editor)")
     local = "localhost" in url or "127.0.0.1" in url
-    r = requests.post(url, headers={"Authorization": f"Bearer {key}", "Content-Type": "application/json"},
-                      json={"model": model, "temperature": temperature, "max_tokens": max_tokens,
-                            "response_format": {"type": "json_object"},
-                            "messages": [{"role": "system", "content": system}, {"role": "user", "content": user}]},
+    body = {"model": model, "temperature": temperature, "max_tokens": max_tokens,
+            "response_format": {"type": "json_object"},
+            "messages": [{"role": "system", "content": system}, {"role": "user", "content": user}]}
+    if local:
+        # A local reasoning model (gpt-oss) thinks inside the token budget: at effort "medium" it spent all
+        # 1500 tokens thinking and answered nothing (measured 10/09); at "low" it answered in 9 s.
+        body["max_tokens"] = max(max_tokens, 6000)
+        body["reasoning_effort"] = str(os.getenv("AVP_WRITER_REASONING", "") or "low")
+    r = requests.post(url, headers={"Authorization": f"Bearer {key}", "Content-Type": "application/json"}, json=body,
                       timeout=(10, 900 if local else 240))          # a local 20B writes 3000 tokens in a minute or two
     if r.status_code >= 400:
         raise EditorialError(f"editorial model HTTP {r.status_code}: {(r.text or '')[:300]}")

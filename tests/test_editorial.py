@@ -424,6 +424,31 @@ class TheEditorialMachine(unittest.TestCase):
         with mock.patch.dict("os.environ", {"AVP_EDITOR_URL": "https://api.mistral.ai/v1/chat/completions", "AVP_EDITOR_MODEL": "mistral-large-latest"}):
             self.assertTrue(E.independent_editor(cfg))
 
+    def test_a_local_writer_gets_a_low_reasoning_effort_and_room_to_answer(self):
+        """gpt-oss:20b through Ollama: at reasoning 'medium' it spent the whole token budget thinking and returned
+        an empty answer; at 'low' it answered in nine seconds. Local endpoints get both settings."""
+        seen = {}
+
+        class R:
+            status_code = 200
+            text = ""
+            def json(self): return {"choices": [{"message": {"content": "{\"ok\": true}"}}]}
+        def fake_post(url, headers=None, json=None, timeout=None):
+            seen.update(json); seen["timeout"] = timeout; return R()
+        cfg = Config(); cfg.script.factcheck_key = "k"
+        with mock.patch("avp.editorial_engine.requests.post", fake_post), \
+             mock.patch.dict("os.environ", {"AVP_WRITER_URL": "http://localhost:11434/v1/chat/completions", "AVP_WRITER_MODEL": "gpt-oss:20b",
+                                            "AVP_WRITER_API_KEY": "", "AVP_WRITER_REASONING": ""}):
+            E._call(cfg, "s", "u", editor=False, max_tokens=1500)
+        self.assertEqual(seen["reasoning_effort"], "low")
+        self.assertGreaterEqual(seen["max_tokens"], 6000)
+        self.assertEqual(seen["model"], "gpt-oss:20b")
+        self.assertEqual(seen["timeout"], (10, 900))
+        with mock.patch("avp.editorial_engine.requests.post", fake_post), mock.patch.dict("os.environ", {"AVP_WRITER_URL": "", "AVP_WRITER_MODEL": ""}):
+            E._call(cfg, "s", "u", editor=True, max_tokens=1500)
+        self.assertNotIn("reasoning_effort", {k: v for k, v in seen.items() if k != "reasoning_effort"} or {})   # cloud: untouched
+        self.assertEqual(seen["max_tokens"], 1500)
+
     def test_no_fact_sheet_no_story(self):
         fake = FakeAPI()
         with tempfile.TemporaryDirectory() as tmp:
