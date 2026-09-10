@@ -24,7 +24,9 @@ Le ipotesi hanno un nome; l'incertezza è detta com'è.
 - forte: *Two explanations compete: a giant impact early in its history, or the Sun's tides on a dense atmosphere slowing the planet for billions of years. Neither has won yet.*
 
 ## Ritmo
-Frasi che una voce può portare; la pausa dove il pensiero gira.
+Frasi che una voce può portare; la pausa dove il pensiero gira. Ogni battuta è una frase con soggetto e verbo:
+mai un'etichetta seguita da una definizione ("Pioggia di anelli: molecole cariche trascinate…" è una voce di
+glossario, non una narrazione).
 - debole: *The true infinity focus is a few clicks back from the slider's end, so test on a bright star to find it, and lock it.*
 - forte: *Infinity is not at the end of the slider. It sits a few clicks back. Find it on a bright star, then lock it.*
 

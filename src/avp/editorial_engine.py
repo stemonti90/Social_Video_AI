@@ -228,8 +228,11 @@ THE POETICS (the qualities you optimise, with weak/strong pairs; the forbidden t
 
 Contract: every sentence informs, contextualises or advances the story; use the brief's key facts, at most its
 optional facts, never its excluded facts; never invent a mechanism, number, date, status, superlative or
-attribution; never repeat a fact; numbers as digits but always SPEAKABLE — "15 billion billion kilograms", never
-"1.5 × 10^19", no symbols a voice cannot read; no citation-speak ("according to a 2018 study in Icarus" → "a 2018
+attribution; never repeat a fact; every segment is a sentence with a subject and a verb — never a "Label:
+definition" fragment ("Ring rain: charged molecules pulled…" is a glossary entry, not narration); numbers as
+digits but always SPEAKABLE and holdable — a comparison the viewer can picture beats a figure they cannot ("an
+Olympic pool every 30 minutes", not "15 quintillion kilograms"; "40 percent of Mimas" only if Mimas has been
+introduced); no symbols a voice cannot read; no citation-speak ("according to a 2018 study in Icarus" → "a 2018
 study" at most); no metaphor unless the next sentence cashes it in; at most one in the whole text. Never name
 another app or product. Return STRICT JSON only."""
 
@@ -469,13 +472,26 @@ def _ok(word: str, floor: tuple[str, ...]) -> bool:
     return str(word or "").strip().lower() in floor
 
 
-def publishable(review: dict) -> bool:
-    d = review.get("dimensions") or {}
-    return (str(review.get("decision", "")).lower() == "publish"
-            and all(_ok(d.get(k), ("solid", "strong", "exceptional")) for k in ("specificity", "density", "narration", "language"))
+def _rubric_clear(d: dict) -> bool:
+    return (all(_ok(d.get(k), ("solid", "strong", "exceptional")) for k in ("specificity", "density", "narration", "language"))
             and _ok(d.get("idea"), ("strong", "exceptional"))
             and _ok(d.get("originality"), ("solid", "strong", "exceptional"))
             and _ok(d.get("ai_smell"), ("none", "mild")))
+
+
+def publishable(review: dict, after_rewrite: bool = False) -> bool:
+    """The rubric's own rule: nothing weak, the idea at least strong, the smell of AI at most mild. On a first
+    review the editor's word is final ("rewrite" sends the text back even when every dimension passes: the
+    weak sentences are worth one pass). After a rewrite the rubric decides — measured 10/09: three reviews in a
+    row rated every dimension solid or strong and still said "rewrite" over sentences that "could be more
+    vivid", and no video was made."""
+    d = review.get("dimensions") or {}
+    decision = str(review.get("decision", "")).lower()
+    if decision == "reject_story":
+        return False
+    if decision == "publish":
+        return _rubric_clear(d)
+    return after_rewrite and _rubric_clear(d)
 
 
 def story_rejected(review: dict) -> bool:
@@ -779,7 +795,7 @@ def _pass(cfg, topic: str, project, facts: str, history: str, attempt: int, avoi
             reviews[f"{suffix}_v{round_no}"] = r_next
             if r_next.get("improved") is False or story_rejected(r_next):
                 raise StoryRejected(wid, f"{lang}: the rewrite merely complied — {r_next.get('improvement_note') or r_next.get('summary', '')}")
-            if publishable(r_next):
+            if publishable(r_next, after_rewrite=True):
                 approved = v_next
                 break
             prev, diag = v_next, r_next             # improving but not there yet: one more round with the new diagnosis

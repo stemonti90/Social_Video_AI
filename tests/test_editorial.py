@@ -297,7 +297,10 @@ class TheEditorialMachine(unittest.TestCase):
         self.assertTrue(E.publishable(ok))
         self.assertFalse(E.publishable({**ok, "dimensions": {**ok["dimensions"], "idea": "solid"}}))       # the idea must be strong
         self.assertFalse(E.publishable({**ok, "dimensions": {**ok["dimensions"], "ai_smell": "strong"}}))
-        self.assertFalse(E.publishable({**ok, "decision": "rewrite"}))
+        self.assertFalse(E.publishable({**ok, "decision": "rewrite"}))                              # first review: the editor's word
+        self.assertTrue(E.publishable({**ok, "decision": "rewrite"}, after_rewrite=True))           # after a rewrite: the rubric decides
+        self.assertFalse(E.publishable({**ok, "decision": "reject_story"}, after_rewrite=True))
+        self.assertFalse(E.publishable({**ok, "decision": "rewrite", "dimensions": {**ok["dimensions"], "narration": "weak"}}, after_rewrite=True))
         self.assertTrue(E.story_rejected({"decision": "rewrite", "dimensions": {"idea": "weak"}}))
         self.assertTrue(E.story_rejected({"decision": "reject_story", "dimensions": {}}))
         self.assertFalse(E.story_rejected(ok))
