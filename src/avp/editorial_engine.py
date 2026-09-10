@@ -742,10 +742,8 @@ def _pass(cfg, topic: str, project, facts: str, history: str, attempt: int, avoi
         log.info("Compare IT/EN: %s", "; ".join(diffs))
         it = _write(cfg, "Italian", topic, brief, arc, facts, budget, n_beats, poetics, target, notes=diffs + hygiene_it(en, it),
                     temperature=0.4, ref=en)
-        if hygiene_it(en, it) and _length_only(hygiene_it(en, it)):
-            it = _compress_it(cfg, it, en)
-        if hygiene_it(en, it):
-            raise EditorialError("Italian script fails the hygiene nets after the compare pass: " + "; ".join(hygiene_it(en, it)))
+        it = _fit(cfg, "Italian", topic, brief, arc, facts, budget, n_beats, poetics, target, it,
+                  lambda x: hygiene_it(en, x), drafts, ref=en)
     # 7 · editorial review, rewrite, second review
     reviews: dict = {}
     for lang, s in (("English", en), ("Italian", it)):
@@ -757,19 +755,26 @@ def _pass(cfg, topic: str, project, facts: str, history: str, attempt: int, avoi
             raise StoryRejected(wid, f"{lang}: {r1.get('summary', '')}")
         if publishable(r1):
             continue
-        v2 = _write(cfg, lang, topic, brief, arc, facts, budget, n_beats, poetics, target, diagnosis=r1, temperature=0.35,
-                    ref=en if lang == "Italian" else None)
-        # the rewrite is fitted like a first draft: a long rewrite is cut, a wrong one is written again with the diagnosis
-        v2 = _fit(cfg, lang, topic, brief, arc, facts, budget, n_beats, poetics, target, v2,
-                  (lambda x: hygiene_en(x, cfg, budget)) if lang == "English" else (lambda x: hygiene_it(en, x)),
-                  drafts, ref=en if lang == "Italian" else None, diagnosis=r1)
-        r2 = _review2(cfg, lang, topic, brief, s, r1, v2, poetics, benchmark)
-        (root / f"editorial_review_{suffix}_v2.json").write_text(_j(r2))
-        reviews[f"{suffix}_v2"] = r2
-        if r2.get("improved") is False or story_rejected(r2):
-            raise StoryRejected(wid, f"{lang}: the rewrite merely complied — {r2.get('improvement_note') or r2.get('summary', '')}")
-        if not publishable(r2):
-            raise EditorialError(f"{lang} script below the editorial standard after the rewrite: {r2.get('summary', '')}")
+        prev, diag, approved = s, r1, None
+        for round_no in (2, 3):                      # at most two rewrites, each judged against the version before
+            v_next = _write(cfg, lang, topic, brief, arc, facts, budget, n_beats, poetics, target, diagnosis=diag,
+                            temperature=0.35, ref=en if lang == "Italian" else None)
+            # the rewrite is fitted like a first draft: a long rewrite is cut, a wrong one is written again with the diagnosis
+            v_next = _fit(cfg, lang, topic, brief, arc, facts, budget, n_beats, poetics, target, v_next,
+                          (lambda x: hygiene_en(x, cfg, budget)) if lang == "English" else (lambda x: hygiene_it(en, x)),
+                          drafts, ref=en if lang == "Italian" else None, diagnosis=diag)
+            r_next = _review2(cfg, lang, topic, brief, prev, diag, v_next, poetics, benchmark)
+            (root / f"editorial_review_{suffix}_v{round_no}.json").write_text(_j(r_next))
+            reviews[f"{suffix}_v{round_no}"] = r_next
+            if r_next.get("improved") is False or story_rejected(r_next):
+                raise StoryRejected(wid, f"{lang}: the rewrite merely complied — {r_next.get('improvement_note') or r_next.get('summary', '')}")
+            if publishable(r_next):
+                approved = v_next
+                break
+            prev, diag = v_next, r_next             # improving but not there yet: one more round with the new diagnosis
+        if approved is None:
+            raise EditorialError(f"{lang} script below the editorial standard after two rewrites: {diag.get('summary', '')}")
+        v2 = approved
         s.title, s.segments, s.cta_bridge, s.bridge_kind = v2.title, v2.segments, v2.cta_bridge, v2.bridge_kind
         if lang == "English":
             en = s
