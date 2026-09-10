@@ -4758,6 +4758,8 @@ class TheViewerMustKnowWhatTheVideoIsAbout(unittest.TestCase):
         # (sentence-initial "Venus" is not read as a name by design; the rest come back in their Italian form)
         self.assertEqual(names_for_italian("Venus turns once every 243 Earth days, Cassini found near the Milky Way."), ["Cassini", "Via Lattea"])   # "Earth days" is a unit
         self.assertEqual(names_for_italian("On Venus the Sun rises in the west."), ["Venere", "Sole"])
+        self.assertEqual(dropped_names("The Earth-Moon system keeps one face turned inward.", "Il sistema Terra-Luna tiene un volto rivolto verso l'interno."), [])   # 10/09 Venus trial 8
+        self.assertEqual(dropped_names("The Earth Moon pair.", "La coppia."), ["Earth Moon"])
         self.assertEqual(names_to_keep("It turns once every 243 Earth days."), [])                   # a unit, not the planet
         self.assertEqual(names_to_keep("Venus is Earth's twin, yet a day lasts 243 Earth days."), ["Earth"])   # the planet is still named once
         self.assertEqual(proper_nouns("It lasts 116.75 Earth-days on Venus."), ["Earth", "Venus"])

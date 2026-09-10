@@ -205,7 +205,10 @@ def dropped_names(english: str, italian: str) -> list[str]:
     missing = []
     for name in names_to_keep(english):
         key = name.lower()
-        forms = _NAME_MAP.get(key) or tuple(w.lower() for w in name.split() if len(w) >= 4) or (key,)
+        forms = _NAME_MAP.get(key)
+        if not forms:      # a multi-word name: each word through the map ("Earth Moon" → terra, luna; "Karl Schwarzschild" → schwarzschild)
+            forms = tuple(f for w in name.replace("-", " ").split() if len(w) >= 3
+                          for f in (_NAME_MAP.get(w.lower()) or ((w.lower(),) if len(w) >= 4 else ()))) or (key,)
         if not any((f[:5] if len(f) > 5 else f) in low for f in forms):
             missing.append(name)
     return missing
