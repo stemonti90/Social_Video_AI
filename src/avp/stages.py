@@ -415,7 +415,7 @@ def stage_captions(project: VideoProject, cfg: Config) -> None:
         c_secs = sum(float(s.duration or 0.0) for s in script.segments if s.kind != "cta")
         rate = (c_words / c_secs) if c_words and c_secs else 2.5          # words per second
         for s in script.segments:
-            if s.kind == "cta" and bridge and s.narration.strip() and s.duration:
+            if s.kind == "cta" and bridge and bridge in s.narration and s.duration:      # the bridge must be SPOKEN
                 window = len(bridge.split()) / rate - CARD_LEAD
                 items.append((s.index, bridge, max(1.0, min(window, float(s.duration)))))
         existing = json.loads(sub_path.read_text()) if sub_path.exists() else None

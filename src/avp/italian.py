@@ -184,7 +184,8 @@ def complete(script: Script) -> bool:
     have = cards(script)
     for s in script.segments:
         if s.kind == "cta":
-            if script.cta_bridge and s.index not in have:
+            spoken = (script.cta_bridge or "").strip()
+            if spoken and spoken in (s.narration or "") and s.index not in have:   # a bridge that is SPOKEN needs its card
                 return False
         elif s.narration.strip() and s.index not in have:
             return False

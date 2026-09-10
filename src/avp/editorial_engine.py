@@ -924,9 +924,7 @@ def _pass(cfg, topic: str, project, facts: str, history: str, attempt: int, avoi
         b.visual, b.keywords = a.visual, list(a.keywords)
     if cfg.funnel.enabled:
         from . import stages
-        en.segments.append(Segment(index=len(en.segments) + 1, narration=stages._cta_narration(en, cfg),
-                                   visual="App endcard", keywords=[], kind="cta",
-                                   italian=(it.cta_bridge if en.cta_bridge and it.cta_bridge else "")))
+        en.segments.append(_cta_segment(en, it, cfg))
     evidence = {"winner": winner, "why_this_story": selection.get("why_this_story", ""), "arc": arc.get("thesis", ""),
                 "arc_why": arc_pick.get("why", ""), "reviews": reviews, "hygiene_notes": notes}
     return en, it, brief, evidence
@@ -983,14 +981,29 @@ def run(project, cfg, topic: str | None) -> Script:
     raise last or EditorialError("editorial generation failed")
 
 
+def _cta_segment(en: Script, it: Script, cfg) -> Segment:
+    """The spoken CTA and its Italian card. A bridge the policy does not speak is dropped; the generic funnel
+    question gets the configured Italian card (the Italian writer wrote no bridge for it)."""
+    from . import stages
+    cta_text = stages._cta_narration(en, cfg)
+    if en.cta_bridge and en.cta_bridge not in cta_text:
+        en.cta_bridge = it.cta_bridge = ""
+    generic = cfg.funnel.cta_line.format(app=cfg.funnel.app_name)
+    if cta_text.strip() == generic.strip():
+        card = str(getattr(cfg.funnel, "cta_line_it", "") or "")
+        en.cta_bridge = generic.split("Get ")[0].strip()          # what parse_script_md will read back as the bridge
+    else:
+        card = it.cta_bridge if en.cta_bridge and it.cta_bridge else ""
+    return Segment(index=len(en.segments) + 1, narration=cta_text, visual="App endcard", keywords=[], kind="cta", italian=card)
+
+
 def _save_rejected(project, cfg, topic: str, scratch: dict, why: str) -> None:
     from . import stages
     en, it = scratch["en"], scratch["it"]
     for a, b in zip([x for x in en.segments if x.kind != "cta"], [x for x in it.segments if x.kind != "cta"]):
         a.italian = b.narration
     if cfg.funnel.enabled and not any(x.kind == "cta" for x in en.segments):
-        en.segments.append(Segment(index=len(en.segments) + 1, narration=stages._cta_narration(en, cfg), visual="App endcard",
-                                   keywords=[], kind="cta", italian=(it.cta_bridge if en.cta_bridge and it.cta_bridge else "")))
+        en.segments.append(_cta_segment(en, it, cfg))
     project.script_json.write_text(stages._json(en.to_dict()))
     (project.root / "italian_script.json").write_text(stages._json(it.to_dict()))
     stages.emit_script_md(en, project.script_md)

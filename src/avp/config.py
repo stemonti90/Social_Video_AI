@@ -82,6 +82,7 @@ class FunnelConfig:
     url: str = "https://www.astrostackerpro.com/"
     handle: str = "@astrostackerpro"
     cta_line: str = "Want to capture the cosmos yourself? Get {app} — link in the bio."
+    cta_line_it: str = "Vuoi fotografare il cielo anche tu?"   # the Italian card shown while the generic CTA question is spoken
     cta_button: str = "Get the app  ·  Link in bio"   # endcard pill label; set per channel language
     # What to do when the writer finds no honest link between the topic and astrophotography
     # (bridge_kind "none" — a cosmology or deep-theory video, say):
