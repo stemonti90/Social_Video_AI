@@ -524,6 +524,36 @@ def _tighten(cfg, language: str, script: Script, reasons: list[str], budget: tup
     return out
 
 
+COMPRESS_SYSTEM = "You compress one spoken sentence of a science video to a hard word cap. You remove words, never facts, numbers or names. Return STRICT JSON only."
+COMPRESS_USER = """Compress this {language} segment to AT MOST {cap} words (it has {n}). Keep every fact, number, name and the
+meaning; drop asides, doubled adjectives, repeated context, citation-speak. One or two sentences, none longer than
+{run_on} words. {extra}
+SEGMENT: {text}
+Return {{"narration": "...", "words": <your count>}}"""
+
+
+def _compress_segments(cfg, language: str, script: Script, caps: dict[int, int], extra: str = "") -> Script:
+    """The reliable cut: one segment, one hard cap, one call. Segments already under their cap are untouched."""
+    for x in script.segments:
+        if x.kind == "cta" or x.index not in caps or _words(x.narration) <= caps[x.index]:
+            continue
+        note = extra + (" Do not begin with a digit or a number word." if x.index == 1 else "")
+        data = _call(cfg, COMPRESS_SYSTEM, COMPRESS_USER.format(language=language, cap=caps[x.index], n=_words(x.narration),
+                                                                run_on=RUN_ON_WORDS, extra=note, text=x.narration),
+                     editor=False, temperature=0.2, max_tokens=400)
+        new = " ".join(str(data.get("narration") or "").split())
+        if new and MIN_WORDS_PER_BEAT <= _words(new) < _words(x.narration):
+            x.narration = new
+    return script
+
+
+def _caps_en(script: Script, hi: int, squeeze: int = 0) -> dict[int, int]:
+    content = [x for x in script.segments if x.kind != "cta"]
+    total = sum(_words(x.narration) for x in content)
+    scale = min(1.0, (hi - squeeze) / max(1, total))
+    return {x.index: max(MIN_WORDS_PER_BEAT, int(_words(x.narration) * scale)) for x in content}
+
+
 def _fit(cfg, language: str, topic: str, brief: dict, arc: dict, facts: str, budget: tuple[int, int, int], n_beats: int,
          poetics: str, target: int, script: Script, check, drafts: list, ref: Script | None = None) -> Script:
     """Three corrective passes at most: a rewrite with the notes when the problems are of substance, a cut to
@@ -537,7 +567,11 @@ def _fit(cfg, language: str, topic: str, brief: dict, arc: dict, facts: str, bud
             return script
         log.info("Hygiene %s (%d): %s", language, attempt, "; ".join(reasons))
         if _length_only(reasons):
-            script = _tighten(cfg, language, script, reasons, budget, target, ref=ref, squeeze=(attempt - 1) * 3)
+            words, lo, hi = budget
+            if language == "English" and sum(_words(x.narration) for x in script.segments if x.kind != "cta") > hi:
+                script = _compress_segments(cfg, language, script, _caps_en(script, hi, squeeze=(attempt - 1) * 4))
+            else:
+                script = _tighten(cfg, language, script, reasons, budget, target, ref=ref, squeeze=(attempt - 1) * 3)
         else:
             script = _write(cfg, language, topic, brief, arc, facts, budget, n_beats, poetics, target, notes=reasons, temperature=0.4)
     reasons = check(script)

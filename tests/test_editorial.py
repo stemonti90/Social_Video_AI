@@ -98,6 +98,12 @@ class FakeAPI:
             return {"arcs": [{"id": k, "thesis": f"arc {k}", "beats": beats, "why": "w"} for k in (1, 2, 3)]}
         if "senior narrative editor" in system:
             return {"winner": 3, "why": "arc 3 escalates."}
+        if "compress one spoken sentence" in system:
+            self.tightened = getattr(self, "tightened", 0) + 1
+            import re as _re
+            cap = int(_re.search(r"AT MOST (\d+) words", user).group(1))
+            text = user.split("SEGMENT:", 1)[1].split("Return {", 1)[0].strip()
+            return {"narration": " ".join(text.split()[:cap]).rstrip(",;") + ".", "words": cap}
         if "cutting a spoken script to length" in system:
             self.tightened = getattr(self, "tightened", 0) + 1
             import json as _json
@@ -261,9 +267,8 @@ class TheEditorialMachine(unittest.TestCase):
         self.assertFalse(any("HYGIENE NOTES" in u for s, u in fake.prompts if u.startswith("LANGUAGE: English")))   # no blind rewrite
         content = [s for s in script.segments if s.kind != "cta"]
         self.assertLessEqual(sum(len(s.narration.split()) for s in content), 94)
-        tighten_user = next(u for s, u in fake.prompts if "cutting a spoken script to length" in s)
-        self.assertIn("HARD WORD CAPS", tighten_user)
-        self.assertIn("segment 1:", tighten_user)
+        compress_users = [u for s, u in fake.prompts if "compress one spoken sentence" in s]
+        self.assertTrue(compress_users and all("AT MOST" in u for u in compress_users))         # one segment, one cap
         self.assertTrue(any(d["language"] == "English" and d["reasons"] for d in drafts))                           # the record of the cut
         self.assertEqual([s.italian for s in content], IT)
 
