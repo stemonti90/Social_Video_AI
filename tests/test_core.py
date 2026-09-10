@@ -4746,6 +4746,9 @@ class TheViewerMustKnowWhatTheVideoIsAbout(unittest.TestCase):
         self.assertEqual(dropped_names("Force manual focus, aim at infinity. Test on a bright star.", "Imposta la messa a fuoco manuale."), [])
         self.assertEqual(dropped_names("At our galaxy's heart, Sagittarius A* weighs 4.1 million suns.", "Al centro della galassia, Sagittarius A* pesa 4,1 milioni di soli."), [])
         self.assertEqual(dropped_names("Even you have one. Crushed to a point, a human body becomes a black hole.", "Anche tu ne hai uno."), [])
+        self.assertEqual(dropped_names("Enough water to fill an Olympic swimming pool every 30 minutes.", "Abbastanza acqua per riempire una piscina olimpionica ogni 30 minuti."), [])   # 10/09 trial
+        self.assertEqual(dropped_names("The Jovian moons hide oceans.", "Le lune di Giove nascondono oceani."), [])
+        self.assertEqual(dropped_names("Cassini's Grand Finale orbits measured it.", "Le orbite finali di Cassini l'hanno misurato."), ["Grand Finale"])
 
     def test_the_restore_pass_brings_the_name_back(self):
         from avp import subtitles
