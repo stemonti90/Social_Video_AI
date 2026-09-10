@@ -104,6 +104,12 @@ class FakeAPI:
             cap = int(_re.search(r"AT MOST (\d+) words", user).group(1))
             text = user.split("SEGMENT:", 1)[1].split("Return {", 1)[0].strip()
             return {"narration": " ".join(text.split()[:cap]).rstrip(",;") + ".", "words": cap}
+        if "limite rigido di caratteri" in system:
+            import re as _re
+            cap = int(_re.search(r"AL MASSIMO (\d+) caratteri", user).group(1))
+            text = user.split("BATTUTA:", 1)[1].split("Restituisci {", 1)[0].strip()
+            cut = text[:cap].rsplit(" ", 1)[0].rstrip(",;:") + "."
+            return {"narration": cut, "chars": len(cut)}
         if "cutting a spoken script to length" in system:
             self.tightened = getattr(self, "tightened", 0) + 1
             import json as _json
@@ -271,6 +277,9 @@ class TheEditorialMachine(unittest.TestCase):
         self.assertTrue(compress_users and all("AT MOST" in u for u in compress_users))         # one segment, one cap
         self.assertTrue(any(d["language"] == "English" and d["reasons"] for d in drafts))                           # the record of the cut
         self.assertEqual([s.italian for s in content], IT)
+        it_user = next(u for s, u in fake.prompts if u.startswith("LANGUAGE: Italian"))
+        self.assertIn("LIMITI PER BATTUTA", it_user)                                       # the Italian hears the fitted beats' caps
+        self.assertNotIn(EN[1], it_user)                                                    # but never the English text
 
     def test_publishable_and_rejection_rules(self):
         ok = {"decision": "publish", "dimensions": {"idea": "strong", "specificity": "solid", "density": "solid", "originality": "solid",

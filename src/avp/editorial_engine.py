@@ -37,7 +37,7 @@ from . import brief as brief_mod
 from . import factcheck, italian, polish
 from .llm import competitor_mentions, copied_exemplar, morbid_in_script, names_subject
 from .models import Script, Segment, dedupe_segments
-from .subtitles import _backend, dropped_names, italian_lint
+from .subtitles import _backend, dropped_names, italian_lint, proper_nouns
 
 log = logging.getLogger(__name__)
 
@@ -247,6 +247,7 @@ fewer than {lo} — so about {per} words per segment ({min_w}-{max_w}), in one o
 subtitle card of this text, so a sentence never runs past {run_on} words. Count your words before answering.
 Segment 1 does not open with a number. {language_note}
 
+{limits_note}
 Return {{"title": "...", "segments": [{{"narration": "...", "visual": "the beat's visual, refined", "keywords": ["..."]}}],
 "bridge_kind": "shoot | principle | none", "cta_bridge": "one honest sentence (at most 15 words) that links THIS story
 to looking at or photographing the sky tonight, in {language}; empty string with bridge_kind none when no honest link
@@ -269,21 +270,6 @@ BETTER, not whether it complied.
 
 DIAGNOSIS:
 {diagnosis}"""
-
-TIGHTEN_SYSTEM = "You are a copy editor cutting a spoken script to length. You remove words, never facts. Return STRICT JSON only."
-TIGHTEN_USER = """This {language} script does not fit the medium:
-{reasons}
-
-Cut it to fit WITHOUT losing a beat, a fact, a number or a name: remove asides, doubled adjectives, repeated
-context, throat-clearing; split any sentence longer than {run_on} words. Same number of segments, same order,
-same title, same cta_bridge and bridge_kind, visuals untouched. Segment 1 keeps its opening words and never
-begins with a digit or a number word; no segment begins with a number. {limits}
-
-SCRIPT:
-{script}
-
-Return the same JSON shape: {{"title": "...", "segments": [{{"narration": "...", "visual": "...", "keywords": ["..."]}}],
-"bridge_kind": "...", "cta_bridge": "..."}}"""
 
 REVIEW_SYSTEM = """You are a ruthless independent editor at a serious astronomy magazine. You DIAGNOSE a script; you do
 not rewrite it. A script can be factually correct and editorially weak — correctness and quality are two dimensions.
@@ -472,15 +458,31 @@ def story_rejected(review: dict) -> bool:
 
 
 # ----------------------------------------------------------------------------- the pass
+def _limits_note(ref: Script | None) -> str:
+    """For the Italian writer: the fitted English beat sets a character cap and the names that must survive.
+    The English TEXT is not shown — the Italian is written from the beats, not translated."""
+    if ref is None:
+        return ""
+    rows = []
+    for x in ref.segments:
+        if x.kind == "cta":
+            continue
+        names = ", ".join(proper_nouns(x.narration)) or "—"
+        rows.append(f"battuta {x.index}: al massimo {int(len(x.narration) * 1.3)} caratteri; nomi da conservare: {names}")
+    return ("LIMITI PER BATTUTA (rigidi, contali; la voce inglese dura quanto dura, il lettore deve arrivare in fondo):\n- "
+            + "\n- ".join(rows))
+
+
 def _write(cfg, language: str, topic: str, brief: dict, arc: dict, facts: str, budget: tuple[int, int, int],
            n_beats: int, poetics: str, target: int, diagnosis: dict | None = None, notes: list[str] | None = None,
-           temperature: float = 0.55) -> Script:
+           temperature: float = 0.55, ref: Script | None = None) -> Script:
     words, lo, hi = budget
     system = WRITE_SYSTEM.format(poetics=poetics)
     user = WRITE_USER.format(language=language, topic=topic, brief=_j(brief), arc=_j(arc), facts=facts, words=words,
                              lo=lo, hi=hi, per=max(MIN_WORDS_PER_BEAT, words // max(1, n_beats)), n_beats=n_beats,
                              min_w=MIN_WORDS_PER_BEAT, max_w=MAX_WORDS_PER_BEAT,
-                             run_on=RUN_ON_WORDS, language_note=LANG_NOTES.get(language, ""))
+                             run_on=RUN_ON_WORDS, language_note=LANG_NOTES.get(language, ""),
+                             limits_note=_limits_note(ref) if language == "Italian" else "")
     if diagnosis:
         user += REVISE_NOTE.format(diagnosis=_j(diagnosis))
     if notes:
@@ -493,35 +495,6 @@ _LENGTH_MARKERS = ("spoken words", "run-on", "words (>", "caratteri dell'inglese
 
 def _length_only(reasons: list[str]) -> bool:
     return bool(reasons) and all(any(m in r for m in _LENGTH_MARKERS) for r in reasons)
-
-
-def _tighten(cfg, language: str, script: Script, reasons: list[str], budget: tuple[int, int, int], target: int,
-             ref: Script | None = None, squeeze: int = 0) -> Script:
-    """Cut to length with HARD caps per segment computed here — a model told "cut the total" removed one word
-    in 136 (measured 10/09); told "segment 1: 24 words → at most 19" it complies."""
-    words, lo, hi = budget
-    content = [x for x in script.segments if x.kind != "cta"]
-    total = sum(_words(x.narration) for x in content)
-    if language == "English":
-        scale = min(1.0, (hi - squeeze) / max(1, total))
-        caps = {x.index: max(MIN_WORDS_PER_BEAT, int(_words(x.narration) * scale)) for x in content}
-        limits = ("HARD WORD CAPS, count them: " + "; ".join(f"segment {x.index}: {_words(x.narration)} words → at most {caps[x.index]}" for x in content)
-                  + f". Total at most {hi}, target about {words}.")
-    else:
-        refc = {x.index: len(x.narration) for x in (ref.segments if ref else []) if x.kind != "cta"}
-        caps = {x.index: int(refc.get(x.index, len(x.narration)) * 1.25) - squeeze for x in content}
-        limits = ("LIMITI RIGIDI in caratteri, contali: " + "; ".join(f"battuta {x.index}: {len(x.narration)} caratteri → al massimo {caps[x.index]}" for x in content)
-                  + ". Stessa battuta dell'inglese, più asciutta; stessi fatti e numeri.")
-    data = {"title": script.title, "segments": [{"narration": x.narration, "visual": x.visual, "keywords": x.keywords}
-                                                for x in content],
-            "bridge_kind": script.bridge_kind, "cta_bridge": script.cta_bridge}
-    out = _to_script(_call(cfg, TIGHTEN_SYSTEM, TIGHTEN_USER.format(language=language, reasons="- " + "\n- ".join(reasons),
-                                                                    run_on=RUN_ON_WORDS, limits=limits, script=_j(data)),
-                           editor=False, temperature=0.2, max_tokens=3200), script.topic, target)
-    for a, b in zip([x for x in out.segments], [x for x in script.segments if x.kind != "cta"]):
-        if not a.visual:
-            a.visual, a.keywords = b.visual, list(b.keywords)
-    return out
 
 
 COMPRESS_SYSTEM = "You compress one spoken sentence of a science video to a hard word cap. You remove words, never facts, numbers or names. Return STRICT JSON only."
@@ -547,6 +520,34 @@ def _compress_segments(cfg, language: str, script: Script, caps: dict[int, int],
     return script
 
 
+COMPRESS_IT_SYSTEM = "Riscrivi una battuta di un video scientifico entro un limite rigido di caratteri. Togli parole, mai fatti, numeri o nomi. Restituisci SOLO JSON."
+COMPRESS_IT_USER = """Riscrivi questa battuta in AL MASSIMO {cap} caratteri (ne ha {n}), conservando ogni fatto, ogni numero e questi
+nomi: {names}. Stessa battuta, stesso senso, italiano naturale da redazione con il soggetto esplicito; niente calchi,
+niente "scatto" per una tacca. {extra}
+BATTUTA: {text}
+Restituisci {{"narration": "...", "chars": <conteggio>}}"""
+
+
+def _compress_it(cfg, it: Script, en: Script, squeeze: int = 0) -> Script:
+    """The Italian cut: one beat, one character cap from the fitted English beat, the names listed."""
+    ec = {x.index: x for x in en.segments if x.kind != "cta"}
+    for x in it.segments:
+        if x.kind == "cta" or x.index not in ec:
+            continue
+        cap = int(len(ec[x.index].narration) * 1.35) - squeeze
+        if len(x.narration) <= cap:
+            continue
+        names = ", ".join(proper_nouns(ec[x.index].narration)) or "nessuno"
+        data = _call(cfg, COMPRESS_IT_SYSTEM,
+                     COMPRESS_IT_USER.format(cap=cap, n=len(x.narration), names=names, text=x.narration,
+                                             extra="Non iniziare con un numero." if x.index == 1 else ""),
+                     editor=False, temperature=0.2, max_tokens=400)
+        new = " ".join(str(data.get("narration") or "").split())
+        if new and len(new) < len(x.narration) and not italian_lint(new) and not italian.bad_sense(new):
+            x.narration = new
+    return it
+
+
 def _caps_en(script: Script, hi: int, squeeze: int = 0) -> dict[int, int]:
     content = [x for x in script.segments if x.kind != "cta"]
     total = sum(_words(x.narration) for x in content)
@@ -568,12 +569,13 @@ def _fit(cfg, language: str, topic: str, brief: dict, arc: dict, facts: str, bud
         log.info("Hygiene %s (%d): %s", language, attempt, "; ".join(reasons))
         if _length_only(reasons):
             words, lo, hi = budget
-            if language == "English" and sum(_words(x.narration) for x in script.segments if x.kind != "cta") > hi:
+            if language == "English":
                 script = _compress_segments(cfg, language, script, _caps_en(script, hi, squeeze=(attempt - 1) * 4))
             else:
-                script = _tighten(cfg, language, script, reasons, budget, target, ref=ref, squeeze=(attempt - 1) * 3)
+                script = _compress_it(cfg, script, ref, squeeze=(attempt - 1) * 12)
         else:
-            script = _write(cfg, language, topic, brief, arc, facts, budget, n_beats, poetics, target, notes=reasons, temperature=0.4)
+            script = _write(cfg, language, topic, brief, arc, facts, budget, n_beats, poetics, target, notes=reasons,
+                            temperature=0.4, ref=ref)
     reasons = check(script)
     drafts.append({"language": language, "attempt": 4, "reasons": reasons, "words": sum(_words(x.narration) for x in script.segments),
                    "segments": [x.narration for x in script.segments]})
@@ -695,7 +697,7 @@ def _pass(cfg, topic: str, project, facts: str, history: str, attempt: int, avoi
         en = _write(cfg, "English", topic, brief, arc, facts, budget, n_beats, poetics, target)
         en = _fit(cfg, "English", topic, brief, arc, facts, budget, n_beats, poetics, target, en,
                   lambda s: hygiene_en(s, cfg, budget), drafts)
-        it = _write(cfg, "Italian", topic, brief, arc, facts, budget, n_beats, poetics, target)
+        it = _write(cfg, "Italian", topic, brief, arc, facts, budget, n_beats, poetics, target, ref=en)
         it = _fit(cfg, "Italian", topic, brief, arc, facts, budget, n_beats, poetics, target, it,
                   lambda s: hygiene_it(en, s), drafts, ref=en)
     finally:
@@ -705,9 +707,10 @@ def _pass(cfg, topic: str, project, facts: str, history: str, attempt: int, avoi
     diffs = [n for n in notes if "senso diverso" in n]
     if diffs:
         log.info("Compare IT/EN: %s", "; ".join(diffs))
-        it = _write(cfg, "Italian", topic, brief, arc, facts, budget, n_beats, poetics, target, notes=diffs + hygiene_it(en, it), temperature=0.4)
-        if hygiene_it(en, it):
-            it = _tighten(cfg, "Italian", it, hygiene_it(en, it), budget, target, ref=en) if _length_only(hygiene_it(en, it)) else it
+        it = _write(cfg, "Italian", topic, brief, arc, facts, budget, n_beats, poetics, target, notes=diffs + hygiene_it(en, it),
+                    temperature=0.4, ref=en)
+        if hygiene_it(en, it) and _length_only(hygiene_it(en, it)):
+            it = _compress_it(cfg, it, en)
         if hygiene_it(en, it):
             raise EditorialError("Italian script fails the hygiene nets after the compare pass: " + "; ".join(hygiene_it(en, it)))
     # 7 · editorial review, rewrite, second review
@@ -721,7 +724,8 @@ def _pass(cfg, topic: str, project, facts: str, history: str, attempt: int, avoi
             raise StoryRejected(wid, f"{lang}: {r1.get('summary', '')}")
         if publishable(r1):
             continue
-        v2 = _write(cfg, lang, topic, brief, arc, facts, budget, n_beats, poetics, target, diagnosis=r1, temperature=0.35)
+        v2 = _write(cfg, lang, topic, brief, arc, facts, budget, n_beats, poetics, target, diagnosis=r1, temperature=0.35,
+                    ref=en if lang == "Italian" else None)
         nets = hygiene_en(v2, cfg, budget) if lang == "English" else hygiene_it(en if lang == "Italian" else v2, v2)
         if nets:
             raise EditorialError(f"{lang} rewrite fails the hygiene nets: " + "; ".join(nets))
