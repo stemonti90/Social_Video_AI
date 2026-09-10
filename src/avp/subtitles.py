@@ -168,12 +168,18 @@ def names_to_keep(english: str) -> list[str]:
     capitalised adjectives (Olympic, Jovian) that are plain adjectives in Italian. Listing "Olympic" as a name
     made a cutter write "una piscina Olympic" (10/09)."""
     out = []
+    units = set(m.group(1) for m in _UNIT_NAME.finditer(english or ""))      # "243 Earth days": a unit, not the planet
     for name in proper_nouns(english):
         key = name.lower()
         if " " not in name and key not in _NAME_MAP and key.endswith(_ADJECTIVE_ENDINGS):
             continue
+        if name in units and (english or "").count(name) <= len([m for m in _UNIT_NAME.finditer(english or "") if m.group(1) == name]):
+            continue
         out.append(name)
     return out
+
+
+_UNIT_NAME = re.compile(r"\b(Earth|Sun|Jupiter|Moon)[- ](?:days?|years?|hours?|mass(?:es)?|radii|radius|time|diameters?)\b")
 
 
 def names_for_italian(english: str) -> list[str]:

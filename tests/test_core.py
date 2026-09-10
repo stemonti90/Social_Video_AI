@@ -4756,8 +4756,10 @@ class TheViewerMustKnowWhatTheVideoIsAbout(unittest.TestCase):
         self.assertEqual(names_to_keep("Enough water to fill an Olympic swimming pool, Cassini found."), ["Cassini"])
         from avp.subtitles import names_for_italian, proper_nouns
         # (sentence-initial "Venus" is not read as a name by design; the rest come back in their Italian form)
-        self.assertEqual(names_for_italian("Venus turns once every 243 Earth days, Cassini found near the Milky Way."), ["Terra", "Cassini", "Via Lattea"])
+        self.assertEqual(names_for_italian("Venus turns once every 243 Earth days, Cassini found near the Milky Way."), ["Cassini", "Via Lattea"])   # "Earth days" is a unit
         self.assertEqual(names_for_italian("On Venus the Sun rises in the west."), ["Venere", "Sole"])
+        self.assertEqual(names_to_keep("It turns once every 243 Earth days."), [])                   # a unit, not the planet
+        self.assertEqual(names_to_keep("Venus is Earth's twin, yet a day lasts 243 Earth days."), ["Earth"])   # the planet is still named once
         self.assertEqual(proper_nouns("It lasts 116.75 Earth-days on Venus."), ["Earth", "Venus"])
         self.assertEqual(dropped_names("It lasts 116.75 Earth-days.", "Dura 116,75 giorni terrestri."), [])
         self.assertEqual(dropped_names("Cassini's Grand Finale orbits measured it.", "Le orbite finali di Cassini l'hanno misurato."), ["Grand Finale"])

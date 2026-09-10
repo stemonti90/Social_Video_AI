@@ -530,7 +530,13 @@ def _write(cfg, language: str, topic: str, brief: dict, arc: dict, facts: str, b
         user += REVISE_NOTE.format(diagnosis=_j(diagnosis))
     if notes:
         user += "\n\nHYGIENE NOTES from the previous attempt — every one must be resolved:\n- " + "\n- ".join(notes)
-    return _to_script(_call(cfg, system, user, editor=False, temperature=temperature, max_tokens=3200), topic, target)
+    out = _to_script(_call(cfg, system, user, editor=False, temperature=temperature, max_tokens=3200), topic, target)
+    if len(out.segments) != n_beats:            # one segment per beat is the contract: ask once more, plainly
+        out = _to_script(_call(cfg, system, user + f"\n\nYou returned {len(out.segments)} segments. Return EXACTLY {n_beats}, one per beat, in order.",
+                               editor=False, temperature=temperature, max_tokens=3200), topic, target)
+        if len(out.segments) != n_beats:
+            raise EditorialError(f"the {language} writer returned {len(out.segments)} segments for {n_beats} beats, twice")
+    return out
 
 
 _LENGTH_MARKERS = ("spoken words", "run-on", "words (>", "caratteri dell'inglese")
