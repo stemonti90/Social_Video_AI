@@ -353,6 +353,35 @@ class TheEditorialMachine(unittest.TestCase):
         from avp import qa
         self.assertIn('ed.get("status") == "rejected"', inspect.getsource(qa.check))
 
+    def test_a_staged_visual_becomes_a_photograph_cue(self):
+        """The Venus video: 'Split screen: a person on a treadmill…', 'A stick figure walking…', 'Animated diagram…',
+        'Timeline showing…' — the generator drew exactly that. A staged cue is replaced by the arc beat's own
+        photograph cue, or by one call for that beat."""
+        arc = {"beats": [{"beat": 1, "fact": "f1", "visual": "Wide shot, Venus from orbit, a featureless pale-yellow cloud deck against black space"},
+                         {"beat": 2, "fact": "f2", "visual": "Animated diagram of the orbit"}]}
+        s = Script(title="t", topic=TOPIC, segments=[
+            Segment(index=1, narration="a", visual="Split screen: left, a person walking briskly on a treadmill; right, Venus's equator"),
+            Segment(index=2, narration="b", visual="Timeline showing a sunrise on Venus with a marker at 116.75 days"),
+            Segment(index=3, narration="c", visual="Wide shot, the rocky plain of Venus under an orange haze")])
+        self.assertEqual(E.staged_visuals(s), [1, 2])
+        calls = []
+
+        class R:
+            status_code = 200
+            text = ""
+            def json(self): return {"choices": [{"message": {"content": json.dumps({"visual": "Medium shot, the Sun low over a dark basalt plain on Venus, thick orange haze", "keywords": ["Venus", "surface", "haze"]})}}]}
+        def fake_post(url, headers=None, json=None, timeout=None):
+            calls.append(json["messages"][1]["content"]); return R()
+        with mock.patch("avp.editorial_engine.requests.post", fake_post), mock.patch.dict("os.environ", {"DEEPSEEK_API_KEY": "k"}):
+            n = E.photographic_visuals(_cfg("."), s, arc, TOPIC)
+        self.assertEqual(n, 2)
+        self.assertTrue(s.segments[0].visual.startswith("Wide shot, Venus from orbit"))      # the arc's clean cue
+        self.assertTrue(s.segments[1].visual.startswith("Medium shot, the Sun low"))         # one call: the arc's cue was staged too
+        self.assertEqual(s.segments[1].keywords, ["Venus", "surface", "haze"])
+        self.assertEqual(len(calls), 1)
+        self.assertEqual(E.staged_visuals(s), [])
+        self.assertIn("never an animation, diagram, split screen", E.WRITE_USER.lower().replace("\n", " "))
+
     def test_too_short_goes_back_to_the_writer_not_to_the_scissors(self):
         self.assertTrue(E._length_only(["total 140 spoken words, the budget is 94-116 (about 110): cut"]))
         self.assertFalse(E._length_only(["total 82 spoken words, the budget is 94-116 (about 110): add substance, not padding"]))

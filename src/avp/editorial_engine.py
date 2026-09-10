@@ -272,7 +272,9 @@ subtitle card of this text, so a sentence never runs past {run_on} words. Count 
 Segment 1 does not open with a number. {language_note}
 
 {limits_note}
-Return {{"title": "...", "segments": [{{"narration": "...", "visual": "the beat's visual, refined", "keywords": ["..."]}}],
+Return {{"title": "...", "segments": [{{"narration": "...", "visual": "the beat's visual as a PHOTOGRAPH a spacecraft or a
+telescope could take — the object, its surface, its sky, physically faithful; never an animation, diagram, split screen,
+timeline, stick figure, arrow, clock, treadmill, person or staged comparison", "keywords": ["..."]}}],
 "bridge_kind": "shoot | principle | none", "cta_bridge": "one honest sentence (at most 15 words) that links THIS story
 to looking at or photographing the sky tonight, in {language}; empty string with bridge_kind none when no honest link
 exists — never force one"}}
@@ -440,6 +442,57 @@ def _to_script(data: dict, topic: str, target: int) -> Script:
         kind = "none"
     return Script(title=" ".join(str(data.get("title") or topic).split()), segments=segs, target_seconds=target,
                   topic=topic, cta_bridge=" ".join(str(data.get("cta_bridge") or "").split()), bridge_kind=kind)
+
+
+_STAGED_VISUAL = re.compile(r"\b(animat\w*|diagram|infographic|schematic|split[- ]screen|side[- ]by[- ]side|timeline|"
+                            r"stick figure|silhouette|person|people|human|walker|walking|treadmill|clock|hourglass|arrow|"
+                            r"compar(?:ison|ing|ed)|montage|collage|overlay|label\w*|caption\w*|graph|chart|marker|"
+                            r"cutaway|cross[- ]section|3d model|render|cgi|cartoon)\b", re.I)
+VISUAL_SYSTEM = "You write one image brief for a photoreal generator: a photograph a spacecraft or a telescope could take. Return STRICT JSON only."
+VISUAL_USER = """Beat {n} of a video on "{topic}". What the voice says: {narration}
+Fact of the beat: {fact}
+Write the PHOTOGRAPH that should be on screen: the real object itself, its surface, its sky or its instrument, in
+its true colours as the fact base describes it (no rings unless the object has rings). One sentence, concrete,
+starting with the shot scale (wide shot | medium shot | close-up). Never an animation, diagram, split screen,
+timeline, stick figure, arrow, clock, treadmill, person, text or staged comparison. {extra}
+Return {{"visual": "...", "keywords": ["3-5 words naming what is in the frame"]}}"""
+
+
+def staged_visuals(script: Script) -> list[int]:
+    """Segments whose visual cue asks the generator for something a camera cannot shoot."""
+    return [x.index for x in script.segments if x.kind != "cta" and _STAGED_VISUAL.search(x.visual or "")]
+
+
+def photographic_visuals(cfg, script: Script, arc: dict | None, topic: str) -> int:
+    """Replace every staged visual with a photograph cue: the arc beat's own visual when it is clean,
+    otherwise one call per beat. Measured 10/09: the writer 'refined' six clean beats into split screens,
+    stick figures, animated diagrams and timelines, and the generator drew exactly that."""
+    beats = {int(b.get("beat", 0) or 0): b for b in ((arc or {}).get("beats") or []) if isinstance(b, dict)}
+    fixed = 0
+    for x in script.segments:
+        if x.kind == "cta" or not _STAGED_VISUAL.search(x.visual or ""):
+            continue
+        beat = beats.get(x.index, {})
+        cand = " ".join(str(beat.get("visual", "")).split())
+        if cand and not _STAGED_VISUAL.search(cand):
+            x.visual = cand
+            fixed += 1
+            continue
+        try:
+            data = _call(cfg, VISUAL_SYSTEM, VISUAL_USER.format(n=x.index, topic=topic, narration=x.narration,
+                                                                fact=str(beat.get("fact", "")) or x.narration,
+                                                                extra="The subject is a real body: its archive photograph is the reference."),
+                         editor=False, temperature=0.3, max_tokens=300)
+            new = " ".join(str(data.get("visual") or "").split())
+            if new and not _STAGED_VISUAL.search(new):
+                x.visual = new
+                kws = [str(k).strip() for k in (data.get("keywords") or []) if str(k).strip()]
+                if kws:
+                    x.keywords = kws
+                fixed += 1
+        except Exception as e:  # noqa: BLE001
+            log.warning("visual repair skipped for beat %d (%s)", x.index, e)
+    return fixed
 
 
 def hygiene_en(script: Script, cfg, budget: tuple[int, int, int]) -> list[str]:
@@ -881,6 +934,9 @@ def _pass(cfg, topic: str, project, facts: str, history: str, attempt: int, avoi
         en = _write(cfg, "English", topic, brief, arc, facts, budget, n_beats, poetics, target)
         en = _fit(cfg, "English", topic, brief, arc, facts, budget, n_beats, poetics, target, en,
                   lambda s: hygiene_en(s, cfg, budget), drafts)
+        if staged_visuals(en):
+            n_fixed = photographic_visuals(cfg, en, arc, topic)
+            log.info("Visuals: %d staged cue(s) replaced with photograph cues", n_fixed)
         it = _write(cfg, "Italian", topic, brief, arc, facts, budget, n_beats, poetics, target, ref=en)
         it = _fit(cfg, "Italian", topic, brief, arc, facts, budget, n_beats, poetics, target, it,
                   lambda s: hygiene_it(en, s), drafts, ref=en)
@@ -917,6 +973,8 @@ def _pass(cfg, topic: str, project, facts: str, history: str, attempt: int, avoi
             v_next = _fit(cfg, lang, topic, brief, arc, facts, budget, n_beats, poetics, target, v_next,
                           (lambda x: hygiene_en(x, cfg, budget)) if lang == "English" else (lambda x: hygiene_it(en, x)),
                           drafts, ref=en if lang == "Italian" else None, diagnosis=diag)
+            if lang == "English" and staged_visuals(v_next):
+                photographic_visuals(cfg, v_next, arc, topic)
             r_next = _review2(cfg, lang, topic, brief, prev, diag, v_next, poetics, benchmark)
             scratch.setdefault("reviews", {})[f"{lang}_v{round_no}"] = r_next
             scratch["en" if lang == "English" else "it"] = v_next
