@@ -533,17 +533,26 @@ Return {{"narration": "...", "words": <your count>}}"""
 
 
 def _compress_segments(cfg, language: str, script: Script, caps: dict[int, int], extra: str = "") -> Script:
-    """The reliable cut: one segment, one hard cap, one call. Segments already under their cap are untouched."""
+    """The reliable cut: one segment, one hard cap, one call — and the count is checked. A segment still over
+    its cap is asked again with a lower cap, three tries at most (the model returns 21 for a cap of 19; told 17
+    it returns 19). Segments already under their cap are untouched."""
     for x in script.segments:
         if x.kind == "cta" or x.index not in caps or _words(x.narration) <= caps[x.index]:
             continue
         note = extra + (" Do not begin with a digit or a number word." if x.index == 1 else "")
-        data = _call(cfg, COMPRESS_SYSTEM, COMPRESS_USER.format(language=language, cap=caps[x.index], n=_words(x.narration),
-                                                                run_on=RUN_ON_WORDS, extra=note, text=x.narration),
-                     editor=False, temperature=0.2, max_tokens=400)
-        new = " ".join(str(data.get("narration") or "").split())
-        if new and MIN_WORDS_PER_BEAT <= _words(new) < _words(x.narration):
-            x.narration = new
+        cap = caps[x.index]
+        best = x.narration
+        for _try in range(3):
+            data = _call(cfg, COMPRESS_SYSTEM, COMPRESS_USER.format(language=language, cap=cap, n=_words(best),
+                                                                    run_on=RUN_ON_WORDS, extra=note, text=best),
+                         editor=False, temperature=0.2, max_tokens=400)
+            new = " ".join(str(data.get("narration") or "").split())
+            if new and MIN_WORDS_PER_BEAT <= _words(new) < _words(best):
+                best = new
+            if _words(best) <= caps[x.index]:
+                break
+            cap = max(MIN_WORDS_PER_BEAT, cap - 2)      # ask for less than needed: the model undershoots the cut
+        x.narration = best
     return script
 
 
@@ -576,9 +585,11 @@ def _compress_it(cfg, it: Script, en: Script, squeeze: int = 0) -> Script:
 
 
 def _caps_en(script: Script, hi: int, squeeze: int = 0) -> dict[int, int]:
+    """Per-segment word caps that sum to a little UNDER the budget's ceiling: proportional to the current
+    lengths, floored, with a margin of 3 words so rounding never lands on the line."""
     content = [x for x in script.segments if x.kind != "cta"]
     total = sum(_words(x.narration) for x in content)
-    scale = min(1.0, (hi - squeeze) / max(1, total))
+    scale = min(1.0, (hi - 3 - squeeze) / max(1, total))
     return {x.index: max(MIN_WORDS_PER_BEAT, int(_words(x.narration) * scale)) for x in content}
 
 
