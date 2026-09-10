@@ -105,6 +105,11 @@ class FakeAPI:
             cap = int(_re.search(r"AT MOST (\d+) words", user).group(1))
             text = user.split("SEGMENT:", 1)[1].split("Return {", 1)[0].strip()
             return {"narration": " ".join(text.split()[:cap]).rstrip(",;") + ".", "words": cap}
+        if "Ripari una sola battuta" in system:
+            self.repaired = getattr(self, "repaired", 0) + 1
+            import re as _re
+            n = int(_re.search(r"la numero (\d+)", user).group(1))
+            return {"narration": IT[n - 1]}
         if "limite rigido di caratteri" in system:
             import re as _re
             cap = int(_re.search(r"AL MASSIMO (\d+) caratteri", user).group(1))
@@ -284,6 +289,26 @@ class TheEditorialMachine(unittest.TestCase):
         self.assertIn("Saturno", it_user)                                                   # names in their Italian form
         self.assertIsNone(re.search(r"nomi da conservare: Saturn(?!o)", it_user))            # never the English form
         self.assertNotIn(EN[1], it_user)                                                    # but never the English text
+
+    def test_an_italian_beat_with_a_problem_is_repaired_alone(self):
+        """Sixth Venus trial: whole-script rewrites of the Italian lost Sole and Sistema Solare in the very beats
+        they were asked to fix, three times. A beat is repaired by itself, with its fact, names and length."""
+        bad_it = list(IT); bad_it[1] = "La sonda ha misurato la caduta: mille chilogrammi di ghiaccio ogni secondo."   # Saturn dropped
+        fake = FakeAPI()
+        orig_route = fake.route
+        def route(system, user):
+            if user.startswith("LANGUAGE: Italian") and "You are REVISING" not in user:
+                return {"title": "Gli anelli", "segments": [{"narration": l, "visual": f"visual {i}", "keywords": ["Saturno"]} for i, l in enumerate(bad_it, 1)],
+                        "bridge_kind": "shoot", "cta_bridge": BRIDGE_IT}
+            return orig_route(system, user)
+        fake.route = route
+        with tempfile.TemporaryDirectory() as tmp:
+            script, project = self._run(fake, tmp)
+        self.assertEqual(getattr(fake, "repaired", 0), 1)                                   # one beat, one call
+        self.assertEqual([s.italian for s in script.segments if s.kind != "cta"], IT)
+        repair_user = next(u for s, u in fake.prompts if "Ripari una sola battuta" in s)
+        self.assertIn("Saturno", repair_user)                                               # the names in Italian form
+        self.assertIn("la numero 2", repair_user)
 
     def test_too_short_goes_back_to_the_writer_not_to_the_scissors(self):
         self.assertTrue(E._length_only(["total 140 spoken words, the budget is 94-116 (about 110): cut"]))

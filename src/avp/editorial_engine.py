@@ -610,6 +610,47 @@ def _compress_it(cfg, it: Script, en: Script, squeeze: int = 0) -> Script:
     return it
 
 
+REPAIR_IT_SYSTEM = "Ripari una sola battuta del copione italiano di un video scientifico. Stessa battuta, stessi fatti, italiano da redazione. Restituisci SOLO JSON."
+REPAIR_IT_USER = """Ripara questa battuta (la numero {n}) risolvendo TUTTI i problemi elencati, senza toccare le altre.
+Fatto della battuta (dall'arco narrativo): {fact}
+Nomi che la battuta deve contenere: {names}
+Lunghezza: tra {lo} e {hi} caratteri (ora {now}).
+Problemi da risolvere:
+{problems}
+Regole: soggetto esplicito, passato prossimo, niente calchi, terminologia esatta (tacca non scatto, obiettivo non lente,
+chilometri), numeri in cifre in formato italiano; non tradurre: scrivi la battuta in italiano da redazione. {extra}
+TESTO ATTUALE: {text}
+Restituisci {{"narration": "..."}}"""
+
+
+def _repair_it(cfg, it: Script, en: Script, arc: dict, reasons: list[str]) -> Script:
+    """The Italian's corrective path: one beat, its own problems, one call. Whole-script rewrites lost names
+    and length in the very beats they were asked to fix (sixth Venus trial); a beat repaired alone with its
+    fact, its names and its length band converges."""
+    by_seg: dict[int, list[str]] = {}
+    for r in reasons:
+        m = re.search(r"segmento (\d+)", r)
+        if m:
+            by_seg.setdefault(int(m.group(1)), []).append(re.sub(r"^segmento \d+:\s*", "", r))
+    ec = {x.index: x for x in en.segments if x.kind != "cta"}
+    beats = arc.get("beats") or []
+    for x in it.segments:
+        if x.kind == "cta" or x.index not in by_seg or x.index not in ec:
+            continue
+        e = ec[x.index]
+        fact = next((str(b.get("fact", "")) for b in beats if int(b.get("beat", 0) or 0) == x.index), "") or "(vedi la battuta inglese: stessi fatti)"
+        lo, hi = int(len(e.narration) * 0.75), int(len(e.narration) * 1.35)
+        data = _call(cfg, REPAIR_IT_SYSTEM,
+                     REPAIR_IT_USER.format(n=x.index, fact=fact, names=", ".join(names_for_italian(e.narration)) or "nessuno",
+                                           lo=lo, hi=hi, now=len(x.narration), problems="- " + "\n- ".join(by_seg[x.index]),
+                                           extra="Non iniziare con un numero." if x.index == 1 else "", text=x.narration),
+                     editor=False, temperature=0.3, max_tokens=500)
+        new = " ".join(str(data.get("narration") or "").split())
+        if new and not italian_lint(new) and not italian.bad_sense(new) and not competitor_mentions(new):
+            x.narration = new
+    return it
+
+
 def _caps_en(script: Script, hi: int, squeeze: int = 0) -> dict[int, int]:
     """Per-segment word caps that sum to a little UNDER the budget's ceiling: proportional to the current
     lengths, floored, with a margin of 3 words so rounding never lands on the line."""
@@ -632,7 +673,9 @@ def _fit(cfg, language: str, topic: str, brief: dict, arc: dict, facts: str, bud
         if not reasons:
             return script
         log.info("Hygiene %s (%d): %s", language, attempt, "; ".join(reasons))
-        if _length_only(reasons):
+        if language == "Italian" and ref is not None and all(re.search(r"segmento \d+", r) for r in reasons):
+            script = _repair_it(cfg, script, ref, arc, reasons)          # beat by beat: names, length, lint
+        elif _length_only(reasons):
             words, lo, hi = budget
             if language == "English":
                 script = _compress_segments(cfg, language, script, _caps_en(script, hi, squeeze=(attempt - 1) * 4))
