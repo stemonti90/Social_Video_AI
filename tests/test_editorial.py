@@ -327,6 +327,32 @@ class TheEditorialMachine(unittest.TestCase):
         self.assertIn("DISTINCT BEATS", E.ARC_SELECT_SYSTEM)
         self.assertIn("EVERY BEAT CARRIES A DIFFERENT FACT", E.NARRATIVE_SYSTEM)
 
+    def test_trial_mode_keeps_a_rejected_story_for_viewing_and_qa_refuses_it(self):
+        """The owner asked to SEE what the machine writes even when it rejects: with AVP_EDITORIAL_TRIAL=1 the
+        last drafts are saved and flagged; the build can run; QA never lets the flag through."""
+        fake = FakeAPI(first_review={"idea": "strong", "specificity": "strong", "density": "solid", "originality": "solid",
+                                     "narration": "solid", "language": "weak", "ai_smell": "mild"},
+                       review2={"dimensions": {"idea": "strong", "specificity": "strong", "density": "solid", "originality": "solid",
+                                               "narration": "solid", "language": "solid", "ai_smell": "none"},
+                                "weak_sentences": [], "fact_risks": [], "decision": "publish", "improved": False,
+                                "improvement_note": "compliance", "summary": "s"})
+        with tempfile.TemporaryDirectory() as tmp:
+            cfg, project = _cfg(tmp), _project(tmp)
+            patches = _quiet()
+            with mock.patch("avp.editorial_engine.requests.post", fake), patches[0], patches[1], patches[2], patches[3], \
+                 patches[4], patches[5], patches[6], patches[7], mock.patch.dict("os.environ", {"AVP_EDITORIAL_TRIAL": "1"}):
+                with self.assertRaises(E.EditorialError):
+                    E.run(project, cfg, TOPIC)
+            self.assertTrue(project.script_json.exists())
+            saved = json.loads(project.script_json.read_text())
+            report = json.loads((project.root / "editorial_report.json").read_text())
+        self.assertEqual(report["status"], "rejected")
+        self.assertEqual(project.manifest.data["editorial"]["status"], "rejected")
+        self.assertEqual(saved["segments"][-1]["kind"], "cta")
+        self.assertTrue(all(s["italian"] for s in saved["segments"][:-1]))
+        from avp import qa
+        self.assertIn('ed.get("status") == "rejected"', inspect.getsource(qa.check))
+
     def test_too_short_goes_back_to_the_writer_not_to_the_scissors(self):
         self.assertTrue(E._length_only(["total 140 spoken words, the budget is 94-116 (about 110): cut"]))
         self.assertFalse(E._length_only(["total 82 spoken words, the budget is 94-116 (about 110): add substance, not padding"]))

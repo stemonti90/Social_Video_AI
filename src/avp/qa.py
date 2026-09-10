@@ -135,6 +135,9 @@ def check(project, cfg, platforms: list[str] | None = None) -> list[str]:
     if script and (mw := morbid_in_script(script)):
         problems.append(f"morbid word in the script: {mw!r}")
     problems += context_problems(script)
+    ed = (getattr(project, "manifest", None) and project.manifest.data.get("editorial")) or {}
+    if isinstance(ed, dict) and ed.get("status") == "rejected":
+        problems.append("editorial: the story was REJECTED by the editorial review — a trial build, not publishable")
     from .llm import competitor_mentions, competitors_in_script
     if script and (app := competitors_in_script(script)):
         problems.append(f"another app is named in the script: {app!r} — never")

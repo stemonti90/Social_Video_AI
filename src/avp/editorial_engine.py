@@ -785,7 +785,9 @@ def _fix_facts_and_proof(cfg, en: Script, it: Script, facts: str, out_dir: Path)
     return notes
 
 
-def _pass(cfg, topic: str, project, facts: str, history: str, attempt: int, avoid: list[str]) -> tuple[Script, Script, dict, dict]:
+def _pass(cfg, topic: str, project, facts: str, history: str, attempt: int, avoid: list[str],
+          scratch: dict | None = None) -> tuple[Script, Script, dict, dict]:
+    scratch = scratch if scratch is not None else {}
     theory = standard("theory_of_value.md") or "Prefer tension, reversal, tangible scale, mechanism, honest open questions, human traces, a change of view; kill the obvious, the unverifiable, the unvisualisable, the recently told."
     poetics = standard("poetics.md") or "Precision, information density, depth, rhythm, naturalness, voice; no declared enthusiasm, no riddles, no unearned adjectives, no textbook explanations, no promotional closers."
     benchmark = benchmark_text()
@@ -826,6 +828,7 @@ def _pass(cfg, topic: str, project, facts: str, history: str, attempt: int, avoi
                   editor=False, temperature=0.1, max_tokens=2600)
     brief.setdefault("why_this_story", selection.get("why_this_story", ""))
     (root / "editorial_brief.json").write_text(_j(brief))
+    scratch["brief"], scratch["winner"], scratch["why"] = brief, winner, selection.get("why_this_story", "")
     # 4 · narrative design + independent arc selection
     n_beats = 6
     arcs_data = _call(cfg, NARRATIVE_SYSTEM.format(n_beats=n_beats), NARRATIVE_USER.format(topic=topic, brief=_j(brief), facts=facts),
@@ -865,6 +868,7 @@ def _pass(cfg, topic: str, project, facts: str, history: str, attempt: int, avoi
                   lambda s: hygiene_it(en, s), drafts, ref=en)
     finally:
         (root / "editorial_drafts.json").write_text(_j(drafts))
+    scratch["en"], scratch["it"], scratch["arc"] = en, it, arc
     # 6 · facts and proof (corrections), back-translation compare (one Italian pass if beats disagree)
     notes = _fix_facts_and_proof(cfg, en, it, facts, root)
     diffs = [n for n in notes if "senso diverso" in n]
@@ -877,7 +881,9 @@ def _pass(cfg, topic: str, project, facts: str, history: str, attempt: int, avoi
     # 7 · editorial review, rewrite, second review
     reviews: dict = {}
     for lang, s in (("English", en), ("Italian", it)):
+        scratch["en"], scratch["it"] = en, it
         r1 = _review(cfg, lang, topic, brief, s, poetics, benchmark)
+        scratch.setdefault("reviews", {})[f"{lang}_v1"] = r1
         suffix = "en" if lang == "English" else "it"
         (root / f"editorial_review_{suffix}_v1.json").write_text(_j(r1))
         reviews[f"{suffix}_v1"] = r1
@@ -894,6 +900,8 @@ def _pass(cfg, topic: str, project, facts: str, history: str, attempt: int, avoi
                           (lambda x: hygiene_en(x, cfg, budget)) if lang == "English" else (lambda x: hygiene_it(en, x)),
                           drafts, ref=en if lang == "Italian" else None, diagnosis=diag)
             r_next = _review2(cfg, lang, topic, brief, prev, diag, v_next, poetics, benchmark)
+            scratch.setdefault("reviews", {})[f"{lang}_v{round_no}"] = r_next
+            scratch["en" if lang == "English" else "it"] = v_next
             (root / f"editorial_review_{suffix}_v{round_no}.json").write_text(_j(r_next))
             reviews[f"{suffix}_v{round_no}"] = r_next
             if r_next.get("improved") is False or story_rejected(r_next):
@@ -937,14 +945,18 @@ def run(project, cfg, topic: str | None) -> Script:
     history = _history(cfg)
     avoid: list[str] = []
     last: Exception | None = None
+    scratch: dict = {}
     for attempt in (1, 2):
         try:
-            en, it, brief, evidence = _pass(cfg, topic, project, facts, history, attempt, avoid)
+            en, it, brief, evidence = _pass(cfg, topic, project, facts, history, attempt, avoid, scratch)
         except StoryRejected as e:
             last = e
             log.warning("Attempt %d: %s — the director looks for another angle", attempt, e)
             avoid.append(f"angle id {e.angle_id}: {e.why[:160]}")
             continue
+        except EditorialError as e:
+            last = e
+            break
         from . import stages
         project.script_json.write_text(stages._json(en.to_dict()))
         (project.root / "italian_script.json").write_text(stages._json(it.to_dict()))
@@ -963,4 +975,30 @@ def run(project, cfg, topic: str | None) -> Script:
         log.info("Editorial script approved on attempt %d: %r — angle: %s", attempt, en.title,
                  (evidence.get("winner") or {}).get("angle", ""))
         return en
+    if os.getenv("AVP_EDITORIAL_TRIAL", "").strip() == "1" and scratch.get("en") and scratch.get("it"):
+        # TRIAL MODE: the story was rejected, but the owner wants to SEE what the machine wrote. The last
+        # drafts are saved flagged "rejected"; the build runs, QA refuses to publish (qa.check reads the flag).
+        _save_rejected(project, cfg, topic, scratch, str(last))
+        raise last or EditorialError("editorial generation failed")
     raise last or EditorialError("editorial generation failed")
+
+
+def _save_rejected(project, cfg, topic: str, scratch: dict, why: str) -> None:
+    from . import stages
+    en, it = scratch["en"], scratch["it"]
+    for a, b in zip([x for x in en.segments if x.kind != "cta"], [x for x in it.segments if x.kind != "cta"]):
+        a.italian = b.narration
+    if cfg.funnel.enabled and not any(x.kind == "cta" for x in en.segments):
+        en.segments.append(Segment(index=len(en.segments) + 1, narration=stages._cta_narration(en, cfg), visual="App endcard",
+                                   keywords=[], kind="cta", italian=(it.cta_bridge if en.cta_bridge and it.cta_bridge else "")))
+    project.script_json.write_text(stages._json(en.to_dict()))
+    (project.root / "italian_script.json").write_text(stages._json(it.to_dict()))
+    stages.emit_script_md(en, project.script_md)
+    (project.root / "editorial_report.json").write_text(_j({"version": 3, "status": "rejected", "topic": topic, "title": en.title,
+                                                            "why": why, "winner": scratch.get("winner"), "why_this_story": scratch.get("why"),
+                                                            "reviews": scratch.get("reviews", {}), "brief": scratch.get("brief")}))
+    project.manifest.data["topic"] = topic
+    project.manifest.data["title"] = en.title
+    project.manifest.data.setdefault("editorial", {}).update({"version": 3, "status": "rejected", "why": why[:300]})
+    project.manifest.mark("script", "done", title=en.title, segments=len(en.segments))
+    log.warning("TRIAL MODE: rejected story saved for viewing only — QA will refuse to publish it (%s)", why[:120])
