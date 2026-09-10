@@ -91,13 +91,23 @@ def benchmark_text() -> str:
 
 # ----------------------------------------------------------------------------- the two models
 def _endpoint(cfg, editor: bool) -> tuple[str, str, str]:
-    """(key, url, model). The EDITOR may be another provider: env AVP_EDITOR_* or script.editor_*;
-    it falls back to the writer's model so the engine runs everywhere, and says so in the report."""
+    """(key, url, model). The WRITER side (director's candidates, brief, arcs, writers, cuts, repairs) may be a
+    LOCAL model on an OpenAI-compatible endpoint (Ollama: http://localhost:11434/v1/chat/completions) — env
+    AVP_WRITER_* or script.writer_*; the EDITOR side (selection, arc choice, reviews) may be another provider
+    (AVP_EDITOR_* or script.editor_*). Each falls back to DeepSeek so the engine runs everywhere, and the
+    report says who did what."""
     sc = cfg.script
-    writer_model = (str(getattr(sc, "brief_model", "") or "").strip()
-                    or str(getattr(sc, "factcheck_model", "deepseek-chat") or "deepseek-chat"))
+    deepseek_model = (str(getattr(sc, "brief_model", "") or "").strip()
+                      or str(getattr(sc, "factcheck_model", "deepseek-chat") or "deepseek-chat"))
     if not editor:
-        return factcheck._api_key(cfg), factcheck.DEEPSEEK_URL, writer_model
+        url = os.getenv("AVP_WRITER_URL", "").strip() or str(getattr(sc, "writer_url", "") or "").strip()
+        model = os.getenv("AVP_WRITER_MODEL", "").strip() or str(getattr(sc, "writer_model", "") or "").strip()
+        if url and model:
+            key = (os.getenv("AVP_WRITER_API_KEY", "").strip() or str(getattr(sc, "writer_api_key", "") or "").strip()
+                   or "local")
+            return key, url, model
+        return factcheck._api_key(cfg), factcheck.DEEPSEEK_URL, deepseek_model
+    writer_model = deepseek_model
     key = (os.getenv("AVP_EDITOR_API_KEY", "").strip() or str(getattr(sc, "editor_api_key", "") or "").strip()
            or factcheck._api_key(cfg))
     url = (os.getenv("AVP_EDITOR_URL", "").strip() or str(getattr(sc, "editor_url", "") or "").strip()
@@ -119,14 +129,19 @@ def _call(cfg, system: str, user: str, editor: bool = False, temperature: float 
     if not key:
         raise EditorialError("no API key for the editorial engine (DEEPSEEK_API_KEY or script.factcheck_key; "
                              "AVP_EDITOR_API_KEY for an independent editor)")
+    local = "localhost" in url or "127.0.0.1" in url
     r = requests.post(url, headers={"Authorization": f"Bearer {key}", "Content-Type": "application/json"},
                       json={"model": model, "temperature": temperature, "max_tokens": max_tokens,
                             "response_format": {"type": "json_object"},
                             "messages": [{"role": "system", "content": system}, {"role": "user", "content": user}]},
-                      timeout=(10, 240))
+                      timeout=(10, 900 if local else 240))          # a local 20B writes 3000 tokens in a minute or two
     if r.status_code >= 400:
         raise EditorialError(f"editorial model HTTP {r.status_code}: {(r.text or '')[:300]}")
-    return factcheck._extract_json(r.json()["choices"][0]["message"]["content"])
+    msg = r.json()["choices"][0]["message"]
+    content = msg.get("content") or ""
+    if not content.strip() and msg.get("reasoning"):        # a reasoning model that put everything in its thoughts
+        content = msg["reasoning"]
+    return factcheck._extract_json(content)
 
 
 def _j(x) -> str:

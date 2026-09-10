@@ -59,6 +59,12 @@ class ScriptConfig:
     editor_api_key: str = ""
     editor_url: str = ""
     editor_model: str = ""
+    # The WRITER side of the editorial engine (candidates, brief, arcs, both writers, cuts, repairs) on a
+    # LOCAL model: any OpenAI-compatible endpoint, e.g. Ollama at http://localhost:11434/v1/chat/completions
+    # with writer_model "gpt-oss:20b". Empty = DeepSeek. Env AVP_WRITER_URL / _MODEL / _API_KEY win.
+    writer_url: str = ""
+    writer_model: str = ""
+    writer_api_key: str = ""
     # A fact sheet from the fact-check model BEFORE the writer starts (see avp/brief.py). The local
     # writer does not know less-travelled topics and fills the gap with atmosphere; the sheet is the
     # only fact base it may use. "auto" = on whenever a fact-check key exists; "on" | "off".

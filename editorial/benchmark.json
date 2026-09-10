@@ -1,5 +1,5 @@
 {
-  "_about": "Benchmark editoriale annotato. Ogni voce: un testo d'oro (gold) con le annotazioni del PERCHÉ funziona, una versione quasi buona (near_miss) e una mediocre (mediocre), entrambe annotate. Serve a calibrare la revisione (esempi contrastivi nel suo contesto) e a misurare ogni versione della macchina. STATO: bozza del 10/09/2026 scritta dall'assistente; i testi d'oro vanno approvati dal direttore del canale. Obiettivo: dodici temi.",
+  "_about": "Benchmark editoriale annotato. Ogni voce: un testo d'oro (gold) con le annotazioni del PERCHÉ funziona, una versione quasi buona (near_miss) e una mediocre (mediocre), entrambe annotate. Serve a calibrare la revisione (esempi contrastivi nel suo contesto) e a misurare ogni versione della macchina. STATO: bozza del 10/09/2026 scritta dall'assistente; i testi d'oro vanno approvati dal direttore del canale. Obiettivo: dodici temi. La voce su Venere è il primo testo APPROVATO dal direttore del canale (10/09) e fissa il livello reale.",
   "entries": [
     {
       "subject": "The Schwarzschild radius of a black hole",
@@ -98,6 +98,35 @@
         ],
         "why_mediocre": "Riddle question, declared enthusiasm, 'mysterious', 'secrets': the voice of generated content."
       }
+    },
+    {
+      "subject": "Venus rotates backwards: a day longer than its year",
+      "editorial_angle": "Venus spins so slowly that a person walking briskly on its equator would outrun the planet's rotation.",
+      "central_idea": "A tangible speed (6.5 km/h) opens the door to the day-longer-than-year paradox and the retrograde spin.",
+      "why_this_angle": "Scale made tangible (6.5 vs 1,670 km/h) plus a reversal (the Sun rises in the west) plus a number the viewer can hold (243 vs 224.7 days). Chosen by the director over 'the hottest planet' (the fact everyone cites) and the Venera probes (already told).",
+      "gold": [
+        "Venus's equator moves about 6.5 kilometers per hour, slower than a brisk walk, so a person could outpace the ground.",
+        "On Venus, the Sun crawls across the sky; you could walk faster than its apparent motion.",
+        "Venus rotates every 243 Earth days, orbits the Sun in 224.7 days, so its day exceeds its year.",
+        "A Venusian solar day lasts 116.75 Earth days, set by slow backward spin and fast orbit.",
+        "Venus rotates opposite to almost all planets; on its surface, the Sun rises in the west and sets in the east.",
+        "Venus's axial tilt is only 2.64 degrees, so it truly rotates backwards compared to its orbit."
+      ],
+      "gold_italian": [
+        "Sull'equatore di Venere il suolo si muove a 6,5 chilometri all'ora, mentre sulla Terra a 1.670.",
+        "Su Venere il Sole si muove così lentamente che una camminata lo supera.",
+        "Venere compie un giro su se stessa in 243 giorni terrestri, ma ne impiega 224,7 per orbitare intorno al Sole, quindi il suo giorno è più lungo del suo anno.",
+        "Un giorno solare venusiano dura 116,75 giorni terrestri, poiché la rotazione lenta e l'orbita veloce si combinano.",
+        "Venere ruota nel verso opposto a quasi tutti gli altri pianeti: sulla sua superficie il Sole sorgerebbe a ovest e tramonterebbe a est.",
+        "L'inclinazione dell'asse di Venere è di soli 2,64 gradi: Venere ruota davvero al contrario, non perché sia capovolta."
+      ],
+      "owner_note": "APPROVED BY THE OWNER on 10/09/2026 as the level the channel wants ('a me sembrano ottimi'), while the DeepSeek reviewer had rated its narration weak and rejected the story. This entry calibrates the reviewer: a text of this density, precision and rhythm is publishable.",
+      "information_density": "six beats, six distinct facts, four numbers, one comparison per beat; no beat repeats another",
+      "scientific_depth": "sidereal vs solar day both given with their numbers; retrograde spin distinguished from a flipped axis via the 2.64° tilt",
+      "narrative_arc": "tangible speed → what it means on the surface → the paradox in numbers → the solar day → the direction → why it is truly backwards",
+      "voice": "declarative, concrete, no enthusiasm markers, one image (the walker) carried by a number",
+      "forbidden_tendencies_avoided": "no 'mysterious', no riddle, no promotional close; the Italian keeps subjects explicit and names in Italian form",
+      "weak_alternative": "'Venus is a mysterious world with many secrets. Did you know it spins backwards? Incredible!'"
     }
   ]
 }

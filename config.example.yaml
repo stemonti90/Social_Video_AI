@@ -14,6 +14,9 @@ script:
   editor_api_key: ""     # l'editor indipendente della macchina editoriale: un modello DIVERSO dall'autore (endpoint compatibile OpenAI); vuoto = stesso modello, compromesso dichiarato
   editor_url: ""         # es. https://api.mistral.ai/v1/chat/completions — oppure le variabili AVP_EDITOR_API_KEY / AVP_EDITOR_URL / AVP_EDITOR_MODEL
   editor_model: ""
+  writer_url: ""         # l'AUTORE della macchina editoriale su un modello LOCALE (endpoint compatibile OpenAI, es. Ollama http://localhost:11434/v1/chat/completions); vuoto = DeepSeek
+  writer_model: ""       # es. gpt-oss:20b (14 GB, MoE, veloce su M5 24 GB) — oppure le variabili AVP_WRITER_URL / AVP_WRITER_MODEL / AVP_WRITER_API_KEY
+  writer_api_key: ""     # per Ollama qualsiasi valore
   polish: auto           # rilettura finale del modello forte: riscrive le righe corrette-ma-piatte nel tono del canale, solo con i fatti della scheda (avp/polish.py); on | off
   subtitle_editor: auto  # chi scrive i sottotitoli tradotti (avp/subtitles.py): auto = il modello del fact-check se c'e' la chiave, altrimenti locale; remote | local
   target_seconds: 50      # aim above the 60s TikTok Creator-Rewards minimum
