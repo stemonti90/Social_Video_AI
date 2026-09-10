@@ -1,0 +1,103 @@
+{
+  "_about": "Benchmark editoriale annotato. Ogni voce: un testo d'oro (gold) con le annotazioni del PERCHÉ funziona, una versione quasi buona (near_miss) e una mediocre (mediocre), entrambe annotate. Serve a calibrare la revisione (esempi contrastivi nel suo contesto) e a misurare ogni versione della macchina. STATO: bozza del 10/09/2026 scritta dall'assistente; i testi d'oro vanno approvati dal direttore del canale. Obiettivo: dodici temi.",
+  "entries": [
+    {
+      "subject": "The Schwarzschild radius of a black hole",
+      "editorial_angle": "The edge of a black hole is a distance, not a surface — and Earth's is the size of a marble.",
+      "central_idea": "The point of no return is a radius set only by mass; every object has one.",
+      "why_this_angle": "Tension (a planet-sized mass, a marble-sized limit) plus scale made tangible (8.87 mm) plus a human trace (Schwarzschild, 1916, the Russian front). Beats 'black holes are scary' and 'what is a black hole' — the audience knows the basics.",
+      "gold": [
+        "The whole planet fits in your palm — if you crush it first.",
+        "Squeeze Earth to a radius of 8.87 millimeters and it becomes a black hole. That's the Schwarzschild radius, the point of no return.",
+        "Past that boundary, not even light can escape. Nothing that crosses it ever comes back.",
+        "Karl Schwarzschild calculated it in 1916, from the Russian front, during World War I.",
+        "Crush the Sun the same way and its radius shrinks to just 2.95 kilometers.",
+        "At our galaxy's heart, Sagittarius A* weighs 4.1 million suns. Its event horizon reaches 12 million kilometers from the center.",
+        "Even you have one. Crushed to a point far smaller than a proton, a human body becomes a black hole."
+      ],
+      "information_density": "one concrete fact per beat, four numbers, one name and date; no sentence only decorates",
+      "scientific_depth": "radius vs diameter kept straight; the horizon named as a boundary, not a surface; scaling with mass shown across Earth, Sun, Sgr A*, a human",
+      "narrative_arc": "counterintuitive opening (palm) → definition through the number → what the boundary does → who found it → scale up (Sun, galaxy) → scale down (you)",
+      "voice": "declarative, no enthusiasm markers, one image (the palm) cashed in by the next line",
+      "forbidden_tendencies_avoided": "no 'mysterious', no 'mind-blowing', no riddle left unanswered, no promotional close",
+      "weak_alternative": "'Black holes are the most mysterious objects in the universe. Nothing can escape their incredible gravity, not even light...' — enthusiasm instead of facts, the fact everyone cites first, no number the viewer can hold.",
+      "near_miss": {
+        "text": [
+          "A planet's point of no return fits in your hand.",
+          "Squeeze all of Earth into 8.87 millimeters, and it becomes a trap for light itself."
+        ],
+        "why_not_gold": "Riddles: two lines in and the words 'black hole' have not been said. Correct, evocative, and unwatchable for a viewer reading subtitles — the subject is never named."
+      },
+      "mediocre": {
+        "text": [
+          "Black holes are some of the most fascinating objects in space.",
+          "They have such strong gravity that nothing can escape, not even light."
+        ],
+        "why_mediocre": "Declared enthusiasm, the textbook fact, no number, no name, nothing the audience does not already hold."
+      }
+    },
+    {
+      "subject": "Focusing a phone camera on stars",
+      "editorial_angle": "Your phone cannot focus on a star for the same reason it can photograph the Milky Way.",
+      "central_idea": "Autofocus needs edges; a star is a point; the fix is manual focus a few clicks short of infinity.",
+      "why_this_angle": "Mechanism (contrast → no edges → hunting) plus a change of view (infinity is not at the end of the slider) plus a consequence the viewer acts on tonight. Beats 'tips for night photography' — a list, not a story.",
+      "gold": [
+        "Your phone searches for a surface that isn't there — stars are single points, no edges to lock onto.",
+        "That's why autofocus fails on stars. It needs contrast, and a point of light offers none.",
+        "The true infinity focus is a few clicks back from the slider's end. Test on a bright star to find it.",
+        "No manual focus? Lock onto a distant streetlight, then swing to the sky — the lens stays put.",
+        "Stack twenty 15-second shots, and the Milky Way's hidden detail emerges."
+      ],
+      "information_density": "cause, effect, remedy, fallback, payoff — one each, in order",
+      "scientific_depth": "the mechanism (contrast detection) explained in two steps, not asserted",
+      "narrative_arc": "the failure → its cause → the fix → the fallback → what the fix buys you",
+      "voice": "second person earned by the how-to; no adjectives, one dash per beat at most",
+      "forbidden_tendencies_avoided": "no other app named, no 'unlock the cosmos', no 'incredible detail'",
+      "weak_alternative": "'Third-party apps like ProCam or Open Camera let you set focus manually' — names competitors, and the phrase belongs to a listicle.",
+      "near_miss": {
+        "text": [
+          "A hidden galaxy waits in your pocket, but the very stars that form it defeat your camera."
+        ],
+        "why_not_gold": "A riddle for a hook: the viewer cannot say what line 1 is about. The rest of that script was fine; the opening was not."
+      },
+      "mediocre": {
+        "text": [
+          "Taking photos of the stars with your phone can be tricky, but with a few simple tips you can get amazing results!"
+        ],
+        "why_mediocre": "Marketing register, 'amazing', 'simple tips', no mechanism, no fact — the voice of a listicle intro."
+      }
+    },
+    {
+      "subject": "Venus rotates backwards",
+      "editorial_angle": "On Venus a day lasts longer than a year, and no one is sure why.",
+      "central_idea": "Retrograde, glacial rotation with two named competing explanations.",
+      "why_this_angle": "Tension (Earth's twin, opposite in what matters) plus an honest open question with named hypotheses plus a tangible comparison (243 vs 225 days). Beats 'the hottest planet' — the fact everyone cites first — and the Venera probes, told on 5/9.",
+      "gold": [
+        "Venus is Earth's twin in size and mass, and opposite in everything that counts.",
+        "It turns once every 243 Earth days, yet it circles the Sun in 225. The day is longer than the year.",
+        "And it turns the wrong way: the Sun rises in the west, the only planet with Uranus to do so.",
+        "One explanation is a giant impact, early on, that flipped or halted its spin.",
+        "The other is slower: the Sun's tides dragging on an atmosphere ninety times denser than ours, braking the planet for billions of years.",
+        "Which one slowed Venus down, no one can yet say. The planet keeps its answer."
+      ],
+      "information_density": "four numbers, two hypotheses named, one comparison the viewer can hold",
+      "scientific_depth": "the open question stated as competition between mechanisms, not as 'a mystery'",
+      "narrative_arc": "twin → the impossible number → the wrong direction → hypothesis 1 → hypothesis 2 → honest close",
+      "voice": "no 'mysterious', the uncertainty carried by the verbs, closing on the story not on the sky",
+      "forbidden_tendencies_avoided": "no promotional close ('photograph Venus tonight'), no 'scientists are baffled'",
+      "weak_alternative": "'Venus is the brightest object in the night sky after the Moon — and you can photograph it tonight!' — true, and editorially wrong for this story.",
+      "near_miss": {
+        "text": [
+          "Venus rotates backwards and very slowly, and scientists still don't fully understand why."
+        ],
+        "why_not_gold": "Correct and empty: no number, no named hypothesis, 'still don't fully understand' instead of the two explanations."
+      },
+      "mediocre": {
+        "text": [
+          "Venus is a mysterious world with many secrets. Did you know it spins backwards? Incredible!"
+        ],
+        "why_mediocre": "Riddle question, declared enthusiasm, 'mysterious', 'secrets': the voice of generated content."
+      }
+    }
+  ]
+}

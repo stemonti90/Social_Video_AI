@@ -157,6 +157,11 @@ def _cta_narration(script: Script, cfg: Config) -> str:
 def stage_script(project: VideoProject, cfg: Config, topic: str | None) -> Script:
     if not topic:
         topic = project.manifest.data.get("topic") or ""
+    if str(getattr(cfg.script, "engine", "editorial") or "editorial").lower() == "editorial":
+        # The editorial machine (10/09): a story is chosen and developed before anyone writes; the
+        # classic chain below remains for `script.engine: classic` and for the back catalogue tools.
+        from . import editorial_engine
+        return editorial_engine.run(project, cfg, topic)
     if not topic:
         raise ValueError("No topic given and no existing one. Pass --topic.")
 

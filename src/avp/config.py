@@ -49,6 +49,16 @@ class ScriptConfig:
     factcheck: str = "off"
     factcheck_model: str = "deepseek-chat"
     factcheck_key: str = ""      # prefer the DEEPSEEK_API_KEY env var; this is the fallback
+    # Which machine writes the script (avp/editorial_engine.py vs the classic draft→polish chain):
+    #   "editorial" — director → brief → narrative design → two writers → independent review (default)
+    #   "classic"   — gemma draft → polish → fact-check → Italian script (the pre-10/09 chain)
+    engine: str = "editorial"
+    # The independent EDITOR of the editorial engine: a different provider/model than the writer.
+    # Any OpenAI-compatible chat endpoint; env AVP_EDITOR_API_KEY / AVP_EDITOR_URL / AVP_EDITOR_MODEL win.
+    # Empty = the writer's model plays both roles (a stated compromise, recorded in editorial_report.json).
+    editor_api_key: str = ""
+    editor_url: str = ""
+    editor_model: str = ""
     # A fact sheet from the fact-check model BEFORE the writer starts (see avp/brief.py). The local
     # writer does not know less-travelled topics and fills the gap with atmosphere; the sheet is the
     # only fact base it may use. "auto" = on whenever a fact-check key exists; "on" | "off".
