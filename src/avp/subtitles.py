@@ -126,9 +126,10 @@ Return JSON: {{"items": [{{"id": 1, "text": "..."}}, ...]}}.
 
 # English proper noun → forms accepted in the Italian card (lower case; matched on the first 5 letters)
 _NAME_MAP: dict[str, tuple[str, ...]] = {
-    "milky way": ("via lattea",), "earth": ("terra",), "sun": ("sole",), "moon": ("luna",), "mars": ("marte",),
-    "jupiter": ("giove",), "saturn": ("saturno",), "venus": ("venere",), "mercury": ("mercurio",),
-    "uranus": ("urano",), "neptune": ("nettuno",), "pluto": ("plutone",), "titan": ("titano",),
+    "milky way": ("via lattea",), "earth": ("terra", "terrestr"), "sun": ("sole", "solar"), "moon": ("luna", "lunar"),
+    "mars": ("marte", "marzian"), "jupiter": ("giove", "giovian"), "saturn": ("saturno", "saturnian"),
+    "venus": ("venere", "venusian"), "mercury": ("mercurio",), "uranus": ("urano",), "neptune": ("nettuno",),
+    "pluto": ("plutone",), "titan": ("titano",),
     "enceladus": ("encelado",), "ceres": ("cerere",), "orion": ("orione",), "pleiades": ("pleiadi",),
     "sirius": ("sirio",), "polaris": ("polare", "polaris"), "andromeda": ("andromeda",),
     "great red spot": ("grande macchia rossa",), "olympus mons": ("olympus mons", "monte olimpo"),
