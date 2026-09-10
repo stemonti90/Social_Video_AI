@@ -4748,6 +4748,8 @@ class TheViewerMustKnowWhatTheVideoIsAbout(unittest.TestCase):
         self.assertEqual(dropped_names("Even you have one. Crushed to a point, a human body becomes a black hole.", "Anche tu ne hai uno."), [])
         self.assertEqual(dropped_names("Enough water to fill an Olympic swimming pool every 30 minutes.", "Abbastanza acqua per riempire una piscina olimpionica ogni 30 minuti."), [])   # 10/09 trial
         self.assertEqual(dropped_names("The Jovian moons hide oceans.", "Le lune di Giove nascondono oceani."), [])
+        from avp.subtitles import names_to_keep
+        self.assertEqual(names_to_keep("Enough water to fill an Olympic swimming pool, Cassini found."), ["Cassini"])
         self.assertEqual(dropped_names("Cassini's Grand Finale orbits measured it.", "Le orbite finali di Cassini l'hanno misurato."), ["Grand Finale"])
 
     def test_the_restore_pass_brings_the_name_back(self):

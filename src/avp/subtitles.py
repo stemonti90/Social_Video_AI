@@ -134,7 +134,7 @@ _NAME_MAP: dict[str, tuple[str, ...]] = {
     "great red spot": ("grande macchia rossa",), "olympus mons": ("olympus mons", "monte olimpo"),
     "world war": ("guerra mondiale",), "russian": ("russ",), "soviet": ("soviet",), "american": ("americ",),
     "european": ("europe",), "italian": ("italian",), "james webb": ("webb",), "north": ("nord",),
-    "south": ("sud",), "solar system": ("sistema solare",), "big bang": ("big bang",), "olympic": ("olimp",),
+    "south": ("sud",), "solar system": ("sistema solare",), "big bang": ("big bang",),
     "titan": ("titano",), "grand finale": ("grand finale", "gran finale"),
 }
 _SENTENCE_START = re.compile(r"(?:^|[.!?]\s+)([A-Z])")
@@ -161,16 +161,27 @@ def proper_nouns(english: str) -> list[str]:
 _ADJECTIVE_ENDINGS = ("ic", "an", "ese", "ish", "ian", "ese")   # Olympic, Jovian, Martian, Chinese: capitalised in English, plain adjectives in Italian
 
 
+def names_to_keep(english: str) -> list[str]:
+    """The names an Italian writer or cutter must keep from an English beat — proper nouns minus the lone
+    capitalised adjectives (Olympic, Jovian) that are plain adjectives in Italian. Listing "Olympic" as a name
+    made a cutter write "una piscina Olympic" (10/09)."""
+    out = []
+    for name in proper_nouns(english):
+        key = name.lower()
+        if " " not in name and key not in _NAME_MAP and key.endswith(_ADJECTIVE_ENDINGS):
+            continue
+        out.append(name)
+    return out
+
+
 def dropped_names(english: str, italian: str) -> list[str]:
     """Names of the English line that the Italian card lost (accepting the Italian form of the name). A lone
     capitalised adjective (Olympic, Jovian) is not a name unless the map knows it: "an Olympic pool" is "una
     piscina olimpionica" and no name was dropped (measured 10/09, a trial failed on exactly this)."""
     low = (italian or "").lower()
     missing = []
-    for name in proper_nouns(english):
+    for name in names_to_keep(english):
         key = name.lower()
-        if " " not in name and key not in _NAME_MAP and key.endswith(_ADJECTIVE_ENDINGS):
-            continue
         forms = _NAME_MAP.get(key) or tuple(w.lower() for w in name.split() if len(w) >= 4) or (key,)
         if not any((f[:5] if len(f) > 5 else f) in low for f in forms):
             missing.append(name)

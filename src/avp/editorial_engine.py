@@ -37,7 +37,7 @@ from . import brief as brief_mod
 from . import factcheck, italian, polish
 from .llm import competitor_mentions, copied_exemplar, morbid_in_script, names_subject
 from .models import Script, Segment, dedupe_segments
-from .subtitles import _backend, dropped_names, italian_lint, proper_nouns
+from .subtitles import _backend, dropped_names, italian_lint, names_to_keep
 
 log = logging.getLogger(__name__)
 
@@ -494,7 +494,7 @@ def _limits_note(ref: Script | None) -> str:
     for x in ref.segments:
         if x.kind == "cta":
             continue
-        names = ", ".join(proper_nouns(x.narration)) or "—"
+        names = ", ".join(names_to_keep(x.narration)) or "—"
         rows.append(f"battuta {x.index}: al massimo {int(len(x.narration) * 1.3)} caratteri; nomi da conservare: {names}")
     return ("LIMITI PER BATTUTA (rigidi, contali; la voce inglese dura quanto dura, il lettore deve arrivare in fondo):\n- "
             + "\n- ".join(rows))
@@ -564,7 +564,7 @@ def _compress_it(cfg, it: Script, en: Script, squeeze: int = 0) -> Script:
         cap = int(len(ec[x.index].narration) * 1.35) - squeeze
         if len(x.narration) <= cap:
             continue
-        names = ", ".join(proper_nouns(ec[x.index].narration)) or "nessuno"
+        names = ", ".join(names_to_keep(ec[x.index].narration)) or "nessuno"
         data = _call(cfg, COMPRESS_IT_SYSTEM,
                      COMPRESS_IT_USER.format(cap=cap, n=len(x.narration), names=names, text=x.narration,
                                              extra="Non iniziare con un numero." if x.index == 1 else ""),
