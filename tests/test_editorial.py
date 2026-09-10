@@ -98,6 +98,13 @@ class FakeAPI:
             return {"arcs": [{"id": k, "thesis": f"arc {k}", "beats": beats, "why": "w"} for k in (1, 2, 3)]}
         if "senior narrative editor" in system:
             return {"winner": 3, "why": "arc 3 escalates."}
+        if "cutting a spoken script to length" in system:
+            self.tightened = getattr(self, "tightened", 0) + 1
+            import json as _json
+            body = _json.loads(user.split("SCRIPT:", 1)[1].rsplit("Return the same JSON shape", 1)[0].strip())
+            for seg in body["segments"]:
+                seg["narration"] = " ".join(seg["narration"].split()[:16]).rstrip(",;") + "."
+            return body
         if user.startswith("LANGUAGE: English"):
             lines = self.en_lines
             if "You are REVISING" in user:
@@ -240,6 +247,21 @@ class TheEditorialMachine(unittest.TestCase):
             self.assertIn(needle, reasons)
         self.assertEqual(E.hygiene_it(good, Script(title="t", topic=TOPIC, cta_bridge=BRIDGE_IT,
                                                    segments=[Segment(index=i, narration=l) for i, l in enumerate(IT, 1)])), [])
+
+    def test_a_script_over_budget_is_cut_to_length_not_rewritten(self):
+        """The first real trial (10/09) failed here: three full rewrites, each LONGER than the last (133 → 138 →
+        143 words against 126). A length problem is now a cut, done on the text itself."""
+        long_lines = [l + " and this clause pads the line with words that add nothing at all" for l in EN]
+        fake = FakeAPI(en_lines=long_lines)
+        with tempfile.TemporaryDirectory() as tmp:
+            script, project = self._run(fake, tmp)
+            drafts = json.loads((project.root / "editorial_drafts.json").read_text())
+        self.assertGreaterEqual(getattr(fake, "tightened", 0), 1)
+        self.assertFalse(any("HYGIENE NOTES" in u for s, u in fake.prompts if u.startswith("LANGUAGE: English")))   # no blind rewrite
+        content = [s for s in script.segments if s.kind != "cta"]
+        self.assertLessEqual(sum(len(s.narration.split()) for s in content), 103)
+        self.assertTrue(any(d["language"] == "English" and d["reasons"] for d in drafts))                           # the record of the cut
+        self.assertEqual([s.italian for s in content], IT)
 
     def test_publishable_and_rejection_rules(self):
         ok = {"decision": "publish", "dimensions": {"idea": "strong", "specificity": "solid", "density": "solid", "originality": "solid",
