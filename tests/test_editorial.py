@@ -13,12 +13,12 @@ from avp.config import Config
 from avp.models import Script, Segment
 
 TOPIC = "Saturn's rings are disappearing"
-EN = ["Saturn's rings look permanent, but they are falling into the planet as we watch.",
+EN = ["Saturn's rings look permanent, but they are falling into the planet right now.",
       "Cassini measured the fall: about a thousand kilograms of ring ice rain onto Saturn every second.",
-      "At that rate the rings vanish in roughly 100 million years, a blink in the planet's life.",
-      "The ice is pulled by Saturn's magnetic field, which drags charged grains down along its lines.",
-      "The rings may also be young: perhaps only 100 million years old, born after the dinosaurs.",
-      "We are watching Saturn in the brief age when it has rings at all, and that age is ending."]
+      "At that rate the rings vanish in roughly 100 million years, a blink for the planet.",
+      "The ice is pulled by Saturn's magnetic field, which drags charged grains down its lines.",
+      "The rings may also be young: perhaps 100 million years old, born after the dinosaurs.",
+      "We are watching Saturn in the brief age when it has rings, and that age is ending."]
 IT = ["Gli anelli di Saturno sembrano eterni, ma stanno cadendo sul pianeta mentre li guardiamo.",
       "Cassini ha misurato la caduta: circa mille chilogrammi di ghiaccio degli anelli piovono su Saturno ogni secondo.",
       "A questo ritmo gli anelli scompaiono in circa 100 milioni di anni, un istante nella vita del pianeta.",
@@ -103,7 +103,7 @@ class FakeAPI:
             import json as _json
             body = _json.loads(user.split("SCRIPT:", 1)[1].rsplit("Return the same JSON shape", 1)[0].strip())
             for seg in body["segments"]:
-                seg["narration"] = " ".join(seg["narration"].split()[:16]).rstrip(",;") + "."
+                seg["narration"] = " ".join(seg["narration"].split()[:14]).rstrip(",;") + "."
             return body
         if user.startswith("LANGUAGE: English"):
             lines = self.en_lines
@@ -224,7 +224,7 @@ class TheEditorialMachine(unittest.TestCase):
     def test_the_hygiene_nets_catch_errors_not_taste(self):
         cfg = _cfg(".")
         budget = E.word_budget(cfg, 6)
-        self.assertEqual(budget, (90, 76, 103))                                    # (48-9)*0.92 s × 2.5 words/s, float rounding
+        self.assertEqual(budget, (90, 76, 94))                                     # (48-9)*0.92 s × 2.5 words/s; +5% only: gaps and pauses eat the rest
         good = Script(title="t", topic=TOPIC, cta_bridge=BRIDGE_EN, bridge_kind="shoot",
                       segments=[Segment(index=i, narration=l) for i, l in enumerate(EN, 1)])
         self.assertEqual(E.hygiene_en(good, cfg, budget), [])
@@ -233,8 +233,9 @@ class TheEditorialMachine(unittest.TestCase):
             Segment(index=2, narration="Short line."),
             Segment(index=3, narration=" ".join(["word"] * 30) + "."),
             Segment(index=4, narration=EN[3]), Segment(index=5, narration=EN[4]), Segment(index=6, narration=EN[5])])
+        bad.segments[4].narration = "The rings hold about 1.5 × 10^19 kilograms of ice, roughly 40% the mass of Mimas."
         reasons = " | ".join(E.hygiene_en(bad, cfg, budget))
-        for needle in ("opens on a number", "imperial", "segment 2 has 2 words", "run-on", "names another app (Halide)"):
+        for needle in ("opens on a number", "imperial", "segment 2 has 2 words", "run-on", "names another app (Halide)", "notation a voice cannot read"):
             self.assertIn(needle, reasons)
         it_bad = Script(title="t", topic=TOPIC, cta_bridge=BRIDGE_IT, segments=[
             Segment(index=i, narration=l) for i, l in enumerate(IT, 1)])
@@ -259,7 +260,10 @@ class TheEditorialMachine(unittest.TestCase):
         self.assertGreaterEqual(getattr(fake, "tightened", 0), 1)
         self.assertFalse(any("HYGIENE NOTES" in u for s, u in fake.prompts if u.startswith("LANGUAGE: English")))   # no blind rewrite
         content = [s for s in script.segments if s.kind != "cta"]
-        self.assertLessEqual(sum(len(s.narration.split()) for s in content), 103)
+        self.assertLessEqual(sum(len(s.narration.split()) for s in content), 94)
+        tighten_user = next(u for s, u in fake.prompts if "cutting a spoken script to length" in s)
+        self.assertIn("HARD WORD CAPS", tighten_user)
+        self.assertIn("segment 1:", tighten_user)
         self.assertTrue(any(d["language"] == "English" and d["reasons"] for d in drafts))                           # the record of the cut
         self.assertEqual([s.italian for s in content], IT)
 
