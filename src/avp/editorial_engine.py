@@ -276,7 +276,8 @@ TIGHTEN_USER = """This {language} script does not fit the medium:
 
 Cut it to fit WITHOUT losing a beat, a fact, a number or a name: remove asides, doubled adjectives, repeated
 context, throat-clearing; split any sentence longer than {run_on} words. Same number of segments, same order,
-same title, same cta_bridge and bridge_kind, visuals untouched. {limits}
+same title, same cta_bridge and bridge_kind, visuals untouched. Segment 1 keeps its opening words and never
+begins with a digit or a number word; no segment begins with a number. {limits}
 
 SCRIPT:
 {script}
@@ -388,7 +389,9 @@ def hygiene_en(script: Script, cfg, budget: tuple[int, int, int]) -> list[str]:
     if total < lo or total > hi:
         reasons.append(f"total {total} spoken words, the budget is {lo}-{hi} (about {words}): "
                        + ("cut" if total > hi else "add substance, not padding"))
-    head = " ".join(content[0].narration.split()[:6]).lower() if content else ""
+    # the hook does not BEGIN with a number (a cold listener cannot hold it); "Saturn's rings lose mass at 0.5
+    # tonnes" is fine — the six-word rule of the old polish made a cut-to-length pass and a rewrite chase each other
+    head = " ".join(content[0].narration.split()[:3]).lower() if content else ""
     if re.search(r"\d", head) or any(f" {w} " in f" {head} " for w in _NUMBER_WORDS):
         reasons.append("segment 1 opens on a number — a listener cannot hold a number cold; open on the thing")
     for s in content:
@@ -523,9 +526,10 @@ def _tighten(cfg, language: str, script: Script, reasons: list[str], budget: tup
 
 def _fit(cfg, language: str, topic: str, brief: dict, arc: dict, facts: str, budget: tuple[int, int, int], n_beats: int,
          poetics: str, target: int, script: Script, check, drafts: list, ref: Script | None = None) -> Script:
-    """Two corrective passes at most: a rewrite with the notes when the problems are of substance, a cut to
-    length when they are only of length; then the nets are final."""
-    for attempt in (1, 2):
+    """Three corrective passes at most: a rewrite with the notes when the problems are of substance, a cut to
+    length when they are only of length (the writer overshoots by 20-30% whatever it is told, the cut lands);
+    then the nets are final. Measured 10/09: rewrite → cut → cut converges, rewrite → rewrite does not."""
+    for attempt in (1, 2, 3):
         reasons = check(script)
         drafts.append({"language": language, "attempt": attempt, "reasons": reasons, "words": sum(_words(x.narration) for x in script.segments),
                        "segments": [x.narration for x in script.segments]})
@@ -537,7 +541,7 @@ def _fit(cfg, language: str, topic: str, brief: dict, arc: dict, facts: str, bud
         else:
             script = _write(cfg, language, topic, brief, arc, facts, budget, n_beats, poetics, target, notes=reasons, temperature=0.4)
     reasons = check(script)
-    drafts.append({"language": language, "attempt": 3, "reasons": reasons, "words": sum(_words(x.narration) for x in script.segments),
+    drafts.append({"language": language, "attempt": 4, "reasons": reasons, "words": sum(_words(x.narration) for x in script.segments),
                    "segments": [x.narration for x in script.segments]})
     if reasons:
         raise EditorialError(f"{language} script still fails the hygiene nets: " + "; ".join(reasons))
