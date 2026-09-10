@@ -1,6 +1,7 @@
 """The editorial machine (avp/editorial_engine.py): a story is chosen and developed before anyone writes.
 A fake API answers every role by recognising its prompt; the mechanical nets and the pipeline glue are real."""
 import inspect
+import re
 import json
 import tempfile
 import unittest
@@ -280,6 +281,8 @@ class TheEditorialMachine(unittest.TestCase):
         self.assertEqual([s.italian for s in content], IT)
         it_user = next(u for s, u in fake.prompts if u.startswith("LANGUAGE: Italian"))
         self.assertIn("LIMITI PER BATTUTA", it_user)                                       # the Italian hears the fitted beats' caps
+        self.assertIn("Saturno", it_user)                                                   # names in their Italian form
+        self.assertIsNone(re.search(r"nomi da conservare: Saturn(?!o)", it_user))            # never the English form
         self.assertNotIn(EN[1], it_user)                                                    # but never the English text
 
     def test_the_directors_angles_are_read_wherever_the_model_put_them(self):

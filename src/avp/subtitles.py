@@ -149,12 +149,13 @@ def proper_nouns(english: str) -> list[str]:
     for m in re.finditer(r"(?:[A-Z][\w*'\-]*)(?:\s+[A-Z][\w*'\-]*)*", english or ""):
         words = [w for w in m.group(0).split() if w != "I"]
         words = [re.sub(r"'s$", "", w) for w in words]
+        words = [re.sub(r"-[a-z][\w-]*$", "", w) for w in words]      # "Earth-day" → Earth, "Sun-like" → Sun
         if m.start() in starts:
             words = words[1:]      # capitalised only because it opens the sentence ("Squeeze Earth", "The Milky Way")
         if not words:
             continue
         name = " ".join(words)
-        if len(name.replace("*", "")) >= 4:
+        if len(name.replace("*", "")) >= 4 or name.lower() in _NAME_MAP:      # Sun, Io: short, but names
             out.append(name)
     return out
 
@@ -172,6 +173,20 @@ def names_to_keep(english: str) -> list[str]:
         if " " not in name and key not in _NAME_MAP and key.endswith(_ADJECTIVE_ENDINGS):
             continue
         out.append(name)
+    return out
+
+
+def names_for_italian(english: str) -> list[str]:
+    """names_to_keep, in the form an Italian text uses: Venus → Venere, Earth → Terra, Milky Way → Via Lattea;
+    Cassini stays Cassini. Listing "Venus" made the Italian writer keep "Venus" (10/09)."""
+    out = []
+    for name in names_to_keep(english):
+        forms = _NAME_MAP.get(name.lower())
+        if forms and forms[0] not in ("russ", "americ", "europe", "italian"):
+            it = forms[0]
+            out.append(" ".join(w.capitalize() for w in it.split()) if it.islower() else it)
+        else:
+            out.append(name)
     return out
 
 
