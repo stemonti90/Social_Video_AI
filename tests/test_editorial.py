@@ -282,6 +282,15 @@ class TheEditorialMachine(unittest.TestCase):
         self.assertIn("LIMITI PER BATTUTA", it_user)                                       # the Italian hears the fitted beats' caps
         self.assertNotIn(EN[1], it_user)                                                    # but never the English text
 
+    def test_the_directors_angles_are_read_wherever_the_model_put_them(self):
+        """Eighth trial: the director answered without an "angles" key and the engine declared "no story worth
+        telling" — a parsing failure is not an editorial verdict."""
+        self.assertEqual(len(E._angles_from({"editorial_angles": [{"angle": "a"}, {"angle": "b"}]})), 2)
+        self.assertEqual(E._angles_from({"stories": [{"angle": "a"}]})[0]["id"], 1)
+        self.assertEqual(len(E._angles_from({"whatever": [{"angle": "x", "id": 4}], "note": "n"})), 1)
+        self.assertEqual(E._angles_from({"angles": "not a list"}), [])
+        self.assertEqual(E._angles_from("garbage"), [])
+
     def test_publishable_and_rejection_rules(self):
         ok = {"decision": "publish", "dimensions": {"idea": "strong", "specificity": "solid", "density": "solid", "originality": "solid",
                                                     "narration": "solid", "language": "solid", "ai_smell": "mild"}}

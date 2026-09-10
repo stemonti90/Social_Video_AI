@@ -350,6 +350,29 @@ def _history(cfg) -> str:
     return "\n".join(rows) or "(none)"
 
 
+def _angles_from(director: dict) -> list[dict]:
+    """The director's angles wherever the model put them: "angles", "candidates", or any list of dicts
+    that carry an "angle" field; ids are filled in when missing."""
+    if not isinstance(director, dict):
+        return []
+    cands = None
+    for key in ("angles", "candidates", "editorial_angles", "stories", "ideas"):
+        if isinstance(director.get(key), list):
+            cands = director[key]
+            break
+    if cands is None:
+        for v in director.values():
+            if isinstance(v, list) and v and all(isinstance(x, dict) and "angle" in x for x in v):
+                cands = v
+                break
+    out = []
+    for i, a in enumerate(cands or [], 1):
+        if isinstance(a, dict) and str(a.get("angle", "")).strip():
+            a.setdefault("id", i)
+            out.append(a)
+    return out
+
+
 def _to_script(data: dict, topic: str, target: int) -> Script:
     segs: list[Segment] = []
     for i, row in enumerate(data.get("segments") or [], 1):
@@ -650,12 +673,17 @@ def _pass(cfg, topic: str, project, facts: str, history: str, attempt: int, avoi
     target = int(getattr(cfg.script, "target_seconds", 48) or 48)
     root: Path = project.root
 
-    # 1 · director
+    # 1 · director (the answer is read leniently and asked again once: a truncated or oddly keyed JSON is
+    #     not "no story worth telling")
     avoid_note = ("\nANGLES ALREADY REJECTED BY THE EDITOR THIS RUN (do not propose them again):\n- " + "\n- ".join(avoid) + "\n") if avoid else ""
-    director = _call(cfg, DIRECTOR_SYSTEM.format(theory=theory),
-                     DIRECTOR_USER.format(topic=topic, facts=facts, history=history, avoid=avoid_note),
-                     editor=False, temperature=0.55, max_tokens=3600)
-    angles = [a for a in (director.get("angles") or []) if isinstance(a, dict)]
+    director_user = DIRECTOR_USER.format(topic=topic, facts=facts, history=history, avoid=avoid_note)
+    director, angles = {}, []
+    for extra in ("", "\n\nYour previous answer had no readable \"angles\" list. Return exactly {\"angles\": [...10 items...], \"ranking\": [...], \"comparison\": \"...\"}."):
+        director = _call(cfg, DIRECTOR_SYSTEM.format(theory=theory), director_user + extra, editor=False, temperature=0.55, max_tokens=5000)
+        angles = _angles_from(director)
+        if len(angles) >= 3:
+            break
+    (root / "editorial_director_raw.json").write_text(_j(director))
     alive = [a for a in angles if not a.get("killed")]
     if len(alive) < 2:
         raise EditorialError(f"the director found no story worth telling in {topic!r} today "
