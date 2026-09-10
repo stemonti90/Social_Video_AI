@@ -285,6 +285,13 @@ class TheEditorialMachine(unittest.TestCase):
         self.assertIsNone(re.search(r"nomi da conservare: Saturn(?!o)", it_user))            # never the English form
         self.assertNotIn(EN[1], it_user)                                                    # but never the English text
 
+    def test_too_short_goes_back_to_the_writer_not_to_the_scissors(self):
+        self.assertTrue(E._length_only(["total 140 spoken words, the budget is 94-116 (about 110): cut"]))
+        self.assertFalse(E._length_only(["total 82 spoken words, the budget is 94-116 (about 110): add substance, not padding"]))
+        self.assertFalse(E._length_only(["segmento 1: 0.5× i caratteri dell'inglese — manca contenuto della battuta"]))
+        self.assertTrue(E._length_only(["segmento 2: 1.6× i caratteri dell'inglese — il lettore non arriva in fondo; stessa battuta, più asciutta"]))
+        self.assertFalse(E._length_only([]))
+
     def test_the_directors_angles_are_read_wherever_the_model_put_them(self):
         """Eighth trial: the director answered without an "angles" key and the engine declared "no story worth
         telling" — a parsing failure is not an editorial verdict."""

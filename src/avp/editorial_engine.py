@@ -540,10 +540,14 @@ def _write(cfg, language: str, topic: str, brief: dict, arc: dict, facts: str, b
 
 
 _LENGTH_MARKERS = ("spoken words", "run-on", "words (>", "caratteri dell'inglese")
+_TOO_SHORT_MARKERS = ("add substance", "manca contenuto", "a flash, not a beat")
 
 
 def _length_only(reasons: list[str]) -> bool:
-    return bool(reasons) and all(any(m in r for m in _LENGTH_MARKERS) for r in reasons)
+    """True when every reason is an OVER-length problem — the only kind a cut can solve. A text that is too
+    short (fifth Venus trial: 82 words, three cuts, 82 words) needs the writer, not the scissors."""
+    return bool(reasons) and all(any(m in r for m in _LENGTH_MARKERS) and not any(t in r for t in _TOO_SHORT_MARKERS)
+                                 for r in reasons)
 
 
 COMPRESS_SYSTEM = "You compress one spoken sentence of a science video to a hard word cap. You remove words, never facts, numbers or names. Return STRICT JSON only."
