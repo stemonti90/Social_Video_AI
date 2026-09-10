@@ -624,17 +624,23 @@ def _compress_it(cfg, it: Script, en: Script, squeeze: int = 0) -> Script:
     for x in it.segments:
         if x.kind == "cta" or x.index not in ec:
             continue
-        cap = int(len(ec[x.index].narration) * 1.35) - squeeze
-        if len(x.narration) <= cap:
+        target_cap = int(len(ec[x.index].narration) * 1.35) - squeeze
+        if len(x.narration) <= target_cap:
             continue
         names = ", ".join(names_for_italian(ec[x.index].narration)) or "nessuno"
-        data = _call(cfg, COMPRESS_IT_SYSTEM,
-                     COMPRESS_IT_USER.format(cap=cap, n=len(x.narration), names=names, text=x.narration,
-                                             extra="Non iniziare con un numero." if x.index == 1 else ""),
-                     editor=False, temperature=0.2, max_tokens=400)
-        new = " ".join(str(data.get("narration") or "").split())
-        if new and len(new) < len(x.narration) and not italian_lint(new) and not italian.bad_sense(new):
-            x.narration = new
+        best, cap = x.narration, target_cap
+        for _try in range(3):                       # the model undershoots the cut: ask for less each time
+            data = _call(cfg, COMPRESS_IT_SYSTEM,
+                         COMPRESS_IT_USER.format(cap=cap, n=len(best), names=names, text=best,
+                                                 extra="Non iniziare con un numero." if x.index == 1 else ""),
+                         editor=False, temperature=0.2, max_tokens=400)
+            new = " ".join(str(data.get("narration") or "").split())
+            if new and len(new) < len(best) and not italian_lint(new) and not italian.bad_sense(new):
+                best = new
+            if len(best) <= target_cap:
+                break
+            cap = max(40, int(cap * 0.88))
+        x.narration = best
     return it
 
 
@@ -702,7 +708,12 @@ def _fit(cfg, language: str, topic: str, brief: dict, arc: dict, facts: str, bud
             return script
         log.info("Hygiene %s (%d): %s", language, attempt, "; ".join(reasons))
         if language == "Italian" and ref is not None and all(re.search(r"segmento \d+", r) for r in reasons):
-            script = _repair_it(cfg, script, ref, arc, reasons)          # beat by beat: names, length, lint
+            over = [r for r in reasons if "il lettore non arriva in fondo" in r]
+            other = [r for r in reasons if r not in over]
+            if other:
+                script = _repair_it(cfg, script, ref, arc, other)         # beat by beat: names, content, lint
+            if over or hygiene_it(ref, script):
+                script = _compress_it(cfg, script, ref, squeeze=(attempt - 1) * 8)   # the beats that run long
         elif _length_only(reasons):
             words, lo, hi = budget
             if language == "English":
