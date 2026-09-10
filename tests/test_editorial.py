@@ -310,6 +310,23 @@ class TheEditorialMachine(unittest.TestCase):
         self.assertIn("Saturno", repair_user)                                               # the names in Italian form
         self.assertIn("la numero 2", repair_user)
 
+    def test_an_arc_that_repeats_a_fact_is_caught_before_anyone_writes(self):
+        """Seventh Venus trial: the chosen arc carried 6.5 km/h in three beats of six; the writer repeated it,
+        the reviewer blamed the prose, the story was rejected twice. The loop belongs to the arc."""
+        loop = {"id": 1, "beats": [{"beat": 1, "fact": "A point on Venus's equator moves at only about 6.5 km/h."},
+                                   {"beat": 2, "fact": "Earth's equator moves at 1,670 km/h."},
+                                   {"beat": 3, "fact": "A brisk walker moves at about 6.5 km/h."},
+                                   {"beat": 4, "fact": "Venus rotates once every 243 Earth days."}]}
+        problems = E.arc_redundancy(loop)
+        self.assertTrue(any("6.5" in p for p in problems))
+        good = {"id": 2, "beats": [{"beat": 1, "fact": "Venus rotates in the opposite direction to almost all planets."},
+                                   {"beat": 2, "fact": "The Sun rises in the west there."},
+                                   {"beat": 3, "fact": "Its axial tilt is 2.64 degrees, so it is not upside down."},
+                                   {"beat": 4, "fact": "A giant impact is the leading explanation."}]}
+        self.assertEqual(E.arc_redundancy(good), [])
+        self.assertIn("DISTINCT BEATS", E.ARC_SELECT_SYSTEM)
+        self.assertIn("EVERY BEAT CARRIES A DIFFERENT FACT", E.NARRATIVE_SYSTEM)
+
     def test_too_short_goes_back_to_the_writer_not_to_the_scissors(self):
         self.assertTrue(E._length_only(["total 140 spoken words, the budget is 94-116 (about 110): cut"]))
         self.assertFalse(E._length_only(["total 82 spoken words, the budget is 94-116 (about 110): add substance, not padding"]))

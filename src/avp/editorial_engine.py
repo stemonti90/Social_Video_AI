@@ -195,8 +195,10 @@ NARRATIVE_SYSTEM = """You are a narrative designer for a serious astronomy magaz
 design THREE genuinely different narrative arcs for the SAME story (for example: from the number, from the open
 question, from the misconception). Each arc has {n_beats} beats. A beat carries only: the fact it rests on, what the
 viewer SEES while it is said (a concrete, generatable image: no people, no realistic historical scenes, no detailed
-nebulae), and its role (opening | build | turn | peak | close). No prose. The arc must escalate and end by resolving
-or honestly opening the central question. Return STRICT JSON only."""
+nebulae), and its role (opening | build | turn | peak | close). No prose. EVERY BEAT CARRIES A DIFFERENT FACT: a
+number, a comparison or a claim never appears in two beats — an arc that "intensifies the same comparison" is a
+loop, not an arc (measured: it produced a script that repeated one figure four times). The arc must escalate and
+end by resolving or honestly opening the central question. Return STRICT JSON only."""
 
 NARRATIVE_USER = """SUBJECT: {topic}
 BRIEF:
@@ -208,7 +210,8 @@ Return {{"arcs": [{{"id": 1, "thesis": "...", "beats": [{{"beat": 1, "fact": "..
 "why": "..."}}, {{"id": 2, ...}}, {{"id": 3, ...}}]}}"""
 
 ARC_SELECT_SYSTEM = """You are a senior narrative editor at a serious astronomy magazine. Choose the strongest arc for
-a {seconds}-second video with generated images. Judge: coherence and escalation, distinct beats, scientific
+a {seconds}-second video with generated images. Judge, in this order: DISTINCT BEATS — an arc whose beats repeat a
+fact, a number or a comparison is rejected outright, however elegant; then coherence and escalation, scientific
 integrity, visual feasibility (no people, no realistic historical scenes, no detailed nebulae), an ending that
 belongs to the story, distance from the channel's recent videos. Return STRICT JSON only."""
 
@@ -351,6 +354,31 @@ def _history(cfg) -> str:
         except Exception:  # noqa: BLE001
             continue
     return "\n".join(rows) or "(none)"
+
+
+_NUM = re.compile(r"\d+(?:[.,]\d+)?")
+
+
+def arc_redundancy(arc: dict) -> list[str]:
+    """Facts an arc states twice: a number or a near-identical fact in two beats. Such an arc makes the writer
+    repeat itself and the reviewer blame the prose (seventh Venus trial: 6.5 km/h in three beats of six)."""
+    import difflib
+    beats = [str(b.get("fact", "")) for b in (arc.get("beats") or []) if isinstance(b, dict)]
+    problems: list[str] = []
+    seen: dict[str, int] = {}
+    for i, f in enumerate(beats, 1):
+        for n in set(_NUM.findall(f)):
+            if len(n) < 2 or n in ("10", "100", "1000"):
+                continue
+            if n in seen and seen[n] != i:
+                problems.append(f"the number {n} appears in beats {seen[n]} and {i}")
+            seen.setdefault(n, i)
+    low = [re.sub(r"[^a-z0-9 ]", " ", f.lower()) for f in beats]
+    for i in range(len(low)):
+        for j in range(i + 1, len(low)):
+            if low[i] and low[j] and difflib.SequenceMatcher(None, low[i], low[j]).ratio() >= 0.6:
+                problems.append(f"beats {i + 1} and {j + 1} say nearly the same thing")
+    return problems
 
 
 def _angles_from(director: dict) -> list[dict]:
@@ -792,8 +820,19 @@ def _pass(cfg, topic: str, project, facts: str, history: str, attempt: int, avoi
     arcs_data = _call(cfg, NARRATIVE_SYSTEM.format(n_beats=n_beats), NARRATIVE_USER.format(topic=topic, brief=_j(brief), facts=facts),
                       editor=False, temperature=0.5, max_tokens=3600)
     arcs = [a for a in (arcs_data.get("arcs") or []) if isinstance(a, dict) and a.get("beats")]
-    if len(arcs) < 2:
-        raise EditorialError("the narrative designer returned fewer than two arcs")
+    redundant = {int(a.get("id", i)): arc_redundancy(a) for i, a in enumerate(arcs, 1)}
+    clean = [a for a in arcs if not redundant.get(int(a.get("id", 0)))]
+    if len(clean) < 2:            # ask once more, naming the repeats
+        note = "\n\nYour previous arcs repeated facts across beats: " + "; ".join(
+            f"arc {k}: {', '.join(v)}" for k, v in redundant.items() if v) + ". Every beat a different fact."
+        arcs_data = _call(cfg, NARRATIVE_SYSTEM.format(n_beats=n_beats), NARRATIVE_USER.format(topic=topic, brief=_j(brief), facts=facts) + note,
+                          editor=False, temperature=0.5, max_tokens=3600)
+        arcs = [a for a in (arcs_data.get("arcs") or []) if isinstance(a, dict) and a.get("beats")]
+        redundant = {int(a.get("id", i)): arc_redundancy(a) for i, a in enumerate(arcs, 1)}
+        clean = [a for a in arcs if not redundant.get(int(a.get("id", 0)))] or arcs
+    arcs = clean
+    if len(arcs) < 1:
+        raise EditorialError("the narrative designer returned no usable arc")
     arc_pick = _call(cfg, ARC_SELECT_SYSTEM.format(seconds=target), ARC_SELECT_USER.format(topic=topic, brief=_j(brief), arcs=_j(arcs)),
                      editor=True, temperature=0.1, max_tokens=900)
     try:
