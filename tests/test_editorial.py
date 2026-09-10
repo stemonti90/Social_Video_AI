@@ -120,7 +120,7 @@ class FakeAPI:
         if user.startswith("LANGUAGE: English"):
             lines = self.en_lines
             if "You are REVISING" in user:
-                lines = [l.replace("look permanent", "look eternal") for l in lines]
+                lines = [l.replace("look permanent", "look eternal") + " and this revising clause runs long on purpose" for l in lines]
             return {"title": "The Rings Are Falling", "segments": [{"narration": l, "visual": f"visual {i}", "keywords": ["Saturn"]} for i, l in enumerate(lines, 1)],
                     "bridge_kind": "shoot", "cta_bridge": BRIDGE_EN}
         if user.startswith("LANGUAGE: Italian"):
@@ -209,6 +209,7 @@ class TheEditorialMachine(unittest.TestCase):
         self.assertTrue(any("You are REVISING" in u for s, u in fake.prompts))
         self.assertTrue(any("merely comply" in u for s, u in fake.prompts))          # the second review's question
         self.assertIn("look eternal", script.segments[0].narration)                # v2 is what ships
+        self.assertLessEqual(sum(len(s.narration.split()) for s in script.segments if s.kind != "cta"), 94)   # a long rewrite is cut, not refused
         # a rewrite that only complied rejects the story
         fake2 = FakeAPI(first_review={"idea": "strong", "specificity": "strong", "density": "solid", "originality": "solid",
                                       "narration": "solid", "language": "weak", "ai_smell": "mild"},

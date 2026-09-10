@@ -296,6 +296,10 @@ BRIEF:
 SCRIPT (segments in order; the cta_bridge is the closing sentence before the app card):
 {script}
 
+Note on the cta_bridge: the channel ends every video on its own app's card — a format requirement, not a choice of
+this script. Judge the bridge only for honesty and for being earned by the story (it may be empty with bridge_kind
+"none"); never penalise its presence.
+
 Return {{"dimensions": {{"idea": "...", "specificity": "...", "density": "...", "originality": "...", "narration": "...",
 "language": "...", "ai_smell": "..."}}, "weak_sentences": [{{"segment": 1, "quote": "...", "reason": "..."}}],
 "fact_risks": ["..."], "decision": "publish | rewrite | reject_story", "summary": "two sentences"}}"""
@@ -499,8 +503,8 @@ def _length_only(reasons: list[str]) -> bool:
 
 COMPRESS_SYSTEM = "You compress one spoken sentence of a science video to a hard word cap. You remove words, never facts, numbers or names. Return STRICT JSON only."
 COMPRESS_USER = """Compress this {language} segment to AT MOST {cap} words (it has {n}). Keep every fact, number, name and the
-meaning; drop asides, doubled adjectives, repeated context, citation-speak. One or two sentences, none longer than
-{run_on} words. {extra}
+meaning; drop asides, doubled adjectives, repeated context and citation-speak ("per a 2018 Icarus study" → "a 2018
+study" or nothing). One or two sentences, none longer than {run_on} words. {extra}
 SEGMENT: {text}
 Return {{"narration": "...", "words": <your count>}}"""
 
@@ -556,7 +560,8 @@ def _caps_en(script: Script, hi: int, squeeze: int = 0) -> dict[int, int]:
 
 
 def _fit(cfg, language: str, topic: str, brief: dict, arc: dict, facts: str, budget: tuple[int, int, int], n_beats: int,
-         poetics: str, target: int, script: Script, check, drafts: list, ref: Script | None = None) -> Script:
+         poetics: str, target: int, script: Script, check, drafts: list, ref: Script | None = None,
+         diagnosis: dict | None = None) -> Script:
     """Three corrective passes at most: a rewrite with the notes when the problems are of substance, a cut to
     length when they are only of length (the writer overshoots by 20-30% whatever it is told, the cut lands);
     then the nets are final. Measured 10/09: rewrite → cut → cut converges, rewrite → rewrite does not."""
@@ -575,7 +580,7 @@ def _fit(cfg, language: str, topic: str, brief: dict, arc: dict, facts: str, bud
                 script = _compress_it(cfg, script, ref, squeeze=(attempt - 1) * 12)
         else:
             script = _write(cfg, language, topic, brief, arc, facts, budget, n_beats, poetics, target, notes=reasons,
-                            temperature=0.4, ref=ref)
+                            temperature=0.4, ref=ref, diagnosis=diagnosis)
     reasons = check(script)
     drafts.append({"language": language, "attempt": 4, "reasons": reasons, "words": sum(_words(x.narration) for x in script.segments),
                    "segments": [x.narration for x in script.segments]})
@@ -726,9 +731,10 @@ def _pass(cfg, topic: str, project, facts: str, history: str, attempt: int, avoi
             continue
         v2 = _write(cfg, lang, topic, brief, arc, facts, budget, n_beats, poetics, target, diagnosis=r1, temperature=0.35,
                     ref=en if lang == "Italian" else None)
-        nets = hygiene_en(v2, cfg, budget) if lang == "English" else hygiene_it(en if lang == "Italian" else v2, v2)
-        if nets:
-            raise EditorialError(f"{lang} rewrite fails the hygiene nets: " + "; ".join(nets))
+        # the rewrite is fitted like a first draft: a long rewrite is cut, a wrong one is written again with the diagnosis
+        v2 = _fit(cfg, lang, topic, brief, arc, facts, budget, n_beats, poetics, target, v2,
+                  (lambda x: hygiene_en(x, cfg, budget)) if lang == "English" else (lambda x: hygiene_it(en, x)),
+                  drafts, ref=en if lang == "Italian" else None, diagnosis=r1)
         r2 = _review2(cfg, lang, topic, brief, s, r1, v2, poetics, benchmark)
         (root / f"editorial_review_{suffix}_v2.json").write_text(_j(r2))
         reviews[f"{suffix}_v2"] = r2
