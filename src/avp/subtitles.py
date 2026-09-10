@@ -268,7 +268,21 @@ def italian_lint(text: str) -> list[str]:
     for pat, why in _CALQUES:
         if pat.search(text or ""):
             problems.append(why)
+    # English names of worlds inside an Italian sentence ("l'atmosfera di Saturn", "le lune di Jupiter" — seen
+    # 10/09 in a draft the proofreader had to fix twice): Italian has its own names for all of them
+    for m in _ENGLISH_WORLDS.finditer(text or ""):
+        problems.append(f"nome inglese in una frase italiana: {m.group(0)!r} → {_WORLDS_IT[m.group(0).lower()]}")
+    # the passato remoto is literary ("fu individuato", "arrivò"): subtitles speak in the passato prossimo
+    rem = remoto_forms(text or "")
+    if rem:
+        problems.append("passato remoto (" + ", ".join(rem) + "): usa il passato prossimo")
     return problems
+
+
+_WORLDS_IT = {"saturn": "Saturno", "jupiter": "Giove", "mars": "Marte", "mercury": "Mercurio", "neptune": "Nettuno",
+              "uranus": "Urano", "pluto": "Plutone", "earth": "Terra", "moon": "Luna", "sun": "Sole", "venus": "Venere",
+              "milky way": "Via Lattea"}
+_ENGLISH_WORLDS = re.compile(r"\b(Saturn|Jupiter|Mars|Mercury|Neptune|Uranus|Pluto|Earth|Moon|Sun|Venus|Milky Way)\b")
 
 
 # 3rd-person passato remoto: regular endings plus the irregulars a science script actually meets.
@@ -281,7 +295,7 @@ _REMOTO_IRREGULAR = {"fu", "furono", "ebbe", "ebbero", "fece", "fecero", "disse"
                      "scoprirono", "raggiunse", "raggiunsero", "perse", "persero", "volle", "vollero",
                      "giunse", "giunsero", "rese", "resero", "scrisse", "scrissero", "mise", "misero",
                      "crebbe", "crebbero", "apparve", "apparvero", "scomparve", "scomparvero"}
-_REMOTO_EXCLUDE = {"però", "ciò", "perciò", "può", "sarò", "farò", "andrò", "avrò", "dirò", "vedrò"}
+_REMOTO_EXCLUDE = {"però", "ciò", "perciò", "può", "sarò", "farò", "andrò", "avrò", "dirò", "vedrò", "così", "lì", "sì", "dì", "lunedì", "martedì", "mercoledì", "giovedì", "venerdì", "potrò", "dovrò", "saprò", "starò", "darò", "verrò", "terrò", "vorrò", "oblò", "metrò"}
 
 
 def remoto_forms(text: str) -> list[str]:

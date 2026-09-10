@@ -4041,6 +4041,9 @@ class ItalianNeverShipsBroken(unittest.TestCase):
         self.assertTrue(italian_lint("Questo fa senso per tutti."))
         self.assertTrue(italian_lint("Il lander realizzò che era solo."))
         self.assertTrue(italian_lint("La la cometa."))
+        self.assertTrue(italian_lint("Senza anelli, Saturn resterebbe il secondo pianeta."))        # 10/09: English name in Italian
+        self.assertTrue(italian_lint("Il fenomeno fu individuato nel 2011."))                    # passato remoto
+        self.assertEqual(italian_lint("Senza anelli, Saturno resterebbe il secondo pianeta; il fenomeno è stato individuato nel 2011."), [])
         # legitimate 'mai'
         for ok in ("Non l'abbiamo mai visto da Terra.", "Hai mai visto Saturno?", "Mai più così vicino.",
                    "Quattro molecole mai viste su una cometa.", "Come mai ruota al contrario?", "Quasi mai visibile a occhio nudo.",
