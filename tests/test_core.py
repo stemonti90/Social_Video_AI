@@ -5238,3 +5238,26 @@ class RealObjectsComeFromTheArchive(unittest.TestCase):
         self.assertIn("clock", imagegen.NEGATIVI)
         from avp import editorial_engine as E
         self.assertIn("PHOTOGRAPH A", E.NARRATIVE_SYSTEM.replace("\n", " "))
+
+
+class TheGeneratorNeverReusesAStaleCandidate(unittest.TestCase):
+    """10/09: mflux does not overwrite an existing output — it writes <stem>_1.png — and _run_mflux saw the OLD
+    file and called it a success: a stick figure from the previous script came back into a regenerated video."""
+
+    def test_the_stale_file_goes_first_and_a_suffixed_output_is_adopted(self):
+        from types import SimpleNamespace
+        from avp import imagegen
+        with tempfile.TemporaryDirectory() as tmp:
+            out = Path(tmp) / "01_c0.png"
+            out.write_bytes(b"OLD")
+            def fake_run(cmd, capture_output=True, text=True, timeout=None):
+                target = Path(cmd[cmd.index("--output") + 1])
+                self.assertFalse(target.exists())                                   # the stale file is gone before mflux runs
+                (target.parent / "01_c0_1.png").write_bytes(b"NEW")                 # mflux's suffixed habit
+                return SimpleNamespace(returncode=0, stderr="")
+            cfg = SimpleNamespace(video=SimpleNamespace(image_width=8, image_height=8, image_steps=1, image_timeout=5,
+                                                        image_venv=tmp, image_model=tmp))
+            with mock.patch("avp.imagegen.subprocess.run", fake_run):
+                ok = imagegen._run_mflux("p", out, 1, cfg)
+            self.assertTrue(ok)
+            self.assertEqual(out.read_bytes(), b"NEW")

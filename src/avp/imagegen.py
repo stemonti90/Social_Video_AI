@@ -237,12 +237,22 @@ def _run_mflux(prompt: str, out: Path, seed: int, cfg) -> bool:
     cmd = [str(_binary(cfg)), "--model", str(_model_path(cfg)), "--base-model", "z-image-turbo",
            "--steps", str(steps), "--seed", str(seed), "--height", str(h), "--width", str(w),
            "--prompt", prompt, "--negative-prompt", negatives_for(prompt), "--output", str(out)]
+    # mflux never overwrites: with `out` already on disk it writes `<stem>_1.png` and this function used
+    # to see the OLD file and call it a success — a stick figure from a previous script came back into a
+    # regenerated video (10/09). The stale file goes first; a suffixed output is adopted.
+    out.unlink(missing_ok=True)
+    before = {q for q in out.parent.glob(f"{out.stem}_[0-9]*{out.suffix}")}
     try:
         r = subprocess.run(cmd, capture_output=True, text=True,
                            timeout=int(getattr(cfg.video, "image_timeout", 900)))
     except Exception as e:  # noqa: BLE001 — a hung/missing generator must not kill the build
         log.warning("mflux failed to run (%s)", e)
         return False
+    if not out.exists():
+        fresh = sorted((q for q in out.parent.glob(f"{out.stem}_[0-9]*{out.suffix}") if q not in before),
+                       key=lambda q: q.stat().st_mtime)
+        if fresh:
+            fresh[-1].replace(out)
     if r.returncode != 0 or not out.exists():
         log.warning("mflux returned %s for %s (%s)", r.returncode, out.name,
                     (r.stderr or "").strip()[-160:])
