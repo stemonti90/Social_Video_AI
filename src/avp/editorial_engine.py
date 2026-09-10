@@ -209,8 +209,11 @@ question | comparison | scene", "closing_type": "answer | honest open question |
 NARRATIVE_SYSTEM = """You are a narrative designer for a serious astronomy magazine's short videos. From the brief,
 design THREE genuinely different narrative arcs for the SAME story (for example: from the number, from the open
 question, from the misconception). Each arc has {n_beats} beats. A beat carries only: the fact it rests on, what the
-viewer SEES while it is said (a concrete, generatable image: no people, no realistic historical scenes, no detailed
-nebulae), and its role (opening | build | turn | peak | close). No prose. EVERY BEAT CARRIES A DIFFERENT FACT: a
+viewer SEES while it is said, and its role (opening | build | turn | peak | close). THE VISUAL IS A PHOTOGRAPH A
+SPACECRAFT OR A TELESCOPE COULD TAKE, physically faithful to the fact base (the object's true colours, its
+atmosphere, rings only if it has rings, its real surface and sky): the object itself, its surface, its sky, its
+instruments. Never people, hands, clocks, treadmills, toys, tables, arrows, diagrams, or a metaphor staged as an
+object; never a realistic historical scene; never a detailed nebula. No prose. EVERY BEAT CARRIES A DIFFERENT FACT: a
 number, a comparison or a claim never appears in two beats — an arc that "intensifies the same comparison" is a
 loop, not an arc (measured: it produced a script that repeated one figure four times). The arc must escalate and
 end by resolving or honestly opening the central question. Return STRICT JSON only."""

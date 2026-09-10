@@ -5215,3 +5215,26 @@ class NeverAnotherApp(unittest.TestCase):
         it = inspect.getsource(stages.stage_italian)
         self.assertIn("italian.run(script, facts, cfg, out_dir=project.root)", it)
         self.assertIn('project.manifest.mark(stage, "pending")', it)                   # cards and render are redone
+
+
+class RealObjectsComeFromTheArchive(unittest.TestCase):
+    """10/09, the Venus trial: the generator drew a ringed orange ball for Venus and a treadmill for 'a walker on
+    the equator'. Real named objects go to the archive first; the negatives refuse rings where there are none."""
+
+    def test_a_named_planet_prefers_the_archive_unless_the_scene_is_staged(self):
+        from avp import imagegen
+        s = Script(title="t", topic="Venus rotates backwards", segments=[])
+        self.assertTrue(imagegen.prefers_archive(Segment(index=1, narration="", visual="Venus seen from orbit, thick yellow cloud deck", keywords=["Venus"]), s))
+        self.assertFalse(imagegen.prefers_archive(Segment(index=1, narration="", visual="a walker on Venus's equator outpacing the ground", keywords=["Venus"]), s))
+        self.assertFalse(imagegen.prefers_archive(Segment(index=2, narration="", visual="the Cassini spacecraft above Saturn's rings", keywords=["Cassini"]), s))   # a probe in flight: generated
+        self.assertTrue(imagegen.prefers_archive(Segment(index=2, narration="", visual="Saturn's rings seen from orbit by Cassini", keywords=["Saturn"]), s))
+        self.assertFalse(imagegen.prefers_archive(Segment(index=3, narration="", visual="a dark rocky plain under a hazy sky", keywords=["surface"]), Script(title="t", topic="an imagined exoplanet", segments=[])))
+
+    def test_rings_are_refused_where_the_subject_has_none(self):
+        from avp import imagegen
+        self.assertIn("planetary rings", imagegen.negatives_for("Venus from orbit, thick clouds"))
+        self.assertNotIn("planetary rings", imagegen.negatives_for("Saturn's rings edge-on"))
+        self.assertIn("treadmill", imagegen.NEGATIVI)
+        self.assertIn("clock", imagegen.NEGATIVI)
+        from avp import editorial_engine as E
+        self.assertIn("PHOTOGRAPH A", E.NARRATIVE_SYSTEM.replace("\n", " "))

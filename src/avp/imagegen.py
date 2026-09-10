@@ -85,7 +85,22 @@ NEGATIVI = ("illustration, 3d render, cgi, digital art, cartoon, anime, painting
             # A writer who asks for a "diagram" gets garbled pseudo-text from this model, and under
             # footage_source: generate_only there is no archive left to rescue the frame.
             "diagram, chart, infographic, schematic, cutaway, labels, arrows, annotations, "
-            "split screen, side by side comparison, collage, multi-panel")
+            "split screen, side by side comparison, collage, multi-panel, "
+            # Staged metaphors the writers reach for and the model obliges: a clock for time, a treadmill
+            # for speed, a toy planet on a table (all three in one Venus video, 10/09).
+            "clock, watch, hourglass, treadmill, gym equipment, furniture, table, toy, scale model, hands, "
+            "orange cartoon sphere, glossy sphere")
+
+RINGED = ("saturn", "jupiter", "uranus", "neptune", "ring system", "rings")
+
+
+def negatives_for(prompt: str) -> str:
+    """The negative prompt for one generation: NEGATIVI, plus 'rings' whenever the subject has none —
+    the generator's default planet is a ringed orange ball."""
+    low = (prompt or "").lower()
+    if any(r in low for r in RINGED):
+        return NEGATIVI
+    return NEGATIVI + ", planetary rings, ring system, ringed planet"
 
 # Keyword → registry bucket. First match wins; order matters (surface before planet).
 _BUCKETS = (
@@ -221,7 +236,7 @@ def _run_mflux(prompt: str, out: Path, seed: int, cfg) -> bool:
     steps = int(getattr(cfg.video, "image_steps", 8))
     cmd = [str(_binary(cfg)), "--model", str(_model_path(cfg)), "--base-model", "z-image-turbo",
            "--steps", str(steps), "--seed", str(seed), "--height", str(h), "--width", str(w),
-           "--prompt", prompt, "--negative-prompt", NEGATIVI, "--output", str(out)]
+           "--prompt", prompt, "--negative-prompt", negatives_for(prompt), "--output", str(out)]
     try:
         r = subprocess.run(cmd, capture_output=True, text=True,
                            timeout=int(getattr(cfg.video, "image_timeout", 900)))
@@ -262,12 +277,38 @@ def _run_mflux(prompt: str, out: Path, seed: int, cfg) -> bool:
 # statement about z-image-turbo, not about generation in general.
 ARCHIVE_FIRST = frozenset({"deep_sky", "star"})
 
+# Real objects a spacecraft or a telescope has photographed: the archive beats the generator every time
+# (10/09: the generator gave Venus rings and a treadmill; NASA has Magellan, Akatsuki and Mariner 10).
+REAL_OBJECTS = ("mercury", "venus", "earth", "mars", "jupiter", "saturn", "uranus", "neptune", "pluto", "the moon",
+                "moon's", "lunar", "io ", "europa", "ganymede", "callisto", "titan", "enceladus", "mimas", "ceres",
+                "vesta", "phobos", "deimos", "the sun", "solar", "sunspot", "milky way", "andromeda", "orion",
+                "pleiades", "crab nebula", "pillars of creation", "hubble", "webb", "jwst", "cassini", "voyager", "juno",
+                "magellan", "venera", "apollo", "curiosity", "perseverance", "iss", "space station", "comet", "asteroid",
+                "eclipse", "aurora")
+_WHOLE_VIEW = re.compile(r"\b(from orbit|from space|seen from|orbital view|full disc|full disk|cloud deck|cloud tops|"
+                         r"telescope view|whole planet|the planet|the disc|the disk|the globe|crescent|phase|limb)\b", re.I)
+_STAGED = re.compile(r"\b(walk|walker|walking|person|people|hand|hands|clock|treadmill|toy|model of|scale model|"
+                     r"on a table|diagram|chart|arrow|compar(?:ison|ing|ed))\b", re.I)
+
+
+def names_real_object(text: str) -> bool:
+    low = f" {(text or '').lower()} "
+    return any(o in low for o in REAL_OBJECTS)
+
 
 def prefers_archive(seg: Segment, script: Script) -> bool:
-    """True when real archive footage should be tried BEFORE generating this segment."""
+    """True when real archive footage should be tried BEFORE generating this segment: deep-sky and stellar
+    subjects (the generator invents nebulae), and any beat whose visual shows a REAL named object — unless
+    the cue is a staged scene (a walker, a clock, a comparison) that no archive holds."""
     kw = " ".join(str(k) for k in (seg.keywords or []) if k)
     subject = (seg.visual or kw or script.topic or "")
-    return _bucket(f"{subject} {kw}") in ARCHIVE_FIRST
+    if _bucket(f"{subject} {kw}") in ARCHIVE_FIRST:
+        return True
+    # A real object seen AS A WHOLE — from orbit, from space, through a telescope — exists in the archive as a
+    # true photograph. A probe in flight or a described surface does not, and the generator handles those
+    # well (measured earlier): they keep generating first.
+    whole = _bucket(f"{subject} {kw}") == "planet" or _WHOLE_VIEW.search(subject)
+    return bool(whole) and names_real_object(f"{subject} {kw} {script.topic}") and not _STAGED.search(subject)
 
 
 # --------------------------------------------------------------------------- people in the frame
